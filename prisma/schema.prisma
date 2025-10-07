@@ -1,0 +1,128 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Customer {
+  id           String     @id @default(uuid())
+  name         String
+  mobileNumber String
+  createdAt    DateTime   @default(now())
+  feedbacks    Feedback[]
+  tokens       Token[]
+}
+
+model Token {
+  id            String    @id @default(uuid())
+  tokenNumber   Int
+  customerId    String
+  serviceType   String
+  accountRef    String?
+  status        String    @default("waiting")
+  outletId      String
+  assignedTo    String?
+  counterNumber Int?
+  createdAt     DateTime  @default(now())
+  calledAt      DateTime?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  feedback      Feedback?
+  officer       Officer?  @relation(fields: [assignedTo], references: [id])
+  customer      Customer  @relation(fields: [customerId], references: [id])
+  outlet        Outlet    @relation(fields: [outletId], references: [id])
+
+  @@index([outletId, status])
+  @@index([assignedTo])
+}
+
+model Officer {
+  id               String    @id @default(uuid())
+  name             String
+  mobileNumber     String    @unique
+  outletId         String
+  status           String    @default("offline")
+  counterNumber    Int?
+  isTraining       Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+  lastLoginAt      DateTime?
+  assignedServices Json?
+  outlet           Outlet    @relation(fields: [outletId], references: [id])
+  tokens           Token[]
+
+  @@index([outletId, status])
+}
+
+model Outlet {
+  id           String    @id @default(uuid())
+  name         String
+  location     String
+  regionId     String
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  counterCount Int?      @default(0)
+  officers     Officer[]
+  region       Region    @relation(fields: [regionId], references: [id])
+  tokens       Token[]
+}
+
+model Region {
+  id            String   @id @default(uuid())
+  name          String
+  managerId     String?
+  managerEmail  String?
+  managerMobile String?
+  createdAt     DateTime @default(now())
+  outlets       Outlet[]
+}
+
+model Feedback {
+  id         String   @id @default(uuid())
+  tokenId    String   @unique
+  customerId String
+  rating     Int
+  comment    String?
+  createdAt  DateTime @default(now())
+  customer   Customer @relation(fields: [customerId], references: [id])
+  token      Token    @relation(fields: [tokenId], references: [id])
+
+  @@index([rating])
+  @@index([createdAt])
+}
+
+model Document {
+  id            String   @id @default(uuid())
+  filename      String
+  filepath      String
+  mimeType      String
+  size          Int
+  uploadedBy    String
+  relatedEntity String
+  createdAt     DateTime @default(now())
+
+  @@index([relatedEntity])
+}
+
+model Alert {
+  id            String   @id @default(uuid())
+  type          String
+  severity      String
+  message       String
+  relatedEntity String?
+  isRead        Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  @@index([isRead, createdAt])
+}
+
+model Service {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  title       String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}

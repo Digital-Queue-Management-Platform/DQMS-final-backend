@@ -1,0 +1,203 @@
+import { Router } from "express"
+import { prisma } from "../server"
+
+const router = Router()
+
+// Get queue status for outlet
+router.get("/outlet/:outletId", async (req, res) => {
+  try {
+    const { outletId } = req.params
+
+    const waitingTokens = await prisma.token.findMany({
+      where: {
+        outletId,
+        status: { in: ["waiting", "skipped"] },
+      },
+      orderBy: { tokenNumber: "asc" },
+      include: {
+        customer: true,
+      },
+    })
+
+    const inServiceTokens = await prisma.token.findMany({
+      where: {
+        outletId,
+        status: "in_service",
+      },
+      include: {
+        customer: true,
+        officer: true,
+      },
+    })
+
+    const availableOfficers = await prisma.officer.count({
+      where: {
+        outletId,
+        status: "available",
+      },
+    })
+
+    res.json({
+      waiting: waitingTokens,
+      inService: inServiceTokens,
+      availableOfficers,
+      totalWaiting: waitingTokens.length,
+    })
+  } catch (error) {
+    console.error("Queue fetch error:", error)
+    res.status(500).json({ error: "Failed to fetch queue" })
+  }
+})
+
+// Get all outlets
+router.get("/outlets", async (req, res) => {
+  try {
+    const outlets = await prisma.outlet.findMany({
+      where: { isActive: true },
+      include: {
+        region: true,
+      },
+    })
+
+    res.json(outlets)
+  } catch (error) {
+    console.error("Outlets fetch error:", error)
+    res.status(500).json({ error: "Failed to fetch outlets" })
+  }
+})
+
+// Get all regions (for admin UIs)
+router.get('/regions', async (req, res) => {
+  try {
+    const regions = await prisma.region.findMany({ orderBy: { name: 'asc' } })
+    res.json(regions)
+  } catch (error) {
+    console.error('Regions fetch error:', error)
+    res.status(500).json({ error: 'Failed to fetch regions' })
+  }
+})
+
+// Services CRUD
+// Get all services
+router.get('/services', async (req, res) => {
+  try {
+    const services = await prisma.$queryRaw`SELECT * FROM "Service" ORDER BY "createdAt" DESC`
+    res.json(services)
+  } catch (error) {
+    console.error('Services fetch error:', error)
+    res.status(500).json({ error: 'Failed to fetch services' })
+  }
+})
+
+// Create service
+router.post('/services', async (req, res) => {
+  try {
+    const { code, title, description } = req.body
+    if (!code || !title) return res.status(400).json({ error: 'code and title are required' })
+
+    const service = await prisma.$executeRaw`
+      INSERT INTO "Service" ("id","code","title","description","isActive","createdAt")
+      VALUES (gen_random_uuid()::text, ${code}, ${title}, ${description || null}, true, now())`
+
+    // return created row
+    const created = await prisma.$queryRaw`SELECT * FROM "Service" WHERE "code" = ${code} LIMIT 1` as any[]
+    res.json({ success: true, service: created[0] })  } catch (error) {
+    console.error('Create service error:', error)
+    // unique constraint on code could fail
+    res.status(500).json({ error: 'Failed to create service' })
+  }
+})
+
+// Update service
+router.patch('/services/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { title, description, isActive } = req.body
+
+    // build update query dynamically
+    const data: any = {}
+    if (title !== undefined) data.title = title
+    if (description !== undefined) data.description = description
+    if (isActive !== undefined) data.isActive = isActive
+
+    // use prisma.$executeRaw for simplicity
+    const sets = Object.keys(data).map((k, idx) => `"${k}" = $${idx + 2}`).join(', ')
+    if (!sets) return res.status(400).json({ error: 'No fields to update' })
+
+    const params: any[] = [id]
+    Object.values(data).forEach((v) => params.push(v))
+
+    // Build parameterized raw query
+    const query = `UPDATE "Service" SET ${sets} WHERE "id" = $1 RETURNING *`
+    const updated: any = await prisma.$queryRawUnsafe(query, ...params)
+    res.json({ success: true, service: updated[0] })
+  } catch (error) {
+    console.error('Update service error:', error)
+    res.status(500).json({ error: 'Failed to update service' })
+  }
+})
+
+// Delete (soft) service
+router.delete('/services/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    const deleted: any = await prisma.$queryRaw`
+      UPDATE "Service" SET "isActive" = false WHERE "id" = ${id} RETURNING *`
+    res.json({ success: true, service: deleted[0] })
+  } catch (error) {
+    console.error('Delete service error:', error)
+    res.status(500).json({ error: 'Failed to delete service' })
+  }
+})
+
+// Create a new outlet (branch)
+router.post('/outlets', async (req, res) => {
+  try {
+    const { name, location, regionId, counterCount } = req.body
+    if (!name || !location || !regionId) return res.status(400).json({ error: 'name, location and regionId are required' })
+
+    const outlet = await prisma.outlet.create({
+      data: { name, location, regionId, isActive: true, counterCount: counterCount ?? 0 }
+    })
+
+    res.json({ success: true, outlet })
+  } catch (error) {
+    console.error('Create outlet error:', error)
+    res.status(500).json({ error: 'Failed to create outlet' })
+  }
+})
+
+// Update outlet
+router.patch('/outlets/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { name, location, regionId, isActive, counterCount } = req.body
+
+    const data: any = {}
+    if (name !== undefined) data.name = name
+    if (location !== undefined) data.location = location
+    if (regionId !== undefined) data.regionId = regionId
+    if (isActive !== undefined) data.isActive = isActive
+    if (counterCount !== undefined) data.counterCount = counterCount
+
+    const outlet = await prisma.outlet.update({ where: { id }, data })
+    res.json({ success: true, outlet })
+  } catch (error) {
+    console.error('Update outlet error:', error)
+    res.status(500).json({ error: 'Failed to update outlet' })
+  }
+})
+
+// Soft-delete outlet (set isActive = false)
+router.delete('/outlets/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    const outlet = await prisma.outlet.update({ where: { id }, data: { isActive: false } })
+    res.json({ success: true, outlet })
+  } catch (error) {
+    console.error('Delete outlet error:', error)
+    res.status(500).json({ error: 'Failed to delete outlet' })
+  }
+})
+
+export default router
