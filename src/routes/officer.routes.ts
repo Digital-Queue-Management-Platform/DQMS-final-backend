@@ -40,7 +40,8 @@ router.post("/login", async (req, res) => {
       path: "/",
     })
 
-    res.json({ success: true, officer })
+    // Also return token in response for cross-domain compatibility
+    res.json({ success: true, officer, token })
   } catch (error) {
     console.error("Login error:", error)
     res.status(500).json({ error: "Login failed" })
@@ -332,7 +333,17 @@ router.get("/stats/:officerId", async (req, res) => {
 // Get current officer from JWT cookie
 router.get("/me", async (req, res) => {
   try {
-    const token = req.cookies?.dq_jwt
+    // Check for JWT token in cookie or Authorization header
+    let token = req.cookies?.dq_jwt
+    
+    // If no cookie, check Authorization header
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+    
     if (!token) return res.status(401).json({ error: "Not authenticated" })
 
     let payload: any
