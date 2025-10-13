@@ -86,20 +86,28 @@ router.get("/me", async (req, res) => {
       }
     }
     
-    if (!token) {
-      return res.status(401).json({ error: "Manager authentication required. Please login again." })
+    let managerEmail: string | undefined
+
+    if (token) {
+      // Try JWT authentication first
+      try {
+        const payload = (jwt as any).verify(token, JWT_SECRET)
+        managerEmail = payload.email
+      } catch (e) {
+        return res.status(401).json({ error: "Invalid or expired token. Please login again." })
+      }
+    } else {
+      // Fallback: check for email in query params or body (for backwards compatibility)
+      managerEmail = (req.query.email as string) || (req.body?.email)
+      
+      if (!managerEmail) {
+        return res.status(401).json({ error: "Manager authentication required. Please login again." })
+      }
     }
 
-    let payload: any
-    try {
-      payload = (jwt as any).verify(token, JWT_SECRET)
-    } catch (e) {
-      return res.status(401).json({ error: "Invalid or expired token. Please login again." })
-    }
-
-    // Find region using the email from token
+    // Find region using the manager email
     const region = await prisma.region.findFirst({
-      where: { managerEmail: payload.email },
+      where: { managerEmail: managerEmail },
       include: {
         outlets: {
           include: {
