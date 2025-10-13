@@ -250,20 +250,28 @@ router.get("/officers", async (req, res) => {
       }
     }
     
-    if (!token) {
-      return res.status(401).json({ error: "Manager authentication required" })
-    }
+    let managerEmail: string | undefined
 
-    let payload: any
-    try {
-      payload = (jwt as any).verify(token, JWT_SECRET)
-    } catch (e) {
-      return res.status(401).json({ error: "Invalid token" })
+    if (token) {
+      // Try JWT authentication first
+      try {
+        const payload = (jwt as any).verify(token, JWT_SECRET)
+        managerEmail = payload.email
+      } catch (e) {
+        return res.status(401).json({ error: "Invalid token" })
+      }
+    } else {
+      // Fallback: check for email in query params or headers
+      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
+      
+      if (!managerEmail) {
+        return res.status(401).json({ error: "Manager authentication required" })
+      }
     }
 
     // Find manager's region
     const region = await prisma.region.findFirst({
-      where: { managerEmail: payload.email },
+      where: { managerEmail: managerEmail },
       include: { outlets: true }
     })
 
@@ -304,20 +312,28 @@ router.post("/officers", async (req, res) => {
       }
     }
     
-    if (!token) {
-      return res.status(401).json({ error: "Manager authentication required" })
-    }
+    let managerEmail: string | undefined
 
-    let payload: any
-    try {
-      payload = (jwt as any).verify(token, JWT_SECRET)
-    } catch (e) {
-      return res.status(401).json({ error: "Invalid token" })
+    if (token) {
+      // Try JWT authentication first
+      try {
+        const payload = (jwt as any).verify(token, JWT_SECRET)
+        managerEmail = payload.email
+      } catch (e) {
+        return res.status(401).json({ error: "Invalid token" })
+      }
+    } else {
+      // Fallback: check for email in query params or headers
+      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
+      
+      if (!managerEmail) {
+        return res.status(401).json({ error: "Manager authentication required" })
+      }
     }
 
     // Find manager's region
     const region = await prisma.region.findFirst({
-      where: { managerEmail: payload.email },
+      where: { managerEmail: managerEmail },
       include: { outlets: true }
     })
 
