@@ -437,18 +437,19 @@ router.get("/summary/breaks/:officerId", async (req, res) => {
     today.setHours(0, 0, 0, 0)
     
     // Mock breaks data - you should implement actual break tracking
+    const now = Date.now()
     const mockBreaks = [
       {
         id: "break1",
-        startTime: new Date(Date.now() - 3600000), // 1 hour ago
-        endTime: new Date(Date.now() - 3300000), // 55 minutes ago
+        startTime: new Date(now - 3600000).toISOString(), // 1 hour ago
+        endTime: new Date(now - 3300000).toISOString(), // 55 minutes ago
         duration: 5, // 5 minutes
         type: "short_break",
       },
       {
         id: "break2", 
-        startTime: new Date(Date.now() - 7200000), // 2 hours ago
-        endTime: new Date(Date.now() - 6900000), // 1h 55m ago
+        startTime: new Date(now - 7200000).toISOString(), // 2 hours ago
+        endTime: new Date(now - 6900000).toISOString(), // 1h 55m ago
         duration: 5,
         type: "short_break",
       },
