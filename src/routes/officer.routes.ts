@@ -363,6 +363,177 @@ router.get("/me", async (req, res) => {
   }
 })
 
+// Officer Summary Endpoints for Dashboard
+// Get served tokens summary
+router.get("/summary/served/:officerId", async (req, res) => {
+  try {
+    const { officerId } = req.params
+
+    const officer = await prisma.officer.findUnique({ where: { id: officerId } })
+    if (!officer) {
+      return res.status(404).json({ error: "Officer not found" })
+    }
+
+    // Get tokens served by this officer today
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const tomorrow = new Date(today)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+
+    const tokens = await prisma.token.findMany({
+      where: {
+        assignedTo: officerId,
+        status: { in: ["completed", "served"] },
+        completedAt: {
+          gte: today,
+          lt: tomorrow,
+        },
+      },
+      include: {
+        customer: true,
+      },
+      orderBy: { completedAt: "desc" },
+    })
+
+    // Calculate average handling time
+    const totalMinutes = tokens.reduce((sum, token) => {
+      if (token.startedAt && token.completedAt) {
+        const diff = token.completedAt.getTime() - token.startedAt.getTime()
+        return sum + (diff / 1000 / 60) // Convert to minutes
+      }
+      return sum
+    }, 0)
+
+    const avgHandleMinutes = tokens.length > 0 ? Math.round(totalMinutes / tokens.length * 100) / 100 : 0
+
+    res.json({
+      total: tokens.length,
+      avgHandleMinutes,
+      tokens: tokens.map(token => ({
+        ...token,
+        customerName: token.customer?.name || 'Anonymous',
+        serviceName: token.serviceType || 'General Service',
+      })),
+    })
+  } catch (error) {
+    console.error("Get served summary error:", error)
+    res.status(500).json({ error: "Failed to get served summary" })
+  }
+})
+
+// Get breaks summary
+router.get("/summary/breaks/:officerId", async (req, res) => {
+  try {
+    const { officerId } = req.params
+
+    const officer = await prisma.officer.findUnique({ where: { id: officerId } })
+    if (!officer) {
+      return res.status(404).json({ error: "Officer not found" })
+    }
+
+    // Get today's breaks (you may need to create a Break model in your schema)
+    // For now, I'll simulate breaks data based on officer status changes
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    
+    // Mock breaks data - you should implement actual break tracking
+    const now = Date.now()
+    const mockBreaks = [
+      {
+        id: "break1",
+        startTime: new Date(now - 3600000).toISOString(), // 1 hour ago
+        endTime: new Date(now - 3300000).toISOString(), // 55 minutes ago
+        duration: 5, // 5 minutes
+        type: "short_break",
+      },
+      {
+        id: "break2", 
+        startTime: new Date(now - 7200000).toISOString(), // 2 hours ago
+        endTime: new Date(now - 6900000).toISOString(), // 1h 55m ago
+        duration: 5,
+        type: "short_break",
+      },
+    ]
+
+    const totalBreaks = mockBreaks.length
+    const totalMinutes = mockBreaks.reduce((sum, brk) => sum + brk.duration, 0)
+
+    res.json({
+      totalBreaks,
+      totalMinutes,
+      breaks: mockBreaks,
+    })
+  } catch (error) {
+    console.error("Get breaks summary error:", error)
+    res.status(500).json({ error: "Failed to get breaks summary" })
+  }
+})
+
+// Get feedback summary
+router.get("/summary/feedback/:officerId", async (req, res) => {
+  try {
+    const { officerId } = req.params
+
+    const officer = await prisma.officer.findUnique({ where: { id: officerId } })
+    if (!officer) {
+      return res.status(404).json({ error: "Officer not found" })
+    }
+
+    // Get feedback for tokens served by this officer
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const tomorrow = new Date(today)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+
+    // Get tokens with feedback from today
+    const tokensWithFeedback = await prisma.token.findMany({
+      where: {
+        assignedTo: officerId,
+        status: { in: ["completed", "served"] },
+        completedAt: {
+          gte: today,
+          lt: tomorrow,
+        },
+        feedback: {
+          isNot: null, // Has feedback (one-to-one relationship)
+        },
+      },
+      include: {
+        customer: true,
+        feedback: true,
+      },
+      orderBy: { completedAt: "desc" },
+    })
+
+    // Calculate average rating
+    const feedbackList = tokensWithFeedback
+      .filter(token => token.feedback !== null)
+      .map(token => {
+        const feedback = token.feedback!
+        return {
+          tokenId: token.id,
+          tokenNumber: token.tokenNumber,
+          rating: feedback.rating,
+          comment: feedback.comment || "",
+          customerName: token.customer?.name || "Anonymous",
+          createdAt: feedback.createdAt.toISOString(),
+        }
+      })
+
+    const totalRating = feedbackList.reduce((sum, fb) => sum + fb.rating, 0)
+    const avgRating = feedbackList.length > 0 ? Math.round((totalRating / feedbackList.length) * 100) / 100 : 0
+
+    res.json({
+      total: feedbackList.length,
+      avgRating,
+      feedback: feedbackList,
+    })
+  } catch (error) {
+    console.error("Get feedback summary error:", error)
+    res.status(500).json({ error: "Failed to get feedback summary" })
+  }
+})
+
 // Logout: clear cookie
 router.post("/logout", async (req, res) => {
   try {

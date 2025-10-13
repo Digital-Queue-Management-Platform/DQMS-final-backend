@@ -13,6 +13,7 @@ import adminRoutes from "./routes/admin.routes"
 import queueRoutes from "./routes/queue.routes"
 import feedbackRoutes from "./routes/feedback.routes"
 import documentRoutes from "./routes/document.routes"
+import managerRoutes from "./routes/manager.routes"
 
 dotenv.config()
 
@@ -72,6 +73,7 @@ app.use("/api/admin", adminRoutes)
 app.use("/api/queue", queueRoutes)
 app.use("/api/feedback", feedbackRoutes)
 app.use("/api/document", documentRoutes)
+app.use("/api/manager", managerRoutes)
 
 // Health check
 app.get("/api/health", (req, res) => {
