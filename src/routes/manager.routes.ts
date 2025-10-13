@@ -323,8 +323,11 @@ router.post("/officers", async (req, res) => {
         return res.status(401).json({ error: "Invalid token" })
       }
     } else {
-      // Fallback: check for email in query params or headers
-      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
+      // Fallback: check for email in various places
+      managerEmail = (req.query.email as string) || 
+                    (req.headers['x-manager-email'] as string) ||
+                    req.body.managerEmail || 
+                    req.body.email
       
       if (!managerEmail) {
         return res.status(401).json({ error: "Manager authentication required" })
@@ -366,6 +369,8 @@ router.post("/officers", async (req, res) => {
       officerData.assignedServices = languages
     }
 
+    console.log("Creating officer with data:", JSON.stringify(officerData, null, 2))
+    
     const officer = await prisma.officer.create({
       data: officerData,
       include: {
@@ -373,10 +378,19 @@ router.post("/officers", async (req, res) => {
       }
     })
 
-    res.json(officer)
-  } catch (error) {
+    res.json({ success: true, officer })
+  } catch (error: any) {
     console.error("Manager officer creation error:", error)
-    res.status(500).json({ error: "Failed to create officer" })
+    console.error("Request body:", req.body)
+    
+    // Provide more specific error messages
+    if (error.code === 'P2002') {
+      res.status(400).json({ error: "An officer with this mobile number already exists" })
+    } else if (error.code === 'P2003') {
+      res.status(400).json({ error: "Invalid outlet ID" })
+    } else {
+      res.status(500).json({ error: "Failed to create officer", details: error.message || "Unknown error" })
+    }
   }
 })
 
