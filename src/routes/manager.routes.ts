@@ -394,6 +394,102 @@ router.post("/officers", async (req, res) => {
   }
 })
 
+// Update existing officer in manager's region
+router.patch("/officer/:officerId", async (req, res) => {
+  try {
+    const { officerId } = req.params
+    const { name, counterNumber, assignedServices, isTraining, languages } = req.body
+    
+    // Check for JWT token
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+    
+    let managerEmail: string | undefined
+
+    if (token) {
+      // Try JWT authentication first
+      try {
+        const payload = (jwt as any).verify(token, JWT_SECRET)
+        managerEmail = payload.email
+      } catch (e) {
+        return res.status(401).json({ error: "Invalid token" })
+      }
+    } else {
+      // Fallback: check for email in various places
+      managerEmail = (req.query.email as string) || 
+                    (req.headers['x-manager-email'] as string) ||
+                    req.body.managerEmail || 
+                    req.body.email
+      
+      if (!managerEmail) {
+        return res.status(401).json({ error: "Manager authentication required" })
+      }
+    }
+
+    // Find manager's region
+    const region = await prisma.region.findFirst({
+      where: { managerEmail: managerEmail },
+      include: { 
+        outlets: {
+          include: {
+            officers: true
+          }
+        } 
+      }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager not found" })
+    }
+
+    // Verify the officer belongs to this manager's region
+    const officerExists = region.outlets.some(outlet => 
+      outlet.officers.some(officer => officer.id === officerId)
+    )
+
+    if (!officerExists) {
+      return res.status(403).json({ error: "Officer not found in your region" })
+    }
+
+    // Prepare update data
+    const updateData: any = {}
+    
+    if (name !== undefined) updateData.name = name
+    if (counterNumber !== undefined) updateData.counterNumber = counterNumber
+    if (isTraining !== undefined) updateData.isTraining = isTraining
+    if (assignedServices !== undefined) updateData.assignedServices = assignedServices
+    if (languages !== undefined) updateData.assignedServices = languages
+
+    console.log("Updating officer with data:", JSON.stringify(updateData, null, 2))
+    
+    const updatedOfficer = await prisma.officer.update({
+      where: { id: officerId },
+      data: updateData,
+      include: {
+        outlet: true
+      }
+    })
+
+    res.json({ success: true, officer: updatedOfficer })
+  } catch (error: any) {
+    console.error("Manager officer update error:", error)
+    console.error("Request body:", req.body)
+    
+    if (error.code === 'P2002') {
+      res.status(400).json({ error: "An officer with this mobile number already exists" })
+    } else if (error.code === 'P2025') {
+      res.status(404).json({ error: "Officer not found" })
+    } else {
+      res.status(500).json({ error: "Failed to update officer", details: error.message || "Unknown error" })
+    }
+  }
+})
+
 // Manager logout
 router.post("/logout", async (req, res) => {
   try {
