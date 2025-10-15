@@ -490,6 +490,179 @@ router.patch("/officer/:officerId", async (req, res) => {
   }
 })
 
+// Get outlets in manager's region
+router.get("/outlets", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization
+    if (!authHeader) {
+      return res.status(401).json({ error: "Authorization header required" })
+    }
+
+    const token = authHeader.split(" ")[1]
+    const decoded = (jwt as any).verify(token, JWT_SECRET) as { regionId: string }
+
+    const outlets = await prisma.outlet.findMany({
+      where: {
+        regionId: decoded.regionId
+      },
+      include: {
+        officers: {
+          select: {
+            id: true,
+            name: true,
+            status: true,
+            counterNumber: true
+          }
+        },
+        _count: {
+          select: {
+            tokens: {
+              where: {
+                createdAt: {
+                  gte: new Date(new Date().setHours(0, 0, 0, 0))
+                }
+              }
+            }
+          }
+        }
+      },
+      orderBy: {
+        name: 'asc'
+      }
+    })
+
+    res.json(outlets)
+  } catch (error) {
+    console.error("Get outlets error:", error)
+    res.status(500).json({ error: "Failed to get outlets" })
+  }
+})
+
+// Create new outlet in manager's region
+router.post("/outlets", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization
+    if (!authHeader) {
+      return res.status(401).json({ error: "Authorization header required" })
+    }
+
+    const token = authHeader.split(" ")[1]
+    const decoded = (jwt as any).verify(token, JWT_SECRET) as { regionId: string }
+
+    const { name, location, counters } = req.body
+
+    if (!name || !location) {
+      return res.status(400).json({ error: "Name and location are required" })
+    }
+
+    // Validate counters is a positive number
+    const counterCount = counters ? parseInt(counters) : 5
+    if (counterCount < 1 || counterCount > 20) {
+      return res.status(400).json({ error: "Counter count must be between 1 and 20" })
+    }
+
+    const outlet = await prisma.outlet.create({
+      data: {
+        name: name.trim(),
+        location: location.trim(),
+        regionId: decoded.regionId,
+        counterCount: counterCount,
+        isActive: true
+      },
+      include: {
+        officers: true,
+        region: {
+          select: {
+            name: true
+          }
+        }
+      }
+    })
+
+    res.status(201).json({
+      success: true,
+      message: "Outlet created successfully",
+      outlet
+    })
+  } catch (error: any) {
+    console.error("Create outlet error:", error)
+    if (error.code === 'P2002') {
+      res.status(400).json({ error: "Outlet name already exists in this region" })
+    } else {
+      res.status(500).json({ error: "Failed to create outlet", details: error.message || "Unknown error" })
+    }
+  }
+})
+
+// Update outlet in manager's region
+router.put("/outlets/:outletId", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization
+    if (!authHeader) {
+      return res.status(401).json({ error: "Authorization header required" })
+    }
+
+    const token = authHeader.split(" ")[1]
+    const decoded = (jwt as any).verify(token, JWT_SECRET) as { regionId: string }
+
+    const { outletId } = req.params
+    const { name, location, counters, isActive } = req.body
+
+    // Verify outlet belongs to manager's region
+    const existingOutlet = await prisma.outlet.findFirst({
+      where: {
+        id: outletId,
+        regionId: decoded.regionId
+      }
+    })
+
+    if (!existingOutlet) {
+      return res.status(404).json({ error: "Outlet not found in your region" })
+    }
+
+    // Prepare update data
+    const updateData: any = {}
+    if (name !== undefined) updateData.name = name.trim()
+    if (location !== undefined) updateData.location = location.trim()
+    if (counters !== undefined) {
+      const counterCount = parseInt(counters)
+      if (counterCount < 1 || counterCount > 20) {
+        return res.status(400).json({ error: "Counter count must be between 1 and 20" })
+      }
+      updateData.counterCount = counterCount
+    }
+    if (isActive !== undefined) updateData.isActive = Boolean(isActive)
+
+    const outlet = await prisma.outlet.update({
+      where: { id: outletId },
+      data: updateData,
+      include: {
+        officers: true,
+        region: {
+          select: {
+            name: true
+          }
+        }
+      }
+    })
+
+    res.json({
+      success: true,
+      message: "Outlet updated successfully",
+      outlet
+    })
+  } catch (error: any) {
+    console.error("Update outlet error:", error)
+    if (error.code === 'P2002') {
+      res.status(400).json({ error: "Outlet name already exists in this region" })
+    } else if (error.code === 'P2025') {
+      res.status(404).json({ error: "Outlet not found" })
+    } else {
+      res.status(500).json({ error: "Failed to update outlet", details: error.message || "Unknown error" })
+    }
+  }
+})
+
 // Manager logout
 router.post("/logout", async (req, res) => {
   try {
