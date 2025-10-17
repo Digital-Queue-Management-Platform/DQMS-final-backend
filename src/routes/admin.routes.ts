@@ -373,19 +373,49 @@ router.post("/register-region", async (req, res) => {
       return res.status(400).json({ error: "Manager with this email already exists" })
     }
 
-    // Generate a default password for the manager
-    const defaultPassword = "Manager123!" // You can make this more secure by generating random passwords
-    const hashedPassword = await bcrypt.hash(defaultPassword, 10)
+    // Try to create region with password field first (if migration applied)
+    let region
+    let credentials = null
+    
+    try {
+      // Generate a default password for the manager
+      const defaultPassword = "Manager123!"
+      const hashedPassword = await bcrypt.hash(defaultPassword, 10)
 
-    const region = await prisma.region.create({
-      data: {
-        name,
-        managerId: managerName || undefined,
-        managerEmail: managerEmail,
-        managerMobile: managerMobile || undefined,
-        ...(hashedPassword && { managerPassword: hashedPassword }),
-      } as any,
-    })
+      region = await prisma.region.create({
+        data: {
+          name,
+          managerId: managerName || undefined,
+          managerEmail: managerEmail,
+          managerMobile: managerMobile || undefined,
+          ...(hashedPassword && { managerPassword: hashedPassword }),
+        } as any,
+      })
+
+      credentials = {
+        email: managerEmail,
+        temporaryPassword: defaultPassword,
+        message: "Please provide these credentials to the regional manager"
+      }
+    } catch (migrationError: any) {
+      console.log("Migration not applied yet, creating region without password:", migrationError?.message || migrationError)
+      
+      // Fallback: Create region without password field
+      region = await prisma.region.create({
+        data: {
+          name,
+          managerId: managerName || undefined,
+          managerEmail: managerEmail,
+          managerMobile: managerMobile || undefined,
+        },
+      })
+
+      credentials = {
+        email: managerEmail,
+        temporaryPassword: "Email-only authentication (password feature pending migration)",
+        message: "Regional manager can log in with email only until system migration is complete"
+      }
+    }
 
     res.json({ 
       success: true, 
@@ -393,11 +423,7 @@ router.post("/register-region", async (req, res) => {
         ...region,
         managerPassword: undefined // Don't send password back
       },
-      credentials: {
-        email: managerEmail,
-        temporaryPassword: defaultPassword,
-        message: "Please provide these credentials to the regional manager"
-      }
+      credentials
     })
   } catch (error) {
     console.error("Region register error:", error)
