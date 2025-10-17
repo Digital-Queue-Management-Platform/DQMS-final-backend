@@ -76,13 +76,14 @@ model Outlet {
 }
 
 model Region {
-  id            String   @id @default(uuid())
-  name          String
-  managerId     String?
-  managerEmail  String?
-  managerMobile String?
-  createdAt     DateTime @default(now())
-  outlets       Outlet[]
+  id              String   @id @default(uuid())
+  name            String
+  managerId       String?
+  managerEmail    String?
+  managerMobile   String?
+  managerPassword String?
+  createdAt       DateTime @default(now())
+  outlets         Outlet[]
 }
 
 model Feedback {

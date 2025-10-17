@@ -30,12 +30,6 @@ class EmailService {
   }
 
   private createTransporter(): nodemailer.Transporter {
-    console.log('Creating email transporter with config:')
-    console.log('SMTP_HOST:', process.env.SMTP_HOST)
-    console.log('SMTP_PORT:', process.env.SMTP_PORT)
-    console.log('SMTP_USER:', process.env.SMTP_USER)
-    console.log('SMTP_PASS:', process.env.SMTP_PASS ? '***set***' : 'not set')
-    
     const config: EmailConfig = {
       host: process.env.SMTP_HOST || 'smtp.gmail.com',
       port: parseInt(process.env.SMTP_PORT || '587'),
@@ -45,11 +39,6 @@ class EmailService {
         pass: process.env.SMTP_PASS || ''
       }
     }
-
-    console.log('Final config:', {
-      ...config,
-      auth: { user: config.auth.user, pass: config.auth.pass ? '***set***' : 'not set' }
-    })
 
     return nodemailer.createTransport(config)
   }

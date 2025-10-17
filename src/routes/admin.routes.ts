@@ -362,128 +362,74 @@ router.get("/dashboard/realtime", async (req, res) => {
 // Register a region with manager account creation
 router.post("/register-region", async (req, res) => {
   try {
-    console.log("=== REGION CREATION DEBUG ===")
-    console.log("Request body:", req.body)
-    console.log("Database URL exists:", !!process.env.DATABASE_URL)
-    
     const { name, managerName, managerEmail, managerMobile } = req.body
     if (!name) return res.status(400).json({ error: "Region name required" })
     if (!managerEmail) return res.status(400).json({ error: "Manager email required" })
 
-    console.log("Checking for existing manager...")
     // Check if manager email already exists
     const existingRegion = await prisma.region.findFirst({
       where: { managerEmail: managerEmail }
     })
-    console.log("Existing region check complete:", !!existingRegion)
 
     if (existingRegion) {
       return res.status(400).json({ error: "Manager with this email already exists" })
     }
 
-    // Try to create region with password field first (if migration applied)
-    let region
-    let credentials = null
-    
-    console.log("Attempting region creation with password...")
-    try {
-      // Generate a secure 8-character password for the manager
-      const defaultPassword = generateSecurePassword()
-      const hashedPassword = await bcrypt.hash(defaultPassword, 10)
-      console.log("Strong password generated and hashed successfully")
+    // Generate a secure 8-character password for the manager
+    const defaultPassword = generateSecurePassword()
+    const hashedPassword = await bcrypt.hash(defaultPassword, 10)
 
-      region = await prisma.region.create({
-        data: {
-          name,
-          managerId: managerName || undefined,
-          managerEmail: managerEmail,
-          managerMobile: managerMobile || undefined,
-          ...(hashedPassword && { managerPassword: hashedPassword }),
-        } as any,
-      })
-      console.log("Region created with password successfully:", region.id)
+    // Create region with manager password
+    const region = await prisma.region.create({
+      data: {
+        name,
+        managerId: managerName || undefined,
+        managerEmail: managerEmail,
+        managerMobile: managerMobile || undefined,
+        managerPassword: hashedPassword,
+      },
+    })
 
-      credentials = {
-        email: managerEmail,
-        temporaryPassword: defaultPassword,
-        message: "Please provide these credentials to the regional manager"
-      }
-    } catch (migrationError: any) {
-      console.log("=== MIGRATION ERROR DETAILS ===")
-      console.log("Error name:", migrationError?.name)
-      console.log("Error message:", migrationError?.message)
-      console.log("Error code:", migrationError?.code)
-      console.log("Full error:", migrationError)
-      
-      console.log("Attempting fallback creation without password...")
-      // Fallback: Create region without password field
-      try {
-        region = await prisma.region.create({
-          data: {
-            name,
-            managerId: managerName || undefined,
-            managerEmail: managerEmail,
-            managerMobile: managerMobile || undefined,
-          },
-        })
-        console.log("Fallback region created successfully:", region.id)
-
-        credentials = {
-          email: managerEmail,
-          temporaryPassword: "Email-only authentication (password feature pending migration)",
-          message: "Regional manager can log in with email only until system migration is complete"
-        }
-      } catch (fallbackError: any) {
-        console.log("=== FALLBACK ERROR DETAILS ===")
-        console.log("Fallback error name:", fallbackError?.name)
-        console.log("Fallback error message:", fallbackError?.message)
-        console.log("Fallback error code:", fallbackError?.code)
-        console.log("Full fallback error:", fallbackError)
-        throw fallbackError
-      }
+    let credentials = {
+      email: managerEmail,
+      temporaryPassword: defaultPassword,
+      message: "Please provide these credentials to the regional manager"
     }
-
-    console.log("Region creation successful, sending email notification...")
     
     // Send welcome email to the manager
-    if (credentials && credentials.temporaryPassword !== "Email-only authentication (password feature pending migration)") {
-      try {
-        const loginUrl = process.env.FRONTEND_ORIGIN?.split(',')[0] + '/manager-login' || 'http://localhost:3000/manager-login'
-        
-        const emailResult = await emailService.sendManagerWelcomeEmail({
-          managerName: managerName || 'Regional Manager',
-          managerEmail: managerEmail,
-          regionName: name,
-          temporaryPassword: credentials.temporaryPassword,
-          loginUrl: loginUrl
-        })
-        
-        if (emailResult) {
-          console.log("Welcome email sent successfully to:", managerEmail)
-          credentials = {
-            ...credentials,
-            emailSent: true,
-            message: "Welcome email sent successfully. Please check your inbox for login credentials."
-          }
-        } else {
-          console.log("Failed to send welcome email to:", managerEmail)
-          credentials = {
-            ...credentials,
-            emailSent: false,
-            message: "Account created successfully, but email notification failed. Please contact admin for credentials."
-          }
+    try {
+      const loginUrl = process.env.FRONTEND_ORIGIN?.split(',')[0] + '/manager-login' || 'http://localhost:3000/manager-login'
+      
+      const emailResult = await emailService.sendManagerWelcomeEmail({
+        managerName: managerName || 'Regional Manager',
+        managerEmail: managerEmail,
+        regionName: name,
+        temporaryPassword: credentials.temporaryPassword,
+        loginUrl: loginUrl
+      })
+      
+      if (emailResult) {
+        credentials = {
+          ...credentials,
+          emailSent: true,
+          message: "Welcome email sent successfully. Please check your inbox for login credentials."
         }
-      } catch (emailError) {
-        console.error("Email sending error:", emailError)
+      } else {
         credentials = {
           ...credentials,
           emailSent: false,
           message: "Account created successfully, but email notification failed. Please contact admin for credentials."
         }
       }
+    } catch (emailError) {
+      console.error("Email sending error:", emailError)
+      credentials = {
+        ...credentials,
+        emailSent: false,
+        message: "Account created successfully, but email notification failed. Please contact admin for credentials."
+      }
     }
     
-    console.log("Sending response...")
     res.json({ 
       success: true, 
       region: {
@@ -493,12 +439,7 @@ router.post("/register-region", async (req, res) => {
       credentials
     })
   } catch (error: any) {
-    console.error("=== MAIN ERROR HANDLER ===")
-    console.error("Error name:", error?.name)
-    console.error("Error message:", error?.message)
-    console.error("Error code:", error?.code)
-    console.error("Error stack:", error?.stack)
-    console.error("Full error object:", error)
+    console.error("Region register error:", error)
     res.status(500).json({ 
       error: "Failed to create region",
       details: process.env.NODE_ENV === 'development' ? error?.message : undefined
