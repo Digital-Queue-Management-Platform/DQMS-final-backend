@@ -6,11 +6,14 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
+    "build:prod": "npx prisma migrate deploy && npx prisma generate && tsc",
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:prod": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "seed:outlets": "tsx ./scripts/seedOutlets.ts"
+    "seed:outlets": "tsx ./scripts/seedOutlets.ts",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^5.7.0",
