@@ -35,15 +35,23 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ error: "Manager not found" })
     }
 
-    // Check if manager has a password set
-    if (!region.managerPassword) {
-      return res.status(401).json({ error: "Manager account not properly configured. Please contact admin." })
-    }
-
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(password, region.managerPassword)
-    if (!isPasswordValid) {
-      return res.status(401).json({ error: "Invalid password" })
+    // Check if manager has a password set (for new JWT auth)
+    // If no password is set, fall back to email-only authentication for backward compatibility
+    const regionWithPassword = region as any
+    if (regionWithPassword.managerPassword) {
+      // New JWT authentication with password
+      const isPasswordValid = await bcrypt.compare(password, regionWithPassword.managerPassword)
+      if (!isPasswordValid) {
+        return res.status(401).json({ error: "Invalid password" })
+      }
+    } else {
+      // Backward compatibility: email-only authentication
+      if (!password) {
+        // If no password provided and no password in DB, treat as legacy email-only login
+        console.log("Using legacy email-only authentication for manager:", email)
+      } else {
+        return res.status(401).json({ error: "Manager account not yet configured for password authentication. Please contact admin." })
+      }
     }
 
     // Create manager object from region data

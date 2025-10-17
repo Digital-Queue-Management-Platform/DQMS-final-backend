@@ -383,8 +383,8 @@ router.post("/register-region", async (req, res) => {
         managerId: managerName || undefined,
         managerEmail: managerEmail,
         managerMobile: managerMobile || undefined,
-        managerPassword: hashedPassword,
-      },
+        ...(hashedPassword && { managerPassword: hashedPassword }),
+      } as any,
     })
 
     res.json({ 
@@ -451,7 +451,7 @@ router.put("/managers/:regionId/password", async (req, res) => {
 
     const region = await prisma.region.update({
       where: { id: regionId },
-      data: { managerPassword: hashedPassword },
+      data: { managerPassword: hashedPassword } as any,
       select: {
         id: true,
         name: true,
