@@ -160,6 +160,15 @@ router.get("/token/:tokenId", async (req, res) => {
   }
 })
 
+// In-memory store for manager QR tokens (use Redis or database in production)
+interface ManagerQRTokenData {
+  outletId: string;
+  generatedAt: string;
+  expiresAt: string;
+}
+
+const managerQRTokens = new Map<string, ManagerQRTokenData>()
+
 // Manager QR Code endpoints
 // Register a manager-generated QR token
 router.post("/manager-qr-token", async (req, res) => {
@@ -179,13 +188,7 @@ router.post("/manager-qr-token", async (req, res) => {
     // Store the manager QR token with expiry (24 hours for manager tokens)
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
     
-    // Note: Since we don't have a dedicated table, we'll use a simple in-memory store
-    // In production, you'd want to store this in Redis or a dedicated table
-    if (!global.managerQRTokens) {
-      global.managerQRTokens = new Map()
-    }
-    
-    global.managerQRTokens.set(token, {
+    managerQRTokens.set(token, {
       outletId,
       generatedAt: generatedAt || new Date().toISOString(),
       expiresAt: expiresAt.toISOString()
@@ -211,15 +214,15 @@ router.get("/validate-manager-qr", async (req, res) => {
     }
 
     // Check in-memory store
-    if (!global.managerQRTokens || !global.managerQRTokens.has(token)) {
+    if (!managerQRTokens.has(token)) {
       return res.status(400).json({ valid: false, error: "Invalid token" })
     }
 
-    const tokenData = global.managerQRTokens.get(token)
+    const tokenData = managerQRTokens.get(token)!
     
     // Check if token has expired
     if (new Date() > new Date(tokenData.expiresAt)) {
-      global.managerQRTokens.delete(token) // Clean up expired token
+      managerQRTokens.delete(token) // Clean up expired token
       return res.status(400).json({ valid: false, error: "Token expired" })
     }
 
