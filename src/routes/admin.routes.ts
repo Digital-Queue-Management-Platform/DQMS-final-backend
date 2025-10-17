@@ -360,14 +360,20 @@ router.get("/dashboard/realtime", async (req, res) => {
 // Register a region with manager account creation
 router.post("/register-region", async (req, res) => {
   try {
+    console.log("=== REGION CREATION DEBUG ===")
+    console.log("Request body:", req.body)
+    console.log("Database URL exists:", !!process.env.DATABASE_URL)
+    
     const { name, managerName, managerEmail, managerMobile } = req.body
     if (!name) return res.status(400).json({ error: "Region name required" })
     if (!managerEmail) return res.status(400).json({ error: "Manager email required" })
 
+    console.log("Checking for existing manager...")
     // Check if manager email already exists
     const existingRegion = await prisma.region.findFirst({
       where: { managerEmail: managerEmail }
     })
+    console.log("Existing region check complete:", !!existingRegion)
 
     if (existingRegion) {
       return res.status(400).json({ error: "Manager with this email already exists" })
@@ -377,10 +383,12 @@ router.post("/register-region", async (req, res) => {
     let region
     let credentials = null
     
+    console.log("Attempting region creation with password...")
     try {
       // Generate a default password for the manager
       const defaultPassword = "Manager123!"
       const hashedPassword = await bcrypt.hash(defaultPassword, 10)
+      console.log("Password hashed successfully")
 
       region = await prisma.region.create({
         data: {
@@ -391,6 +399,7 @@ router.post("/register-region", async (req, res) => {
           ...(hashedPassword && { managerPassword: hashedPassword }),
         } as any,
       })
+      console.log("Region created with password successfully:", region.id)
 
       credentials = {
         email: managerEmail,
@@ -398,25 +407,41 @@ router.post("/register-region", async (req, res) => {
         message: "Please provide these credentials to the regional manager"
       }
     } catch (migrationError: any) {
-      console.log("Migration not applied yet, creating region without password:", migrationError?.message || migrationError)
+      console.log("=== MIGRATION ERROR DETAILS ===")
+      console.log("Error name:", migrationError?.name)
+      console.log("Error message:", migrationError?.message)
+      console.log("Error code:", migrationError?.code)
+      console.log("Full error:", migrationError)
       
+      console.log("Attempting fallback creation without password...")
       // Fallback: Create region without password field
-      region = await prisma.region.create({
-        data: {
-          name,
-          managerId: managerName || undefined,
-          managerEmail: managerEmail,
-          managerMobile: managerMobile || undefined,
-        },
-      })
+      try {
+        region = await prisma.region.create({
+          data: {
+            name,
+            managerId: managerName || undefined,
+            managerEmail: managerEmail,
+            managerMobile: managerMobile || undefined,
+          },
+        })
+        console.log("Fallback region created successfully:", region.id)
 
-      credentials = {
-        email: managerEmail,
-        temporaryPassword: "Email-only authentication (password feature pending migration)",
-        message: "Regional manager can log in with email only until system migration is complete"
+        credentials = {
+          email: managerEmail,
+          temporaryPassword: "Email-only authentication (password feature pending migration)",
+          message: "Regional manager can log in with email only until system migration is complete"
+        }
+      } catch (fallbackError: any) {
+        console.log("=== FALLBACK ERROR DETAILS ===")
+        console.log("Fallback error name:", fallbackError?.name)
+        console.log("Fallback error message:", fallbackError?.message)
+        console.log("Fallback error code:", fallbackError?.code)
+        console.log("Full fallback error:", fallbackError)
+        throw fallbackError
       }
     }
 
+    console.log("Region creation successful, sending response...")
     res.json({ 
       success: true, 
       region: {
@@ -425,9 +450,17 @@ router.post("/register-region", async (req, res) => {
       },
       credentials
     })
-  } catch (error) {
-    console.error("Region register error:", error)
-    res.status(500).json({ error: "Failed to create region" })
+  } catch (error: any) {
+    console.error("=== MAIN ERROR HANDLER ===")
+    console.error("Error name:", error?.name)
+    console.error("Error message:", error?.message)
+    console.error("Error code:", error?.code)
+    console.error("Error stack:", error?.stack)
+    console.error("Full error object:", error)
+    res.status(500).json({ 
+      error: "Failed to create region",
+      details: process.env.NODE_ENV === 'development' ? error?.message : undefined
+    })
   }
 })
 
