@@ -74,25 +74,64 @@ router.get("/outlets", async (req, res) => {
     const outlets = await prisma.outlet.findMany({
       where: { isActive: true },
       include: {
-        region: true,
+        region: {
+          select: {
+            id: true,
+            name: true,
+            managerId: true,
+            managerEmail: true,
+            managerMobile: true,
+            createdAt: true,
+            // Exclude managerPassword for safety and compatibility
+          }
+        },
       },
     })
 
     res.json(outlets)
   } catch (error) {
     console.error("Outlets fetch error:", error)
-    res.status(500).json({ error: "Failed to fetch outlets" })
+    // Try without the region include as fallback
+    try {
+      const outletsWithoutRegion = await prisma.outlet.findMany({
+        where: { isActive: true },
+      })
+      console.log("Fallback: returning outlets without region data")
+      res.json(outletsWithoutRegion)
+    } catch (fallbackError) {
+      console.error("Fallback also failed:", fallbackError)
+      res.status(500).json({ error: "Failed to fetch outlets" })
+    }
   }
 })
 
 // Get all regions (for admin UIs)
 router.get('/regions', async (req, res) => {
   try {
-    const regions = await prisma.region.findMany({ orderBy: { name: 'asc' } })
+    const regions = await prisma.region.findMany({ 
+      orderBy: { name: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        managerId: true,
+        managerEmail: true,
+        managerMobile: true,
+        createdAt: true,
+        // Exclude managerPassword for safety and compatibility
+      }
+    })
     res.json(regions)
   } catch (error) {
     console.error('Regions fetch error:', error)
-    res.status(500).json({ error: 'Failed to fetch regions' })
+    // Fallback without select
+    try {
+      const regionsBasic = await prisma.region.findMany({ orderBy: { name: 'asc' } })
+      console.log("Fallback: returning regions with basic data")
+      res.json(regionsBasic)
+    } catch (fallbackError) {
+      console.error('Regions fallback also failed:', fallbackError)
+      res.status(500).json({ error: 'Failed to fetch regions' })
+    }
   }
 })
 
