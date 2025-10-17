@@ -2,6 +2,8 @@ import { Router } from "express"
 import * as jwt from "jsonwebtoken"
 import * as bcrypt from "bcrypt"
 import { prisma } from "../server"
+import emailService from "../services/emailService"
+import { generateSecurePassword } from "../utils/passwordGenerator"
 
 const router = Router()
 
@@ -385,10 +387,10 @@ router.post("/register-region", async (req, res) => {
     
     console.log("Attempting region creation with password...")
     try {
-      // Generate a default password for the manager
-      const defaultPassword = "Manager123!"
+      // Generate a secure 8-character password for the manager
+      const defaultPassword = generateSecurePassword()
       const hashedPassword = await bcrypt.hash(defaultPassword, 10)
-      console.log("Password hashed successfully")
+      console.log("Strong password generated and hashed successfully")
 
       region = await prisma.region.create({
         data: {
@@ -441,7 +443,47 @@ router.post("/register-region", async (req, res) => {
       }
     }
 
-    console.log("Region creation successful, sending response...")
+    console.log("Region creation successful, sending email notification...")
+    
+    // Send welcome email to the manager
+    if (credentials && credentials.temporaryPassword !== "Email-only authentication (password feature pending migration)") {
+      try {
+        const loginUrl = process.env.FRONTEND_ORIGIN?.split(',')[0] + '/manager-login' || 'http://localhost:3000/manager-login'
+        
+        const emailResult = await emailService.sendManagerWelcomeEmail({
+          managerName: managerName || 'Regional Manager',
+          managerEmail: managerEmail,
+          regionName: name,
+          temporaryPassword: credentials.temporaryPassword,
+          loginUrl: loginUrl
+        })
+        
+        if (emailResult) {
+          console.log("Welcome email sent successfully to:", managerEmail)
+          credentials = {
+            ...credentials,
+            emailSent: true,
+            message: "Welcome email sent successfully. Please check your inbox for login credentials."
+          }
+        } else {
+          console.log("Failed to send welcome email to:", managerEmail)
+          credentials = {
+            ...credentials,
+            emailSent: false,
+            message: "Account created successfully, but email notification failed. Please contact admin for credentials."
+          }
+        }
+      } catch (emailError) {
+        console.error("Email sending error:", emailError)
+        credentials = {
+          ...credentials,
+          emailSent: false,
+          message: "Account created successfully, but email notification failed. Please contact admin for credentials."
+        }
+      }
+    }
+    
+    console.log("Sending response...")
     res.json({ 
       success: true, 
       region: {
