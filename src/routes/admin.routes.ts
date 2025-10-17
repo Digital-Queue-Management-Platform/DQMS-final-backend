@@ -1,5 +1,6 @@
 import { Router } from "express"
 import * as jwt from "jsonwebtoken"
+import * as bcrypt from "bcrypt"
 import { prisma } from "../server"
 
 const router = Router()
@@ -356,25 +357,172 @@ router.get("/dashboard/realtime", async (req, res) => {
   }
 })
 
-// Register a region (admin helper)
+// Register a region with manager account creation
 router.post("/register-region", async (req, res) => {
   try {
     const { name, managerName, managerEmail, managerMobile } = req.body
     if (!name) return res.status(400).json({ error: "Region name required" })
+    if (!managerEmail) return res.status(400).json({ error: "Manager email required" })
+
+    // Check if manager email already exists
+    const existingRegion = await prisma.region.findFirst({
+      where: { managerEmail: managerEmail }
+    })
+
+    if (existingRegion) {
+      return res.status(400).json({ error: "Manager with this email already exists" })
+    }
+
+    // Generate a default password for the manager
+    const defaultPassword = "Manager123!" // You can make this more secure by generating random passwords
+    const hashedPassword = await bcrypt.hash(defaultPassword, 10)
 
     const region = await prisma.region.create({
       data: {
         name,
         managerId: managerName || undefined,
-        managerEmail: managerEmail || undefined,
+        managerEmail: managerEmail,
         managerMobile: managerMobile || undefined,
+        managerPassword: hashedPassword,
       },
     })
 
-    res.json({ success: true, region })
+    res.json({ 
+      success: true, 
+      region: {
+        ...region,
+        managerPassword: undefined // Don't send password back
+      },
+      credentials: {
+        email: managerEmail,
+        temporaryPassword: defaultPassword,
+        message: "Please provide these credentials to the regional manager"
+      }
+    })
   } catch (error) {
     console.error("Region register error:", error)
     res.status(500).json({ error: "Failed to create region" })
+  }
+})
+
+// Get all regional managers
+router.get("/managers", async (req, res) => {
+  try {
+    const regions = await prisma.region.findMany({
+      where: {
+        managerEmail: { not: null }
+      },
+      select: {
+        id: true,
+        name: true,
+        managerId: true,
+        managerEmail: true,
+        managerMobile: true,
+        createdAt: true,
+        outlets: {
+          select: {
+            id: true,
+            name: true,
+            location: true,
+            isActive: true
+          }
+        }
+      }
+    })
+
+    res.json({ success: true, managers: regions })
+  } catch (error) {
+    console.error("Get managers error:", error)
+    res.status(500).json({ error: "Failed to fetch managers" })
+  }
+})
+
+// Update manager password
+router.put("/managers/:regionId/password", async (req, res) => {
+  try {
+    const { regionId } = req.params
+    const { newPassword } = req.body
+
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters long" })
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10)
+
+    const region = await prisma.region.update({
+      where: { id: regionId },
+      data: { managerPassword: hashedPassword },
+      select: {
+        id: true,
+        name: true,
+        managerId: true,
+        managerEmail: true
+      }
+    })
+
+    res.json({ 
+      success: true, 
+      message: "Manager password updated successfully",
+      manager: region
+    })
+  } catch (error) {
+    console.error("Update manager password error:", error)
+    res.status(500).json({ error: "Failed to update manager password" })
+  }
+})
+
+// Update manager details
+router.put("/managers/:regionId", async (req, res) => {
+  try {
+    const { regionId } = req.params
+    const { managerName, managerEmail, managerMobile } = req.body
+
+    if (managerEmail) {
+      // Check if email is already used by another manager
+      const existingRegion = await prisma.region.findFirst({
+        where: { 
+          managerEmail: managerEmail,
+          id: { not: regionId }
+        }
+      })
+
+      if (existingRegion) {
+        return res.status(400).json({ error: "Email already in use by another manager" })
+      }
+    }
+
+    const region = await prisma.region.update({
+      where: { id: regionId },
+      data: {
+        managerId: managerName,
+        managerEmail: managerEmail,
+        managerMobile: managerMobile
+      },
+      select: {
+        id: true,
+        name: true,
+        managerId: true,
+        managerEmail: true,
+        managerMobile: true,
+        outlets: {
+          select: {
+            id: true,
+            name: true,
+            location: true,
+            isActive: true
+          }
+        }
+      }
+    })
+
+    res.json({ 
+      success: true, 
+      message: "Manager details updated successfully",
+      manager: region
+    })
+  } catch (error) {
+    console.error("Update manager error:", error)
+    res.status(500).json({ error: "Failed to update manager details" })
   }
 })
 

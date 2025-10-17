@@ -1,19 +1,20 @@
 import { Router } from "express"
 import { prisma } from "../server"
 import * as jwt from "jsonwebtoken"
+import * as bcrypt from "bcrypt"
 
 const router = Router()
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 const JWT_EXPIRES = process.env.JWT_EXPIRES || "8h"
 
-// Manager login - authenticate using email
+// Manager login - authenticate using email and password
 router.post("/login", async (req, res) => {
   try {
-    const { email } = req.body
+    const { email, password } = req.body
 
-    if (!email) {
-      return res.status(400).json({ error: "Email is required" })
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password are required" })
     }
 
     // Find manager by email in the Region model
@@ -32,6 +33,17 @@ router.post("/login", async (req, res) => {
 
     if (!region) {
       return res.status(401).json({ error: "Manager not found" })
+    }
+
+    // Check if manager has a password set
+    if (!region.managerPassword) {
+      return res.status(401).json({ error: "Manager account not properly configured. Please contact admin." })
+    }
+
+    // Verify password
+    const isPasswordValid = await bcrypt.compare(password, region.managerPassword)
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: "Invalid password" })
     }
 
     // Create manager object from region data
