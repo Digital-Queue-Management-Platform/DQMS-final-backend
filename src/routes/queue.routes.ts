@@ -78,7 +78,7 @@ router.get('/regions', async (req, res) => {
 })
 
 // Services CRUD
-// Get all services
+// Get all services (including inactive ones for admin management)
 router.get('/services', async (req, res) => {
   try {
     const services = await prisma.$queryRaw`SELECT * FROM "Service" ORDER BY "createdAt" DESC`
@@ -137,12 +137,12 @@ router.patch('/services/:id', async (req, res) => {
   }
 })
 
-// Delete (soft) service
+// Delete (hard) service
 router.delete('/services/:id', async (req, res) => {
   try {
     const { id } = req.params
     const deleted: any = await prisma.$queryRaw`
-      UPDATE "Service" SET "isActive" = false WHERE "id" = ${id} RETURNING *`
+      DELETE FROM "Service" WHERE "id" = ${id} RETURNING *`
     res.json({ success: true, service: deleted[0] })
   } catch (error) {
     console.error('Delete service error:', error)
