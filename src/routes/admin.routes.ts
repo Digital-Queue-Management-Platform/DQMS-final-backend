@@ -11,6 +11,14 @@ const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 const ADMIN_EMAIL = "adminqms@slt.lk"
 const ADMIN_PASSWORD = "ABcd123#"
 
+// Interface for manager credentials
+interface ManagerCredentials {
+  email: string
+  temporaryPassword: string
+  message: string
+  emailSent?: boolean
+}
+
 // Admin authentication middleware
 const authenticateAdmin = (req: any, res: any, next: any) => {
   try {
@@ -387,10 +395,10 @@ router.post("/register-region", async (req, res) => {
         managerEmail: managerEmail,
         managerMobile: managerMobile || undefined,
         managerPassword: hashedPassword,
-      },
+      } as any,
     })
 
-    let credentials = {
+    let credentials: ManagerCredentials = {
       email: managerEmail,
       temporaryPassword: defaultPassword,
       message: "Please provide these credentials to the regional manager"
