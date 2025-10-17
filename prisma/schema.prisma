@@ -3,8 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:./dev.db"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Customer {
@@ -49,7 +49,7 @@ model Officer {
   isTraining       Boolean   @default(false)
   createdAt        DateTime  @default(now())
   lastLoginAt      DateTime?
-  assignedServices String?
+  assignedServices Json?
   outlet           Outlet    @relation(fields: [outletId], references: [id])
   tokens           Token[]
 
