@@ -160,14 +160,23 @@ router.get("/token/:tokenId", async (req, res) => {
   }
 })
 
-// In-memory store for manager QR tokens (use Redis or database in production)
+// Shared in-memory store for manager QR tokens (use Redis or database in production)
 interface ManagerQRTokenData {
   outletId: string;
   generatedAt: string;
   expiresAt: string;
 }
 
-const managerQRTokens = new Map<string, ManagerQRTokenData>()
+// Use global storage to share between different route files
+declare global {
+  var globalManagerQRTokens: Map<string, ManagerQRTokenData> | undefined;
+}
+
+if (!global.globalManagerQRTokens) {
+  global.globalManagerQRTokens = new Map<string, ManagerQRTokenData>();
+}
+
+const managerQRTokens = global.globalManagerQRTokens;
 
 // Manager QR Code endpoints
 // Register a manager-generated QR token

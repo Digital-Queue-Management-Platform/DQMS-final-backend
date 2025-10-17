@@ -3,6 +3,25 @@ import { prisma } from "../server"
 
 const router = Router()
 
+// Shared in-memory store for manager QR tokens (use Redis or database in production)
+interface ManagerQRTokenData {
+  outletId: string;
+  generatedAt: string;
+  expiresAt: string;
+}
+
+// Import the same storage from customer routes or create shared storage
+// For simplicity, we'll access the global storage
+declare global {
+  var globalManagerQRTokens: Map<string, ManagerQRTokenData> | undefined;
+}
+
+if (!global.globalManagerQRTokens) {
+  global.globalManagerQRTokens = new Map<string, ManagerQRTokenData>();
+}
+
+const managerQRTokens = global.globalManagerQRTokens;
+
 // Get queue status for outlet
 router.get("/outlet/:outletId", async (req, res) => {
   try {
@@ -160,7 +179,33 @@ router.post('/outlets', async (req, res) => {
       data: { name, location, regionId, isActive: true, counterCount: counterCount ?? 0 }
     })
 
-    res.json({ success: true, outlet })
+    // Auto-generate initial QR code for the outlet
+    const generateQRToken = (): string => {
+      return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
+    }
+
+    const qrToken = generateQRToken()
+    const generatedAt = new Date().toISOString()
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
+
+    // Store in manager QR tokens store
+    managerQRTokens.set(qrToken, {
+      outletId: outlet.id,
+      generatedAt,
+      expiresAt: expiresAt.toISOString()
+    })
+
+    console.log(`✅ Auto-generated QR code for new outlet: ${outlet.name} (${outlet.id}) - Token: ${qrToken}`)
+
+    res.json({ 
+      success: true, 
+      outlet,
+      qrCode: {
+        token: qrToken,
+        generatedAt,
+        expiresAt: expiresAt.toISOString()
+      }
+    })
   } catch (error) {
     console.error('Create outlet error:', error)
     res.status(500).json({ error: 'Failed to create outlet' })
