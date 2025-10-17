@@ -1,7 +1,72 @@
 import { Router } from "express"
+import * as jwt from "jsonwebtoken"
 import { prisma } from "../server"
 
 const router = Router()
+
+const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
+const ADMIN_EMAIL = "adminqms@slt.lk"
+const ADMIN_PASSWORD = "ABcd123#"
+
+// Admin authentication middleware
+const authenticateAdmin = (req: any, res: any, next: any) => {
+  try {
+    const authHeader = req.headers.authorization
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: "Access denied. No token provided." })
+    }
+
+    const token = authHeader.substring(7) // Remove 'Bearer ' prefix
+    
+    const decoded = (jwt as any).verify(token, JWT_SECRET as jwt.Secret)
+    
+    if (decoded.role !== 'admin') {
+      return res.status(403).json({ error: "Access denied. Admin role required." })
+    }
+
+    req.user = decoded
+    next()
+  } catch (error) {
+    res.status(401).json({ error: "Invalid token." })
+  }
+}
+
+// Admin login endpoint (no authentication required)
+router.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body
+
+    // Validate credentials against hardcoded admin credentials
+    if (email !== ADMIN_EMAIL || password !== ADMIN_PASSWORD) {
+      return res.status(401).json({ error: "Invalid email or password" })
+    }
+
+    // Generate JWT token
+    const token = (jwt as any).sign(
+      { 
+        email: ADMIN_EMAIL,
+        role: "admin",
+        type: "admin"
+      },
+      JWT_SECRET as jwt.Secret,
+      { expiresIn: "24h" }
+    )
+
+    res.json({ 
+      token, 
+      user: { 
+        email: ADMIN_EMAIL, 
+        role: "admin" 
+      } 
+    })
+  } catch (error) {
+    console.error("Admin login error:", error)
+    res.status(500).json({ error: "Login failed" })
+  }
+})
+
+// Apply authentication middleware to all other admin routes
+router.use(authenticateAdmin)
 
 // Get dashboard analytics
 router.get("/analytics", async (req, res) => {
