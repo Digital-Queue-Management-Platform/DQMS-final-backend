@@ -331,6 +331,22 @@ router.patch("/alerts/:alertId/read", async (req, res) => {
   }
 })
 
+// Delete alert
+router.delete("/alerts/:alertId", async (req, res) => {
+  try {
+    const { alertId } = req.params
+
+    await prisma.alert.delete({
+      where: { id: alertId },
+    })
+
+    res.json({ success: true, message: "Alert deleted successfully" })
+  } catch (error) {
+    console.error("Alert delete error:", error)
+    res.status(500).json({ error: "Failed to delete alert" })
+  }
+})
+
 // Get real-time dashboard
 router.get("/dashboard/realtime", async (req, res) => {
   try {
