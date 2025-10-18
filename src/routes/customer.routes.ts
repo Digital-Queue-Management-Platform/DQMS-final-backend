@@ -50,7 +50,7 @@ router.get("/validate-qr", async (req, res) => {
 // Register customer and create token
 router.post("/register", async (req, res) => {
   try {
-    const { name, mobileNumber, serviceType, outletId, qrToken } = req.body
+    const { name, mobileNumber, serviceType, outletId, qrToken, preferredLanguages } = req.body
 
     // Validate input
     if (!name || !mobileNumber || !serviceType || !outletId) {
@@ -120,6 +120,7 @@ router.post("/register", async (req, res) => {
         serviceType,
         outletId,
         status: "waiting",
+        preferredLanguages: preferredLanguages ? JSON.stringify(preferredLanguages) : undefined,
       },
       include: {
         customer: true,
