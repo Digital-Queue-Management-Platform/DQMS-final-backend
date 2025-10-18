@@ -683,6 +683,241 @@ router.put("/outlets/:outletId", async (req, res) => {
   }
 })
 
+// Get break analytics for all officers in manager's outlets
+router.get("/analytics/breaks/:regionId", async (req, res) => {
+  try {
+    const { regionId } = req.params
+    const { timeframe = 'today' } = req.query
+
+    // Calculate date range based on timeframe
+    let startDate = new Date()
+    let endDate = new Date()
+    
+    switch (timeframe) {
+      case 'today':
+        startDate.setHours(0, 0, 0, 0)
+        endDate.setHours(23, 59, 59, 999)
+        break
+      case 'week':
+        const dayOfWeek = startDate.getDay()
+        startDate.setDate(startDate.getDate() - dayOfWeek)
+        startDate.setHours(0, 0, 0, 0)
+        endDate.setHours(23, 59, 59, 999)
+        break
+      case 'month':
+        startDate.setDate(1)
+        startDate.setHours(0, 0, 0, 0)
+        endDate = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0)
+        endDate.setHours(23, 59, 59, 999)
+        break
+    }
+
+    // Get all outlets in the region
+    const outlets = await prisma.outlet.findMany({
+      where: { regionId },
+      include: {
+        officers: {
+          include: {
+            BreakLog: {
+              where: {
+                startedAt: {
+                  gte: startDate,
+                  lte: endDate
+                }
+              },
+              orderBy: { startedAt: 'desc' }
+            }
+          }
+        }
+      }
+    })
+
+    // Aggregate break data
+    const breakAnalytics = outlets.map(outlet => {
+      const officerBreakData = outlet.officers.map(officer => {
+        const breaks = officer.BreakLog
+        const totalBreaks = breaks.length
+        const totalMinutes = breaks.reduce((sum, brk) => {
+          if (brk.endedAt) {
+            return sum + Math.floor((brk.endedAt.getTime() - brk.startedAt.getTime()) / (1000 * 60))
+          }
+          return sum + Math.floor((Date.now() - brk.startedAt.getTime()) / (1000 * 60))
+        }, 0)
+        
+        const activeBreak = breaks.find(brk => !brk.endedAt)
+        const avgBreakDuration = totalBreaks > 0 ? Math.round(totalMinutes / totalBreaks) : 0
+
+        return {
+          officerId: officer.id,
+          officerName: officer.name,
+          counterNumber: officer.counterNumber,
+          status: officer.status,
+          totalBreaks,
+          totalMinutes,
+          avgBreakDuration,
+          activeBreak: activeBreak ? {
+            id: activeBreak.id,
+            startedAt: activeBreak.startedAt,
+            durationMinutes: Math.floor((Date.now() - activeBreak.startedAt.getTime()) / (1000 * 60))
+          } : null,
+          recentBreaks: breaks.slice(0, 3).map(brk => ({
+            id: brk.id,
+            startedAt: brk.startedAt,
+            endedAt: brk.endedAt,
+            durationMinutes: brk.endedAt 
+              ? Math.floor((brk.endedAt.getTime() - brk.startedAt.getTime()) / (1000 * 60))
+              : Math.floor((Date.now() - brk.startedAt.getTime()) / (1000 * 60))
+          }))
+        }
+      })
+
+      return {
+        outletId: outlet.id,
+        outletName: outlet.name,
+        outletLocation: outlet.location,
+        officers: officerBreakData
+      }
+    })
+
+    // Calculate region-wide statistics
+    const allOfficers = breakAnalytics.flatMap(outlet => outlet.officers)
+    const regionStats = {
+      totalOfficers: allOfficers.length,
+      officersOnBreak: allOfficers.filter(o => o.activeBreak).length,
+      totalBreaksToday: allOfficers.reduce((sum, o) => sum + o.totalBreaks, 0),
+      totalBreakMinutes: allOfficers.reduce((sum, o) => sum + o.totalMinutes, 0),
+      avgBreakDuration: allOfficers.length > 0 
+        ? Math.round(allOfficers.reduce((sum, o) => sum + o.avgBreakDuration, 0) / allOfficers.length)
+        : 0
+    }
+
+    res.json({
+      timeframe,
+      startDate: startDate.toISOString(),
+      endDate: endDate.toISOString(),
+      regionStats,
+      outlets: breakAnalytics
+    })
+  } catch (error) {
+    console.error("Get break analytics error:", error)
+    res.status(500).json({ error: "Failed to get break analytics" })
+  }
+})
+
+// Get detailed break report for a specific officer
+router.get("/breaks/officer/:officerId", async (req, res) => {
+  try {
+    const { officerId } = req.params
+    const { startDate, endDate } = req.query
+
+    const start = startDate ? new Date(startDate as string) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // 7 days ago
+    const end = endDate ? new Date(endDate as string) : new Date()
+
+    const officer = await prisma.officer.findUnique({
+      where: { id: officerId },
+      include: {
+        outlet: true,
+        BreakLog: {
+          where: {
+            startedAt: {
+              gte: start,
+              lte: end
+            }
+          },
+          orderBy: { startedAt: 'desc' }
+        }
+      }
+    })
+
+    if (!officer) {
+      return res.status(404).json({ error: "Officer not found" })
+    }
+
+    const breakData = officer.BreakLog.map(brk => ({
+      id: brk.id,
+      startedAt: brk.startedAt,
+      endedAt: brk.endedAt,
+      durationMinutes: brk.endedAt 
+        ? Math.floor((brk.endedAt.getTime() - brk.startedAt.getTime()) / (1000 * 60))
+        : Math.floor((Date.now() - brk.startedAt.getTime()) / (1000 * 60)),
+      isActive: !brk.endedAt
+    }))
+
+    const stats = {
+      totalBreaks: breakData.length,
+      totalMinutes: breakData.reduce((sum, brk) => sum + brk.durationMinutes, 0),
+      avgDuration: breakData.length > 0 
+        ? Math.round(breakData.reduce((sum, brk) => sum + brk.durationMinutes, 0) / breakData.length)
+        : 0,
+      longestBreak: breakData.length > 0 ? Math.max(...breakData.map(brk => brk.durationMinutes)) : 0,
+      activeBreak: breakData.find(brk => brk.isActive) || null
+    }
+
+    res.json({
+      officer: {
+        id: officer.id,
+        name: officer.name,
+        counterNumber: officer.counterNumber,
+        status: officer.status,
+        outlet: officer.outlet
+      },
+      dateRange: { startDate: start.toISOString(), endDate: end.toISOString() },
+      stats,
+      breaks: breakData
+    })
+  } catch (error) {
+    console.error("Get officer break report error:", error)
+    res.status(500).json({ error: "Failed to get officer break report" })
+  }
+})
+
+// Force end a break (manager override)
+router.post("/breaks/end/:breakId", async (req, res) => {
+  try {
+    const { breakId } = req.params
+    const { reason } = req.body
+
+    const breakLog = await prisma.breakLog.findUnique({
+      where: { id: breakId },
+      include: { Officer: true }
+    })
+
+    if (!breakLog) {
+      return res.status(404).json({ error: "Break not found" })
+    }
+
+    if (breakLog.endedAt) {
+      return res.status(400).json({ error: "Break already ended" })
+    }
+
+    // End the break
+    const updatedBreak = await prisma.breakLog.update({
+      where: { id: breakId },
+      data: { endedAt: new Date() }
+    })
+
+    // Update officer status to available
+    await prisma.officer.update({
+      where: { id: breakLog.officerId },
+      data: { status: 'available' }
+    })
+
+    const durationMinutes = Math.floor(
+      (updatedBreak.endedAt!.getTime() - updatedBreak.startedAt.getTime()) / (1000 * 60)
+    )
+
+    res.json({ 
+      success: true, 
+      message: `Break ended by manager${reason ? ': ' + reason : ''}`,
+      breakLog: updatedBreak,
+      durationMinutes
+    })
+  } catch (error) {
+    console.error("Force end break error:", error)
+    res.status(500).json({ error: "Failed to end break" })
+  }
+})
+
 // Manager logout
 router.post("/logout", async (req, res) => {
   try {
