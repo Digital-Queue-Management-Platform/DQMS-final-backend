@@ -7,7 +7,6 @@ const router = Router()
 interface ManagerQRTokenData {
   outletId: string;
   generatedAt: string;
-  expiresAt: string;
 }
 
 // Import the same storage from customer routes or create shared storage
@@ -225,13 +224,11 @@ router.post('/outlets', async (req, res) => {
 
     const qrToken = generateQRToken()
     const generatedAt = new Date().toISOString()
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
 
-    // Store in manager QR tokens store
+    // Store in manager QR tokens store (no expiry - valid until manually refreshed)
     managerQRTokens.set(qrToken, {
       outletId: outlet.id,
-      generatedAt,
-      expiresAt: expiresAt.toISOString()
+      generatedAt
     })
 
     console.log(`✅ Auto-generated QR code for new outlet: ${outlet.name} (${outlet.id}) - Token: ${qrToken}`)
@@ -241,8 +238,7 @@ router.post('/outlets', async (req, res) => {
       outlet,
       qrCode: {
         token: qrToken,
-        generatedAt,
-        expiresAt: expiresAt.toISOString()
+        generatedAt
       }
     })
   } catch (error) {

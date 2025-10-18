@@ -78,17 +78,12 @@ router.post("/register", async (req, res) => {
       if (managerQRTokens.has(qrToken)) {
         const tokenData = managerQRTokens.get(qrToken)!
         
-        // Check if token has expired
-        if (new Date() <= new Date(tokenData.expiresAt)) {
-          // Check if token is for correct outlet
-          if (tokenData.outletId === outletId) {
-            validToken = true
-          } else {
-            return res.status(403).json({ error: "QR token is not for this outlet" })
-          }
+        // Manager tokens are valid until manually refreshed (no automatic expiry)
+        // Check if token is for correct outlet
+        if (tokenData.outletId === outletId) {
+          validToken = true
         } else {
-          managerQRTokens.delete(qrToken) // Clean up expired token
-          return res.status(401).json({ error: "QR token expired" })
+          return res.status(403).json({ error: "QR token is not for this outlet" })
         }
       }
     }
@@ -191,7 +186,7 @@ router.get("/token/:tokenId", async (req, res) => {
 interface ManagerQRTokenData {
   outletId: string;
   generatedAt: string;
-  expiresAt: string;
+  // Removed expiresAt - tokens don't expire automatically
 }
 
 // Use global storage to share between different route files
@@ -221,19 +216,15 @@ router.post("/manager-qr-token", async (req, res) => {
       return res.status(404).json({ error: "Outlet not found or inactive" })
     }
 
-    // Store the manager QR token with expiry (24 hours for manager tokens)
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
-    
+    // Store the manager QR token (no expiry - valid until manually refreshed)
     managerQRTokens.set(token, {
       outletId,
-      generatedAt: generatedAt || new Date().toISOString(),
-      expiresAt: expiresAt.toISOString()
+      generatedAt: generatedAt || new Date().toISOString()
     })
 
     res.json({ 
       success: true, 
-      message: "Manager QR token registered",
-      expiresAt: expiresAt.toISOString()
+      message: "Manager QR token registered"
     })
   } catch (error) {
     console.error("Manager QR registration error:", error)
@@ -256,12 +247,7 @@ router.get("/validate-manager-qr", async (req, res) => {
 
     const tokenData = managerQRTokens.get(token)!
     
-    // Check if token has expired
-    if (new Date() > new Date(tokenData.expiresAt)) {
-      managerQRTokens.delete(token) // Clean up expired token
-      return res.status(400).json({ valid: false, error: "Token expired" })
-    }
-
+    // Manager tokens are valid until manually refreshed (no automatic expiry)
     res.json({ 
       valid: true, 
       outletId: tokenData.outletId,
