@@ -5,7 +5,8 @@ import * as jwt from "jsonwebtoken"
 const router = Router()
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
-const JWT_EXPIRES = process.env.JWT_EXPIRES || "8h"
+// No expiration for production system - officers need continuous access during shifts
+const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
 
 // Officer login with OTP (simplified - just mobile number for now)
 router.post("/login", async (req, res) => {
@@ -30,12 +31,19 @@ router.post("/login", async (req, res) => {
       },
     })
 
-    // sign JWT and set httpOnly cookie
-  const token = (jwt as any).sign({ officerId: officer.id }, JWT_SECRET as jwt.Secret, { expiresIn: JWT_EXPIRES })
+    // sign JWT and set httpOnly cookie (no expiration for production)
+    const tokenOptions = { officerId: officer.id }
+    const signOptions: any = {}
+    if (JWT_EXPIRES) {
+      signOptions.expiresIn = JWT_EXPIRES
+    }
+    
+    const token = (jwt as any).sign(tokenOptions, JWT_SECRET as jwt.Secret, signOptions)
+    
     res.cookie("dq_jwt", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      maxAge: 1000 * 60 * 60 * 8,
+      // No maxAge set - cookie persists until browser is closed or explicitly cleared
       sameSite: "lax",
       path: "/",
     })

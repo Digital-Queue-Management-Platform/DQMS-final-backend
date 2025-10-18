@@ -8,6 +8,8 @@ import { generateSecurePassword } from "../utils/passwordGenerator"
 const router = Router()
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
+// No expiration for production system - admin needs continuous access
+const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
 const ADMIN_EMAIL = "adminqms@slt.lk"
 const ADMIN_PASSWORD = "ABcd123#"
 
@@ -52,15 +54,22 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ error: "Invalid email or password" })
     }
 
-    // Generate JWT token
+    // Generate JWT token (no expiration for production)
+    const tokenOptions = { 
+      email: ADMIN_EMAIL,
+      role: "admin",
+      type: "admin"
+    }
+    
+    const signOptions: any = {}
+    if (JWT_EXPIRES) {
+      signOptions.expiresIn = JWT_EXPIRES
+    }
+    
     const token = (jwt as any).sign(
-      { 
-        email: ADMIN_EMAIL,
-        role: "admin",
-        type: "admin"
-      },
+      tokenOptions,
       JWT_SECRET as jwt.Secret,
-      { expiresIn: "24h" }
+      signOptions
     )
 
     res.json({ 

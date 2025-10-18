@@ -6,7 +6,8 @@ import * as bcrypt from "bcrypt"
 const router = Router()
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
-const JWT_EXPIRES = process.env.JWT_EXPIRES || "8h"
+// No expiration for production system - managers need continuous access
+const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
 
 // Manager login - authenticate using email and password
 router.post("/login", async (req, res) => {
@@ -64,18 +65,29 @@ router.post("/login", async (req, res) => {
       outlets: region.outlets
     }
 
-    // Create JWT token for manager authentication
+    // Create JWT token for manager authentication (no expiration)
+    const tokenOptions: any = { 
+      managerId: region.managerId, 
+      email: region.managerEmail, 
+      regionId: region.id 
+    }
+    
+    const signOptions: any = {}
+    if (JWT_EXPIRES) {
+      signOptions.expiresIn = JWT_EXPIRES
+    }
+    
     const token = (jwt as any).sign(
-      { managerId: region.managerId, email: region.managerEmail, regionId: region.id }, 
+      tokenOptions, 
       JWT_SECRET as jwt.Secret, 
-      { expiresIn: JWT_EXPIRES }
+      signOptions
     )
 
-    // Set httpOnly cookie
+    // Set httpOnly cookie (no expiration for production)
     res.cookie("dq_manager_jwt", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      maxAge: 1000 * 60 * 60 * 8, // 8 hours
+      // No maxAge set - cookie persists until browser is closed or explicitly cleared
       sameSite: "lax",
       path: "/",
     })
@@ -89,6 +101,27 @@ router.post("/login", async (req, res) => {
   } catch (error) {
     console.error("Manager login error:", error)
     res.status(500).json({ error: "Login failed" })
+  }
+})
+
+// Manager logout
+router.post("/logout", async (req, res) => {
+  try {
+    // Clear the JWT cookie
+    res.clearCookie("dq_manager_jwt", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+    })
+
+    res.json({
+      success: true,
+      message: "Logged out successfully"
+    })
+  } catch (error) {
+    console.error("Manager logout error:", error)
+    res.status(500).json({ error: "Logout failed" })
   }
 })
 
@@ -113,8 +146,10 @@ router.get("/me", async (req, res) => {
       try {
         const payload = (jwt as any).verify(token, JWT_SECRET)
         managerEmail = payload.email
-      } catch (e) {
-        return res.status(401).json({ error: "Invalid or expired token. Please login again." })
+        console.log("Manager JWT verified successfully for:", managerEmail)
+      } catch (e: any) {
+        console.log("Manager JWT verification failed:", e.message || e)
+        return res.status(401).json({ error: "Session expired. Please login again." })
       }
     } else {
       // Fallback: check for email in query params or body (for backwards compatibility)
