@@ -61,14 +61,41 @@ router.post("/register", async (req, res) => {
     if (!qrToken) {
       return res.status(403).json({ error: "QR verification required" })
     }
+
+    // Try validating as JWT token first (legacy system)
+    let validToken = false
     try {
       const payload = (jwt as any).verify(qrToken, QR_JWT_SECRET as jwt.Secret) as any
-      if (payload?.purpose !== "customer_registration" || payload?.outletId !== outletId) {
-        return res.status(403).json({ error: "Invalid QR token for this outlet" })
+      if (payload?.purpose === "customer_registration" && payload?.outletId === outletId) {
+        validToken = true
       }
-    } catch (err: any) {
-      const msg = err?.name === "TokenExpiredError" ? "QR token expired" : "Invalid QR token"
-      return res.status(401).json({ error: msg })
+    } catch (err) {
+      // JWT validation failed, try manager QR token validation
+    }
+
+    // If JWT validation failed, try manager QR token validation
+    if (!validToken) {
+      if (managerQRTokens.has(qrToken)) {
+        const tokenData = managerQRTokens.get(qrToken)!
+        
+        // Check if token has expired
+        if (new Date() <= new Date(tokenData.expiresAt)) {
+          // Check if token is for correct outlet
+          if (tokenData.outletId === outletId) {
+            validToken = true
+          } else {
+            return res.status(403).json({ error: "QR token is not for this outlet" })
+          }
+        } else {
+          managerQRTokens.delete(qrToken) // Clean up expired token
+          return res.status(401).json({ error: "QR token expired" })
+        }
+      }
+    }
+
+    // If neither validation method worked
+    if (!validToken) {
+      return res.status(401).json({ error: "Invalid QR token" })
     }
 
     // Find or create customer
