@@ -296,6 +296,128 @@ router.get("/analytics", async (req, res) => {
   }
 })
 
+// Get analytics for a specific outlet in manager's region
+router.get("/outlet/:outletId/analytics", async (req, res) => {
+  try {
+    const { outletId } = req.params
+    const { startDate, endDate } = req.query
+    
+    // Check for JWT token
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+    
+    let managerEmail: string | undefined
+
+    if (token) {
+      try {
+        const payload = (jwt as any).verify(token, JWT_SECRET)
+        managerEmail = payload.email
+      } catch (e) {
+        return res.status(401).json({ error: "Invalid token" })
+      }
+    } else {
+      // Fallback: check for email in query params
+      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
+      
+      if (!managerEmail) {
+        return res.status(401).json({ error: "Manager authentication required" })
+      }
+    }
+
+    // Find manager's region and verify outlet belongs to them
+    const region = await prisma.region.findFirst({
+      where: { managerEmail: managerEmail },
+      include: { outlets: true }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager not found" })
+    }
+
+    // Verify the outlet belongs to this manager's region
+    const outlet = region.outlets.find(o => o.id === outletId)
+    if (!outlet) {
+      return res.status(403).json({ error: "Outlet not found in your region" })
+    }
+
+    const where: any = {
+      status: "completed",
+      outletId: outletId,
+    }
+
+    if (startDate && endDate) {
+      where.completedAt = {
+        gte: new Date(startDate as string),
+        lte: new Date(endDate as string),
+      }
+    }
+
+    // Get analytics for the specific outlet
+    const totalTokens = await prisma.token.count({ where })
+    
+    const completedTokens = await prisma.token.findMany({
+      where,
+      select: {
+        createdAt: true,
+        startedAt: true,
+        completedAt: true,
+      }
+    })
+
+    // Calculate average waiting and service times
+    let totalWaitTime = 0
+    let totalServiceTime = 0
+    let validWaitTimes = 0
+    let validServiceTimes = 0
+
+    completedTokens.forEach(token => {
+      if (token.startedAt && token.createdAt) {
+        totalWaitTime += (token.startedAt.getTime() - token.createdAt.getTime()) / (1000 * 60)
+        validWaitTimes++
+      }
+      if (token.completedAt && token.startedAt) {
+        totalServiceTime += (token.completedAt.getTime() - token.startedAt.getTime()) / (1000 * 60)
+        validServiceTimes++
+      }
+    })
+
+    const avgWaitTime = validWaitTimes > 0 ? totalWaitTime / validWaitTimes : 0
+    const avgServiceTime = validServiceTimes > 0 ? totalServiceTime / validServiceTimes : 0
+
+    // Get feedback stats for this outlet
+    const feedbackStats = await prisma.feedback.groupBy({
+      by: ['rating'],
+      _count: true,
+      where: {
+        token: {
+          outletId: outletId,
+          completedAt: startDate && endDate ? {
+            gte: new Date(startDate as string),
+            lte: new Date(endDate as string),
+          } : undefined
+        }
+      }
+    })
+
+    res.json({
+      outletId: outlet.id,
+      outletName: outlet.name,
+      totalTokens,
+      avgWaitTime: Math.round(avgWaitTime * 10) / 10,
+      avgServiceTime: Math.round(avgServiceTime * 10) / 10,
+      feedbackStats
+    })
+  } catch (error) {
+    console.error("Manager outlet analytics error:", error)
+    res.status(500).json({ error: "Failed to fetch outlet analytics" })
+  }
+})
+
 // Get officers in manager's region
 router.get("/officers", async (req, res) => {
   try {
