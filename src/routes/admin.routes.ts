@@ -431,7 +431,7 @@ router.post("/register-region", async (req, res) => {
     
     // Send welcome email to the manager
     try {
-      const loginUrl = process.env.FRONTEND_ORIGIN?.split(',')[0] + '/manager-login' || 'http://localhost:3000/manager-login'
+      const loginUrl = 'https://digital-queue-management-platform.vercel.app/manager/login'
       
       const emailResult = await emailService.sendManagerWelcomeEmail({
         managerName: managerName || 'Regional Manager',
@@ -512,7 +512,82 @@ router.get("/managers", async (req, res) => {
   }
 })
 
-// Update manager password
+// Reset manager password (generates new password and sends email)
+router.post("/managers/:regionId/reset-password", async (req, res) => {
+  try {
+    const { regionId } = req.params
+
+    // Find the manager's region
+    const region = await prisma.region.findUnique({
+      where: { id: regionId },
+      select: {
+        id: true,
+        name: true,
+        managerId: true,
+        managerEmail: true
+      }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager not found" })
+    }
+
+    if (!region.managerEmail) {
+      return res.status(400).json({ error: "Manager email not found" })
+    }
+
+    // Generate a secure 8-character password
+    const newPassword = generateSecurePassword()
+    const hashedPassword = await bcrypt.hash(newPassword, 10)
+
+    // Update the password in database
+    await prisma.region.update({
+      where: { id: regionId },
+      data: { managerPassword: hashedPassword } as any,
+    })
+
+    // Send password reset email
+    try {
+      const loginUrl = process.env.FRONTEND_ORIGIN?.split(',')[0] + '/manager/login' || 'https://digital-queue-management-platform.vercel.app/manager/login'
+      
+      const emailResult = await emailService.sendManagerPasswordResetEmail({
+        managerName: region.managerId || 'Regional Manager',
+        managerEmail: region.managerEmail,
+        regionName: region.name,
+        newPassword: newPassword,
+        loginUrl: loginUrl
+      })
+      
+      if (emailResult) {
+        res.json({ 
+          success: true, 
+          message: "Password reset successfully. New password sent to manager's email.",
+          emailSent: true
+        })
+      } else {
+        res.json({ 
+          success: true, 
+          message: "Password reset successfully, but email notification failed. Please provide the new password manually.",
+          emailSent: false,
+          temporaryPassword: newPassword // Only send if email fails
+        })
+      }
+    } catch (emailError) {
+      console.error("Email sending error:", emailError)
+      res.json({ 
+        success: true, 
+        message: "Password reset successfully, but email notification failed. Please provide the new password manually.",
+        emailSent: false,
+        temporaryPassword: newPassword // Only send if email fails
+      })
+    }
+  } catch (error) {
+    console.error("Reset manager password error:", error)
+    res.status(500).json({ error: "Failed to reset manager password" })
+  }
+})
+
+// Update manager password (manual password setting)
 router.put("/managers/:regionId/password", async (req, res) => {
   try {
     const { regionId } = req.params

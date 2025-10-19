@@ -58,6 +58,7 @@ router.post("/login", async (req, res) => {
     // Create manager object from region data
     const manager = {
       id: region.managerId,
+      name: region.managerId, // Manager name from admin registration
       email: region.managerEmail,
       mobile: region.managerMobile,
       regionId: region.id,
@@ -67,7 +68,8 @@ router.post("/login", async (req, res) => {
 
     // Create JWT token for manager authentication (no expiration)
     const tokenOptions: any = { 
-      managerId: region.managerId, 
+      managerId: region.managerId,
+      managerName: region.managerId, // Include name in token
       email: region.managerEmail, 
       regionId: region.id 
     }
@@ -178,6 +180,7 @@ router.get("/me", async (req, res) => {
 
     const manager = {
       id: region.managerId,
+      name: region.managerId, // Manager name from admin registration
       email: region.managerEmail,
       mobile: region.managerMobile,
       regionId: region.id,
