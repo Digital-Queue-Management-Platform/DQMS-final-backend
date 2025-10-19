@@ -8,49 +8,55 @@ datasource db {
 }
 
 model Customer {
-  id           String     @id @default(uuid())
-  name         String
-  mobileNumber String
-  createdAt    DateTime   @default(now())
-  feedbacks    Feedback[]
-  tokens       Token[]
+  id              String     @id @default(uuid())
+  name            String
+  mobileNumber    String
+  createdAt       DateTime   @default(now())
+  sltMobileNumber String?
+  nicNumber       String?
+  email           String?
+  feedbacks       Feedback[]
+  tokens          Token[]
 }
 
 model Token {
-  id            String    @id @default(uuid())
-  tokenNumber   Int
-  customerId    String
-  serviceType   String
-  accountRef    String?
-  status        String    @default("waiting")
-  outletId      String
-  assignedTo    String?
-  counterNumber Int?
-  createdAt     DateTime  @default(now())
-  calledAt      DateTime?
-  startedAt     DateTime?
-  completedAt   DateTime?
-  feedback      Feedback?
-  officer       Officer?  @relation(fields: [assignedTo], references: [id])
-  customer      Customer  @relation(fields: [customerId], references: [id])
-  outlet        Outlet    @relation(fields: [outletId], references: [id])
+  id                 String    @id @default(uuid())
+  tokenNumber        Int
+  customerId         String
+  serviceType        String
+  preferredLanguages Json?
+  accountRef         String?
+  status             String    @default("waiting")
+  outletId           String
+  assignedTo         String?
+  counterNumber      Int?
+  createdAt          DateTime  @default(now())
+  calledAt           DateTime?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  feedback           Feedback?
+  officer            Officer?  @relation(fields: [assignedTo], references: [id])
+  customer           Customer  @relation(fields: [customerId], references: [id])
+  outlet             Outlet    @relation(fields: [outletId], references: [id])
 
   @@index([outletId, status])
   @@index([assignedTo])
 }
 
 model Officer {
-  id               String    @id @default(uuid())
+  id               String     @id @default(uuid())
   name             String
-  mobileNumber     String    @unique
+  mobileNumber     String     @unique
   outletId         String
-  status           String    @default("offline")
+  status           String     @default("offline")
   counterNumber    Int?
-  isTraining       Boolean   @default(false)
-  createdAt        DateTime  @default(now())
+  isTraining       Boolean    @default(false)
+  createdAt        DateTime   @default(now())
   lastLoginAt      DateTime?
   assignedServices Json?
-  outlet           Outlet    @relation(fields: [outletId], references: [id])
+  languages        Json?
+  BreakLog         BreakLog[]
+  outlet           Outlet     @relation(fields: [outletId], references: [id])
   tokens           Token[]
 
   @@index([outletId, status])
@@ -70,13 +76,14 @@ model Outlet {
 }
 
 model Region {
-  id            String   @id @default(uuid())
-  name          String
-  managerId     String?
-  managerEmail  String?
-  managerMobile String?
-  createdAt     DateTime @default(now())
-  outlets       Outlet[]
+  id              String   @id @default(uuid())
+  name            String
+  managerId       String?
+  managerEmail    String?
+  managerMobile   String?
+  managerPassword String?
+  createdAt       DateTime @default(now())
+  outlets         Outlet[]
 }
 
 model Feedback {
@@ -125,4 +132,14 @@ model Service {
   description String?
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
+}
+
+model BreakLog {
+  id        String    @id
+  officerId String
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+  Officer   Officer   @relation(fields: [officerId], references: [id])
+
+  @@index([officerId, startedAt])
 }

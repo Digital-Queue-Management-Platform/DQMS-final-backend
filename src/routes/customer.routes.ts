@@ -50,7 +50,7 @@ router.get("/validate-qr", async (req, res) => {
 // Register customer and create token
 router.post("/register", async (req, res) => {
   try {
-    const { name, mobileNumber, serviceType, outletId, qrToken } = req.body
+    const { name, mobileNumber, serviceType, outletId, qrToken, preferredLanguages } = req.body
 
     // Validate input
     if (!name || !mobileNumber || !serviceType || !outletId) {
@@ -61,14 +61,36 @@ router.post("/register", async (req, res) => {
     if (!qrToken) {
       return res.status(403).json({ error: "QR verification required" })
     }
+
+    // Try validating as JWT token first (legacy system)
+    let validToken = false
     try {
       const payload = (jwt as any).verify(qrToken, QR_JWT_SECRET as jwt.Secret) as any
-      if (payload?.purpose !== "customer_registration" || payload?.outletId !== outletId) {
-        return res.status(403).json({ error: "Invalid QR token for this outlet" })
+      if (payload?.purpose === "customer_registration" && payload?.outletId === outletId) {
+        validToken = true
       }
-    } catch (err: any) {
-      const msg = err?.name === "TokenExpiredError" ? "QR token expired" : "Invalid QR token"
-      return res.status(401).json({ error: msg })
+    } catch (err) {
+      // JWT validation failed, try manager QR token validation
+    }
+
+    // If JWT validation failed, try manager QR token validation
+    if (!validToken) {
+      if (managerQRTokens.has(qrToken)) {
+        const tokenData = managerQRTokens.get(qrToken)!
+        
+        // Manager tokens are valid until manually refreshed (no automatic expiry)
+        // Check if token is for correct outlet
+        if (tokenData.outletId === outletId) {
+          validToken = true
+        } else {
+          return res.status(403).json({ error: "QR token is not for this outlet" })
+        }
+      }
+    }
+
+    // If neither validation method worked
+    if (!validToken) {
+      return res.status(401).json({ error: "Invalid QR token" })
     }
 
     // Find or create customer
@@ -98,6 +120,7 @@ router.post("/register", async (req, res) => {
         serviceType,
         outletId,
         status: "waiting",
+        preferredLanguages: preferredLanguages ? JSON.stringify(preferredLanguages) : undefined,
       },
       include: {
         customer: true,
@@ -157,6 +180,83 @@ router.get("/token/:tokenId", async (req, res) => {
   } catch (error) {
     console.error("Token fetch error:", error)
     res.status(500).json({ error: "Failed to fetch token" })
+  }
+})
+
+// Shared in-memory store for manager QR tokens (use Redis or database in production)
+interface ManagerQRTokenData {
+  outletId: string;
+  generatedAt: string;
+  // Removed expiresAt - tokens don't expire automatically
+}
+
+// Use global storage to share between different route files
+declare global {
+  var globalManagerQRTokens: Map<string, ManagerQRTokenData> | undefined;
+}
+
+if (!global.globalManagerQRTokens) {
+  global.globalManagerQRTokens = new Map<string, ManagerQRTokenData>();
+}
+
+const managerQRTokens = global.globalManagerQRTokens;
+
+// Manager QR Code endpoints
+// Register a manager-generated QR token
+router.post("/manager-qr-token", async (req, res) => {
+  try {
+    const { outletId, token, generatedAt } = req.body
+
+    if (!outletId || !token) {
+      return res.status(400).json({ error: "Missing outletId or token" })
+    }
+
+    // Verify the outlet exists and is active
+    const outlet = await prisma.outlet.findUnique({ where: { id: outletId } })
+    if (!outlet || !outlet.isActive) {
+      return res.status(404).json({ error: "Outlet not found or inactive" })
+    }
+
+    // Store the manager QR token (no expiry - valid until manually refreshed)
+    managerQRTokens.set(token, {
+      outletId,
+      generatedAt: generatedAt || new Date().toISOString()
+    })
+
+    res.json({ 
+      success: true, 
+      message: "Manager QR token registered"
+    })
+  } catch (error) {
+    console.error("Manager QR registration error:", error)
+    res.status(500).json({ error: "Failed to register manager QR token" })
+  }
+})
+
+// Validate a manager-generated QR token
+router.get("/validate-manager-qr", async (req, res) => {
+  try {
+    const token = req.query.token as string
+    if (!token) {
+      return res.status(400).json({ valid: false, error: "Missing token" })
+    }
+
+    // Check in-memory store
+    if (!managerQRTokens.has(token)) {
+      return res.status(400).json({ valid: false, error: "Invalid token" })
+    }
+
+    const tokenData = managerQRTokens.get(token)!
+    
+    // Manager tokens are valid until manually refreshed (no automatic expiry)
+    res.json({ 
+      valid: true, 
+      outletId: tokenData.outletId,
+      generatedAt: tokenData.generatedAt
+    })
+  } catch (error) {
+    console.error("Manager QR validation error:", error)
+    res.status(500).json({ valid: false, error: "Validation failed" })
   }
 })
 

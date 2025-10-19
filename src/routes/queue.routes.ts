@@ -3,6 +3,24 @@ import { prisma } from "../server"
 
 const router = Router()
 
+// Shared in-memory store for manager QR tokens (use Redis or database in production)
+interface ManagerQRTokenData {
+  outletId: string;
+  generatedAt: string;
+}
+
+// Import the same storage from customer routes or create shared storage
+// For simplicity, we'll access the global storage
+declare global {
+  var globalManagerQRTokens: Map<string, ManagerQRTokenData> | undefined;
+}
+
+if (!global.globalManagerQRTokens) {
+  global.globalManagerQRTokens = new Map<string, ManagerQRTokenData>();
+}
+
+const managerQRTokens = global.globalManagerQRTokens;
+
 // Get queue status for outlet
 router.get("/outlet/:outletId", async (req, res) => {
   try {
@@ -55,30 +73,69 @@ router.get("/outlets", async (req, res) => {
     const outlets = await prisma.outlet.findMany({
       where: { isActive: true },
       include: {
-        region: true,
+        region: {
+          select: {
+            id: true,
+            name: true,
+            managerId: true,
+            managerEmail: true,
+            managerMobile: true,
+            createdAt: true,
+            // Exclude managerPassword for safety and compatibility
+          }
+        },
       },
     })
 
     res.json(outlets)
   } catch (error) {
     console.error("Outlets fetch error:", error)
-    res.status(500).json({ error: "Failed to fetch outlets" })
+    // Try without the region include as fallback
+    try {
+      const outletsWithoutRegion = await prisma.outlet.findMany({
+        where: { isActive: true },
+      })
+      console.log("Fallback: returning outlets without region data")
+      res.json(outletsWithoutRegion)
+    } catch (fallbackError) {
+      console.error("Fallback also failed:", fallbackError)
+      res.status(500).json({ error: "Failed to fetch outlets" })
+    }
   }
 })
 
 // Get all regions (for admin UIs)
 router.get('/regions', async (req, res) => {
   try {
-    const regions = await prisma.region.findMany({ orderBy: { name: 'asc' } })
+    const regions = await prisma.region.findMany({ 
+      orderBy: { name: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        managerId: true,
+        managerEmail: true,
+        managerMobile: true,
+        createdAt: true,
+        // Exclude managerPassword for safety and compatibility
+      }
+    })
     res.json(regions)
   } catch (error) {
     console.error('Regions fetch error:', error)
-    res.status(500).json({ error: 'Failed to fetch regions' })
+    // Fallback without select
+    try {
+      const regionsBasic = await prisma.region.findMany({ orderBy: { name: 'asc' } })
+      console.log("Fallback: returning regions with basic data")
+      res.json(regionsBasic)
+    } catch (fallbackError) {
+      console.error('Regions fallback also failed:', fallbackError)
+      res.status(500).json({ error: 'Failed to fetch regions' })
+    }
   }
 })
 
 // Services CRUD
-// Get all services
+// Get all services (including inactive ones for admin management)
 router.get('/services', async (req, res) => {
   try {
     const services = await prisma.$queryRaw`SELECT * FROM "Service" ORDER BY "createdAt" DESC`
@@ -137,12 +194,12 @@ router.patch('/services/:id', async (req, res) => {
   }
 })
 
-// Delete (soft) service
+// Delete (hard) service
 router.delete('/services/:id', async (req, res) => {
   try {
     const { id } = req.params
     const deleted: any = await prisma.$queryRaw`
-      UPDATE "Service" SET "isActive" = false WHERE "id" = ${id} RETURNING *`
+      DELETE FROM "Service" WHERE "id" = ${id} RETURNING *`
     res.json({ success: true, service: deleted[0] })
   } catch (error) {
     console.error('Delete service error:', error)
@@ -160,7 +217,30 @@ router.post('/outlets', async (req, res) => {
       data: { name, location, regionId, isActive: true, counterCount: counterCount ?? 0 }
     })
 
-    res.json({ success: true, outlet })
+    // Auto-generate initial QR code for the outlet
+    const generateQRToken = (): string => {
+      return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
+    }
+
+    const qrToken = generateQRToken()
+    const generatedAt = new Date().toISOString()
+
+    // Store in manager QR tokens store (no expiry - valid until manually refreshed)
+    managerQRTokens.set(qrToken, {
+      outletId: outlet.id,
+      generatedAt
+    })
+
+    console.log(`✅ Auto-generated QR code for new outlet: ${outlet.name} (${outlet.id}) - Token: ${qrToken}`)
+
+    res.json({ 
+      success: true, 
+      outlet,
+      qrCode: {
+        token: qrToken,
+        generatedAt
+      }
+    })
   } catch (error) {
     console.error('Create outlet error:', error)
     res.status(500).json({ error: 'Failed to create outlet' })

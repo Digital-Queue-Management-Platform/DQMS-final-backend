@@ -14,6 +14,7 @@ import queueRoutes from "./routes/queue.routes"
 import feedbackRoutes from "./routes/feedback.routes"
 import documentRoutes from "./routes/document.routes"
 import managerRoutes from "./routes/manager.routes"
+import ipSpeakerRoutes from "./routes/ip-speaker.routes"
 
 dotenv.config()
 
@@ -74,6 +75,7 @@ app.use("/api/queue", queueRoutes)
 app.use("/api/feedback", feedbackRoutes)
 app.use("/api/document", documentRoutes)
 app.use("/api/manager", managerRoutes)
+app.use("/api/ip-speaker", ipSpeakerRoutes)
 
 // Health check
 app.get("/api/health", (req, res) => {

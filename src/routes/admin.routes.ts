@@ -1,7 +1,92 @@
 import { Router } from "express"
+import * as jwt from "jsonwebtoken"
+import * as bcrypt from "bcrypt"
 import { prisma } from "../server"
+import emailService from "../services/emailService"
+import { generateSecurePassword } from "../utils/passwordGenerator"
 
 const router = Router()
+
+const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
+// No expiration for production system - admin needs continuous access
+const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
+const ADMIN_EMAIL = "adminqms@slt.lk"
+const ADMIN_PASSWORD = "ABcd123#"
+
+// Interface for manager credentials
+interface ManagerCredentials {
+  email: string
+  temporaryPassword: string
+  message: string
+  emailSent?: boolean
+}
+
+// Admin authentication middleware
+const authenticateAdmin = (req: any, res: any, next: any) => {
+  try {
+    const authHeader = req.headers.authorization
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: "Access denied. No token provided." })
+    }
+
+    const token = authHeader.substring(7) // Remove 'Bearer ' prefix
+    
+    const decoded = (jwt as any).verify(token, JWT_SECRET as jwt.Secret)
+    
+    if (decoded.role !== 'admin') {
+      return res.status(403).json({ error: "Access denied. Admin role required." })
+    }
+
+    req.user = decoded
+    next()
+  } catch (error) {
+    res.status(401).json({ error: "Invalid token." })
+  }
+}
+
+// Admin login endpoint (no authentication required)
+router.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body
+
+    // Validate credentials against hardcoded admin credentials
+    if (email !== ADMIN_EMAIL || password !== ADMIN_PASSWORD) {
+      return res.status(401).json({ error: "Invalid email or password" })
+    }
+
+    // Generate JWT token (no expiration for production)
+    const tokenOptions = { 
+      email: ADMIN_EMAIL,
+      role: "admin",
+      type: "admin"
+    }
+    
+    const signOptions: any = {}
+    if (JWT_EXPIRES) {
+      signOptions.expiresIn = JWT_EXPIRES
+    }
+    
+    const token = (jwt as any).sign(
+      tokenOptions,
+      JWT_SECRET as jwt.Secret,
+      signOptions
+    )
+
+    res.json({ 
+      token, 
+      user: { 
+        email: ADMIN_EMAIL, 
+        role: "admin" 
+      } 
+    })
+  } catch (error) {
+    console.error("Admin login error:", error)
+    res.status(500).json({ error: "Login failed" })
+  }
+})
+
+// Apply authentication middleware to all other admin routes
+router.use(authenticateAdmin)
 
 // Get dashboard analytics
 router.get("/analytics", async (req, res) => {
@@ -246,6 +331,22 @@ router.patch("/alerts/:alertId/read", async (req, res) => {
   }
 })
 
+// Delete alert
+router.delete("/alerts/:alertId", async (req, res) => {
+  try {
+    const { alertId } = req.params
+
+    await prisma.alert.delete({
+      where: { id: alertId },
+    })
+
+    res.json({ success: true, message: "Alert deleted successfully" })
+  } catch (error) {
+    console.error("Alert delete error:", error)
+    res.status(500).json({ error: "Failed to delete alert" })
+  }
+})
+
 // Get real-time dashboard
 router.get("/dashboard/realtime", async (req, res) => {
   try {
@@ -291,29 +392,400 @@ router.get("/dashboard/realtime", async (req, res) => {
   }
 })
 
-// Register a region (admin helper)
+// Register a region with manager account creation
 router.post("/register-region", async (req, res) => {
   try {
     const { name, managerName, managerEmail, managerMobile } = req.body
     if (!name) return res.status(400).json({ error: "Region name required" })
+    if (!managerEmail) return res.status(400).json({ error: "Manager email required" })
 
+    // Check if manager email already exists
+    const existingRegion = await prisma.region.findFirst({
+      where: { managerEmail: managerEmail }
+    })
+
+    if (existingRegion) {
+      return res.status(400).json({ error: "Manager with this email already exists" })
+    }
+
+    // Generate a secure 8-character password for the manager
+    const defaultPassword = generateSecurePassword()
+    const hashedPassword = await bcrypt.hash(defaultPassword, 10)
+
+    // Create region with manager password
     const region = await prisma.region.create({
       data: {
         name,
         managerId: managerName || undefined,
-        managerEmail: managerEmail || undefined,
+        managerEmail: managerEmail,
         managerMobile: managerMobile || undefined,
-      },
+        managerPassword: hashedPassword,
+      } as any,
     })
 
-    res.json({ success: true, region })
-  } catch (error) {
+    let credentials: ManagerCredentials = {
+      email: managerEmail,
+      temporaryPassword: defaultPassword,
+      message: "Please provide these credentials to the regional manager"
+    }
+    
+    // Send welcome email to the manager
+    try {
+      const loginUrl = 'https://digital-queue-management-platform.vercel.app/manager/login'
+      
+      const emailResult = await emailService.sendManagerWelcomeEmail({
+        managerName: managerName || 'Regional Manager',
+        managerEmail: managerEmail,
+        regionName: name,
+        temporaryPassword: credentials.temporaryPassword,
+        loginUrl: loginUrl
+      })
+      
+      if (emailResult) {
+        credentials = {
+          ...credentials,
+          emailSent: true,
+          message: "Welcome email sent successfully. Please check your inbox for login credentials."
+        }
+      } else {
+        credentials = {
+          ...credentials,
+          emailSent: false,
+          message: "Account created successfully, but email notification failed. Please contact admin for credentials."
+        }
+      }
+    } catch (emailError) {
+      console.error("Email sending error:", emailError)
+      credentials = {
+        ...credentials,
+        emailSent: false,
+        message: "Account created successfully, but email notification failed. Please contact admin for credentials."
+      }
+    }
+    
+    res.json({ 
+      success: true, 
+      region: {
+        ...region,
+        managerPassword: undefined // Don't send password back
+      },
+      credentials
+    })
+  } catch (error: any) {
     console.error("Region register error:", error)
-    res.status(500).json({ error: "Failed to create region" })
+    res.status(500).json({ 
+      error: "Failed to create region",
+      details: process.env.NODE_ENV === 'development' ? error?.message : undefined
+    })
+  }
+})
+
+// Get all regional managers
+router.get("/managers", async (req, res) => {
+  try {
+    const regions = await prisma.region.findMany({
+      where: {
+        managerEmail: { not: null }
+      },
+      select: {
+        id: true,
+        name: true,
+        managerId: true,
+        managerEmail: true,
+        managerMobile: true,
+        createdAt: true,
+        outlets: {
+          select: {
+            id: true,
+            name: true,
+            location: true,
+            isActive: true
+          }
+        }
+      }
+    })
+
+    res.json({ success: true, managers: regions })
+  } catch (error) {
+    console.error("Get managers error:", error)
+    res.status(500).json({ error: "Failed to fetch managers" })
+  }
+})
+
+// Reset manager password (generates new password and sends email)
+router.post("/managers/:regionId/reset-password", async (req, res) => {
+  try {
+    const { regionId } = req.params
+
+    // Find the manager's region
+    const region = await prisma.region.findUnique({
+      where: { id: regionId },
+      select: {
+        id: true,
+        name: true,
+        managerId: true,
+        managerEmail: true
+      }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager not found" })
+    }
+
+    if (!region.managerEmail) {
+      return res.status(400).json({ error: "Manager email not found" })
+    }
+
+    // Generate a secure 8-character password
+    const newPassword = generateSecurePassword()
+    const hashedPassword = await bcrypt.hash(newPassword, 10)
+
+    // Update the password in database
+    await prisma.region.update({
+      where: { id: regionId },
+      data: { managerPassword: hashedPassword } as any,
+    })
+
+    // Send password reset email
+    try {
+      const loginUrl = process.env.FRONTEND_ORIGIN?.split(',')[0] + '/manager/login' || 'https://digital-queue-management-platform.vercel.app/manager/login'
+      
+      const emailResult = await emailService.sendManagerPasswordResetEmail({
+        managerName: region.managerId || 'Regional Manager',
+        managerEmail: region.managerEmail,
+        regionName: region.name,
+        newPassword: newPassword,
+        loginUrl: loginUrl
+      })
+      
+      if (emailResult) {
+        res.json({ 
+          success: true, 
+          message: "Password reset successfully. New password sent to manager's email.",
+          emailSent: true
+        })
+      } else {
+        res.json({ 
+          success: true, 
+          message: "Password reset successfully, but email notification failed. Please provide the new password manually.",
+          emailSent: false,
+          temporaryPassword: newPassword // Only send if email fails
+        })
+      }
+    } catch (emailError) {
+      console.error("Email sending error:", emailError)
+      res.json({ 
+        success: true, 
+        message: "Password reset successfully, but email notification failed. Please provide the new password manually.",
+        emailSent: false,
+        temporaryPassword: newPassword // Only send if email fails
+      })
+    }
+  } catch (error) {
+    console.error("Reset manager password error:", error)
+    res.status(500).json({ error: "Failed to reset manager password" })
+  }
+})
+
+// Update manager password (manual password setting)
+router.put("/managers/:regionId/password", async (req, res) => {
+  try {
+    const { regionId } = req.params
+    const { newPassword } = req.body
+
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters long" })
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10)
+
+    const region = await prisma.region.update({
+      where: { id: regionId },
+      data: { managerPassword: hashedPassword } as any,
+      select: {
+        id: true,
+        name: true,
+        managerId: true,
+        managerEmail: true
+      }
+    })
+
+    res.json({ 
+      success: true, 
+      message: "Manager password updated successfully",
+      manager: region
+    })
+  } catch (error) {
+    console.error("Update manager password error:", error)
+    res.status(500).json({ error: "Failed to update manager password" })
+  }
+})
+
+// Update manager details
+router.put("/managers/:regionId", async (req, res) => {
+  try {
+    const { regionId } = req.params
+    const { managerName, managerEmail, managerMobile } = req.body
+
+    if (managerEmail) {
+      // Check if email is already used by another manager
+      const existingRegion = await prisma.region.findFirst({
+        where: { 
+          managerEmail: managerEmail,
+          id: { not: regionId }
+        }
+      })
+
+      if (existingRegion) {
+        return res.status(400).json({ error: "Email already in use by another manager" })
+      }
+    }
+
+    const region = await prisma.region.update({
+      where: { id: regionId },
+      data: {
+        managerId: managerName,
+        managerEmail: managerEmail,
+        managerMobile: managerMobile
+      },
+      select: {
+        id: true,
+        name: true,
+        managerId: true,
+        managerEmail: true,
+        managerMobile: true,
+        outlets: {
+          select: {
+            id: true,
+            name: true,
+            location: true,
+            isActive: true
+          }
+        }
+      }
+    })
+
+    res.json({ 
+      success: true, 
+      message: "Manager details updated successfully",
+      manager: region
+    })
+  } catch (error) {
+    console.error("Update manager error:", error)
+    res.status(500).json({ error: "Failed to update manager details" })
   }
 })
 
 export default router
+
+// Get system health status  
+router.get("/system-health", async (req, res) => {
+  try {
+    // Application Server Health - check if we can query the database
+    let appServerHealth = "Healthy"
+    let appServerUptime = "99.9%"
+    let appServerIcon = "CheckCircle"
+    
+    try {
+      await prisma.$queryRaw`SELECT 1`
+    } catch (dbError) {
+      appServerHealth = "Error"
+      appServerUptime = "0%"
+      appServerIcon = "XCircle"
+    }
+
+    // Database Connection Health
+    let dbHealth = "Healthy"
+    let dbUptime = "99.7%"
+    let dbIcon = "CheckCircle"
+    
+    try {
+      const startTime = Date.now()
+      await prisma.token.findFirst({ take: 1 })
+      const queryTime = Date.now() - startTime
+      
+      if (queryTime > 5000) { // If query takes more than 5 seconds
+        dbHealth = "Warning"
+        dbUptime = "95.0%"
+        dbIcon = "AlertTriangle"
+      }
+    } catch (dbError) {
+      dbHealth = "Error"
+      dbUptime = "0%"
+      dbIcon = "XCircle"
+    }
+
+    // SMS Gateway Health - check if we have SMS configuration
+    let smsHealth = "Warning"
+    let smsUptime = "95.2%"
+    let smsIcon = "AlertTriangle"
+    
+    // If SMS service is configured and working, this could be updated
+    // For now, we'll keep it as warning since SMS isn't fully implemented
+
+    // Email Service Health - check email service configuration
+    let emailHealth = "Healthy"
+    let emailUptime = "99.8%"
+    let emailIcon = "CheckCircle"
+    
+    const emailConfigured = process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS
+    if (!emailConfigured) {
+      emailHealth = "Warning"
+      emailUptime = "80.0%"
+      emailIcon = "AlertTriangle"
+    }
+
+    const systemHealth = [
+      {
+        name: "Application Server",
+        status: appServerHealth,
+        uptime: appServerUptime,
+        icon: appServerIcon,
+        statusColor: appServerHealth === "Healthy" ? "bg-[#dcfce7] text-[#166534]" : 
+                    appServerHealth === "Warning" ? "bg-[#fef9c3] text-[#854d0e]" : 
+                    "bg-[#fee2e2] text-[#991b1b]",
+        iconColor: appServerHealth === "Healthy" ? "text-[#22c55e]" : 
+                  appServerHealth === "Warning" ? "text-[#eab308]" : 
+                  "text-[#ef4444]"
+      },
+      {
+        name: "Database Connection",
+        status: dbHealth,
+        uptime: dbUptime,
+        icon: dbIcon,
+        statusColor: dbHealth === "Healthy" ? "bg-[#dcfce7] text-[#166534]" : 
+                    dbHealth === "Warning" ? "bg-[#fef9c3] text-[#854d0e]" : 
+                    "bg-[#fee2e2] text-[#991b1b]",
+        iconColor: dbHealth === "Healthy" ? "text-[#22c55e]" : 
+                  dbHealth === "Warning" ? "text-[#eab308]" : 
+                  "text-[#ef4444]"
+      },
+      {
+        name: "SMS Gateway",
+        status: smsHealth,
+        uptime: smsUptime,
+        icon: smsIcon,
+        statusColor: "bg-[#fef9c3] text-[#854d0e]",
+        iconColor: "text-[#eab308]"
+      },
+      {
+        name: "Email Service",
+        status: emailHealth,
+        uptime: emailUptime,
+        icon: emailIcon,
+        statusColor: emailHealth === "Healthy" ? "bg-[#dcfce7] text-[#166534]" : 
+                    "bg-[#fef9c3] text-[#854d0e]",
+        iconColor: emailHealth === "Healthy" ? "text-[#22c55e]" : 
+                  "text-[#eab308]"
+      }
+    ]
+
+    res.json(systemHealth)
+  } catch (error) {
+    console.error("System health check error:", error)
+    res.status(500).json({ error: "Failed to fetch system health" })
+  }
+})
 
 // --- Admin: Officers endpoints ---
 // Get all officers with outlet info

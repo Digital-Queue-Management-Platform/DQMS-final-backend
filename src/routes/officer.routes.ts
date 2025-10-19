@@ -5,7 +5,8 @@ import * as jwt from "jsonwebtoken"
 const router = Router()
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
-const JWT_EXPIRES = process.env.JWT_EXPIRES || "8h"
+// No expiration for production system - officers need continuous access during shifts
+const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
 
 // Officer login with OTP (simplified - just mobile number for now)
 router.post("/login", async (req, res) => {
@@ -30,12 +31,19 @@ router.post("/login", async (req, res) => {
       },
     })
 
-    // sign JWT and set httpOnly cookie
-  const token = (jwt as any).sign({ officerId: officer.id }, JWT_SECRET as jwt.Secret, { expiresIn: JWT_EXPIRES })
+    // sign JWT and set httpOnly cookie (no expiration for production)
+    const tokenOptions = { officerId: officer.id }
+    const signOptions: any = {}
+    if (JWT_EXPIRES) {
+      signOptions.expiresIn = JWT_EXPIRES
+    }
+    
+    const token = (jwt as any).sign(tokenOptions, JWT_SECRET as jwt.Secret, signOptions)
+    
     res.cookie("dq_jwt", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      maxAge: 1000 * 60 * 60 * 8,
+      // No maxAge set - cookie persists until browser is closed or explicitly cleared
       sameSite: "lax",
       path: "/",
     })
@@ -274,6 +282,94 @@ router.post("/status", async (req, res) => {
   try {
     const { officerId, status } = req.body
 
+    // Validate break business rules
+    if (status === 'on_break') {
+      // Check if officer has an active break
+      const activeBreak = await prisma.breakLog.findFirst({
+        where: {
+          officerId,
+          endedAt: null
+        }
+      })
+
+      if (activeBreak) {
+        return res.status(400).json({ error: "Officer is already on a break" })
+      }
+
+      // Check if officer has served minimum time since last break (30 minutes)
+      const lastBreak = await prisma.breakLog.findFirst({
+        where: { officerId },
+        orderBy: { endedAt: 'desc' }
+      })
+
+      if (lastBreak && lastBreak.endedAt) {
+        const timeSinceLastBreak = Date.now() - lastBreak.endedAt.getTime()
+        const minTimeRequired = 30 * 60 * 1000 // 30 minutes
+        
+        if (timeSinceLastBreak < minTimeRequired) {
+          const remainingMinutes = Math.ceil((minTimeRequired - timeSinceLastBreak) / (1000 * 60))
+          return res.status(400).json({ 
+            error: `Must wait ${remainingMinutes} more minutes before taking another break` 
+          })
+        }
+      }
+
+      // Check daily break limits (max 6 breaks per day, max 90 minutes total)
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      const tomorrow = new Date(today)
+      tomorrow.setDate(tomorrow.getDate() + 1)
+
+      const todayBreaks = await prisma.breakLog.findMany({
+        where: {
+          officerId,
+          startedAt: {
+            gte: today,
+            lt: tomorrow
+          }
+        }
+      })
+
+      if (todayBreaks.length >= 6) {
+        return res.status(400).json({ error: "Maximum daily breaks reached (6 breaks)" })
+      }
+
+      const totalBreakMinutes = todayBreaks.reduce((sum, brk) => {
+        if (brk.endedAt) {
+          return sum + Math.floor((brk.endedAt.getTime() - brk.startedAt.getTime()) / (1000 * 60))
+        }
+        return sum
+      }, 0)
+
+      if (totalBreakMinutes >= 90) {
+        return res.status(400).json({ error: "Daily break time limit reached (90 minutes)" })
+      }
+
+      // Create new break log entry
+      await prisma.breakLog.create({
+        data: {
+          id: `break_${officerId}_${Date.now()}`,
+          officerId,
+          startedAt: new Date()
+        }
+      })
+    } else if (status === 'available') {
+      // End any active break
+      const activeBreak = await prisma.breakLog.findFirst({
+        where: {
+          officerId,
+          endedAt: null
+        }
+      })
+
+      if (activeBreak) {
+        await prisma.breakLog.update({
+          where: { id: activeBreak.id },
+          data: { endedAt: new Date() }
+        })
+      }
+    }
+
     const officer = await prisma.officer.update({
       where: { id: officerId },
       data: { status },
@@ -283,6 +379,147 @@ router.post("/status", async (req, res) => {
   } catch (error) {
     console.error("Status update error:", error)
     res.status(500).json({ error: "Failed to update status" })
+  }
+})
+
+// Start a break
+router.post("/break/start", async (req, res) => {
+  try {
+    const { officerId } = req.body
+
+    // Check if officer exists
+    const officer = await prisma.officer.findUnique({ where: { id: officerId } })
+    if (!officer) {
+      return res.status(404).json({ error: "Officer not found" })
+    }
+
+    // Check if officer has an active break
+    const activeBreak = await prisma.breakLog.findFirst({
+      where: {
+        officerId,
+        endedAt: null
+      }
+    })
+
+    if (activeBreak) {
+      return res.status(400).json({ error: "Break already in progress" })
+    }
+
+    // Validate break limits (same as in status endpoint)
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const tomorrow = new Date(today)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+
+    const todayBreaks = await prisma.breakLog.findMany({
+      where: {
+        officerId,
+        startedAt: {
+          gte: today,
+          lt: tomorrow
+        }
+      }
+    })
+
+    if (todayBreaks.length >= 6) {
+      return res.status(400).json({ error: "Maximum daily breaks reached" })
+    }
+
+    // Create break log and update officer status
+    const breakLog = await prisma.breakLog.create({
+      data: {
+        id: `break_${officerId}_${Date.now()}`,
+        officerId,
+        startedAt: new Date()
+      }
+    })
+
+    await prisma.officer.update({
+      where: { id: officerId },
+      data: { status: 'on_break' }
+    })
+
+    res.json({ success: true, breakLog })
+  } catch (error) {
+    console.error("Start break error:", error)
+    res.status(500).json({ error: "Failed to start break" })
+  }
+})
+
+// End a break
+router.post("/break/end", async (req, res) => {
+  try {
+    const { officerId } = req.body
+
+    // Find active break
+    const activeBreak = await prisma.breakLog.findFirst({
+      where: {
+        officerId,
+        endedAt: null
+      }
+    })
+
+    if (!activeBreak) {
+      return res.status(400).json({ error: "No active break found" })
+    }
+
+    // End the break
+    const updatedBreak = await prisma.breakLog.update({
+      where: { id: activeBreak.id },
+      data: { endedAt: new Date() }
+    })
+
+    // Update officer status to available
+    await prisma.officer.update({
+      where: { id: officerId },
+      data: { status: 'available' }
+    })
+
+    const durationMinutes = Math.floor(
+      (updatedBreak.endedAt!.getTime() - updatedBreak.startedAt.getTime()) / (1000 * 60)
+    )
+
+    res.json({ 
+      success: true, 
+      breakLog: updatedBreak,
+      durationMinutes
+    })
+  } catch (error) {
+    console.error("End break error:", error)
+    res.status(500).json({ error: "Failed to end break" })
+  }
+})
+
+// Get active break status
+router.get("/break/active/:officerId", async (req, res) => {
+  try {
+    const { officerId } = req.params
+
+    const activeBreak = await prisma.breakLog.findFirst({
+      where: {
+        officerId,
+        endedAt: null
+      }
+    })
+
+    if (!activeBreak) {
+      return res.json({ activeBreak: null })
+    }
+
+    const durationMinutes = Math.floor(
+      (Date.now() - activeBreak.startedAt.getTime()) / (1000 * 60)
+    )
+
+    res.json({ 
+      activeBreak: {
+        id: activeBreak.id,
+        startedAt: activeBreak.startedAt.toISOString(),
+        durationMinutes
+      }
+    })
+  } catch (error) {
+    console.error("Get active break error:", error)
+    res.status(500).json({ error: "Failed to get active break" })
   }
 })
 
@@ -431,37 +668,49 @@ router.get("/summary/breaks/:officerId", async (req, res) => {
       return res.status(404).json({ error: "Officer not found" })
     }
 
-    // Get today's breaks (you may need to create a Break model in your schema)
-    // For now, I'll simulate breaks data based on officer status changes
+    // Get today's breaks from BreakLog table
     const today = new Date()
     today.setHours(0, 0, 0, 0)
+    const tomorrow = new Date(today)
+    tomorrow.setDate(tomorrow.getDate() + 1)
     
-    // Mock breaks data - you should implement actual break tracking
-    const now = Date.now()
-    const mockBreaks = [
-      {
-        id: "break1",
-        startTime: new Date(now - 3600000).toISOString(), // 1 hour ago
-        endTime: new Date(now - 3300000).toISOString(), // 55 minutes ago
-        duration: 5, // 5 minutes
-        type: "short_break",
+    const breaks = await prisma.breakLog.findMany({
+      where: {
+        officerId,
+        startedAt: {
+          gte: today,
+          lt: tomorrow
+        }
       },
-      {
-        id: "break2", 
-        startTime: new Date(now - 7200000).toISOString(), // 2 hours ago
-        endTime: new Date(now - 6900000).toISOString(), // 1h 55m ago
-        duration: 5,
-        type: "short_break",
-      },
-    ]
+      orderBy: { startedAt: 'desc' }
+    })
 
-    const totalBreaks = mockBreaks.length
-    const totalMinutes = mockBreaks.reduce((sum, brk) => sum + brk.duration, 0)
+    // Calculate break statistics
+    const breakData = breaks.map(brk => {
+      const startTime = new Date(brk.startedAt)
+      const endTime = brk.endedAt ? new Date(brk.endedAt) : null
+      const durationMinutes = endTime 
+        ? Math.floor((endTime.getTime() - startTime.getTime()) / (1000 * 60))
+        : Math.floor((new Date().getTime() - startTime.getTime()) / (1000 * 60))
+
+      return {
+        id: brk.id,
+        startedAt: brk.startedAt.toISOString(),
+        endedAt: brk.endedAt?.toISOString() || null,
+        durationMinutes,
+        isActive: !brk.endedAt
+      }
+    })
+
+    const totalBreaks = breaks.length
+    const totalMinutes = breakData.reduce((sum, brk) => sum + brk.durationMinutes, 0)
+    const activeBreak = breakData.find(brk => brk.isActive)
 
     res.json({
       totalBreaks,
       totalMinutes,
-      breaks: mockBreaks,
+      breaks: breakData,
+      activeBreak: activeBreak || null
     })
   } catch (error) {
     console.error("Get breaks summary error:", error)

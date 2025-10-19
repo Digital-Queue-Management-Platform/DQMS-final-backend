@@ -4,6 +4,9 @@ CREATE TABLE "Customer" (
     "name" TEXT NOT NULL,
     "mobileNumber" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "sltMobileNumber" TEXT,
+    "nicNumber" TEXT,
+    "email" TEXT,
 
     CONSTRAINT "Customer_pkey" PRIMARY KEY ("id")
 );
@@ -14,6 +17,7 @@ CREATE TABLE "Token" (
     "tokenNumber" INTEGER NOT NULL,
     "customerId" TEXT NOT NULL,
     "serviceType" TEXT NOT NULL,
+    "preferredLanguages" JSONB,
     "accountRef" TEXT,
     "status" TEXT NOT NULL DEFAULT 'waiting',
     "outletId" TEXT NOT NULL,
@@ -38,6 +42,8 @@ CREATE TABLE "Officer" (
     "isTraining" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "lastLoginAt" TIMESTAMP(3),
+    "assignedServices" JSONB,
+    "languages" JSONB,
 
     CONSTRAINT "Officer_pkey" PRIMARY KEY ("id")
 );
@@ -50,6 +56,7 @@ CREATE TABLE "Outlet" (
     "regionId" TEXT NOT NULL,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "counterCount" INTEGER DEFAULT 0,
 
     CONSTRAINT "Outlet_pkey" PRIMARY KEY ("id")
 );
@@ -105,6 +112,28 @@ CREATE TABLE "Alert" (
     CONSTRAINT "Alert_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "Service" (
+    "id" TEXT NOT NULL,
+    "code" TEXT NOT NULL,
+    "title" TEXT NOT NULL,
+    "description" TEXT,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "Service_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "BreakLog" (
+    "id" TEXT NOT NULL,
+    "officerId" TEXT NOT NULL,
+    "startedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "endedAt" TIMESTAMP(3),
+
+    CONSTRAINT "BreakLog_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE INDEX "Token_outletId_status_idx" ON "Token"("outletId", "status");
 
@@ -132,14 +161,20 @@ CREATE INDEX "Document_relatedEntity_idx" ON "Document"("relatedEntity");
 -- CreateIndex
 CREATE INDEX "Alert_isRead_createdAt_idx" ON "Alert"("isRead", "createdAt");
 
+-- CreateIndex
+CREATE UNIQUE INDEX "Service_code_key" ON "Service"("code");
+
+-- CreateIndex
+CREATE INDEX "BreakLog_officerId_startedAt_idx" ON "BreakLog"("officerId", "startedAt");
+
+-- AddForeignKey
+ALTER TABLE "Token" ADD CONSTRAINT "Token_assignedTo_fkey" FOREIGN KEY ("assignedTo") REFERENCES "Officer"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
 -- AddForeignKey
 ALTER TABLE "Token" ADD CONSTRAINT "Token_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "Token" ADD CONSTRAINT "Token_outletId_fkey" FOREIGN KEY ("outletId") REFERENCES "Outlet"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "Token" ADD CONSTRAINT "Token_assignedTo_fkey" FOREIGN KEY ("assignedTo") REFERENCES "Officer"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "Officer" ADD CONSTRAINT "Officer_outletId_fkey" FOREIGN KEY ("outletId") REFERENCES "Outlet"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -148,7 +183,10 @@ ALTER TABLE "Officer" ADD CONSTRAINT "Officer_outletId_fkey" FOREIGN KEY ("outle
 ALTER TABLE "Outlet" ADD CONSTRAINT "Outlet_regionId_fkey" FOREIGN KEY ("regionId") REFERENCES "Region"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "Feedback" ADD CONSTRAINT "Feedback_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "Feedback" ADD CONSTRAINT "Feedback_tokenId_fkey" FOREIGN KEY ("tokenId") REFERENCES "Token"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "Feedback" ADD CONSTRAINT "Feedback_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "BreakLog" ADD CONSTRAINT "BreakLog_officerId_fkey" FOREIGN KEY ("officerId") REFERENCES "Officer"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
