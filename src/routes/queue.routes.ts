@@ -26,41 +26,46 @@ router.get("/outlet/:outletId", async (req, res) => {
   try {
     const { outletId } = req.params
 
-    const waitingTokens = await prisma.token.findMany({
-      where: {
-        outletId,
-        status: { in: ["waiting", "skipped"] },
-      },
-      orderBy: { tokenNumber: "asc" },
-      include: {
-        customer: true,
-      },
+    // Use a transaction to ensure consistent data
+    const queueData = await prisma.$transaction(async (tx) => {
+      const waitingTokens = await tx.token.findMany({
+        where: {
+          outletId,
+          status: { in: ["waiting", "skipped"] },
+        },
+        orderBy: { tokenNumber: "asc" },
+        include: {
+          customer: true,
+        },
+      })
+
+      const inServiceTokens = await tx.token.findMany({
+        where: {
+          outletId,
+          status: "in_service",
+        },
+        include: {
+          customer: true,
+          officer: true,
+        },
+      })
+
+      const availableOfficers = await tx.officer.count({
+        where: {
+          outletId,
+          status: "available",
+        },
+      })
+
+      return {
+        waiting: waitingTokens,
+        inService: inServiceTokens,
+        availableOfficers,
+        totalWaiting: waitingTokens.length,
+      }
     })
 
-    const inServiceTokens = await prisma.token.findMany({
-      where: {
-        outletId,
-        status: "in_service",
-      },
-      include: {
-        customer: true,
-        officer: true,
-      },
-    })
-
-    const availableOfficers = await prisma.officer.count({
-      where: {
-        outletId,
-        status: "available",
-      },
-    })
-
-    res.json({
-      waiting: waitingTokens,
-      inService: inServiceTokens,
-      availableOfficers,
-      totalWaiting: waitingTokens.length,
-    })
+    res.json(queueData)
   } catch (error) {
     console.error("Queue fetch error:", error)
     res.status(500).json({ error: "Failed to fetch queue" })

@@ -548,7 +548,8 @@ router.post("/managers/:regionId/reset-password", async (req, res) => {
 
     // Send password reset email
     try {
-      const loginUrl = process.env.FRONTEND_ORIGIN?.split(',')[0] + '/manager/login' || 'https://digital-queue-management-platform.vercel.app/manager/login'
+      // Always use production URL for password reset emails
+      const loginUrl = 'https://digital-queue-management-platform.vercel.app/manager/login'
       
       const emailResult = await emailService.sendManagerPasswordResetEmail({
         managerName: region.managerId || 'Regional Manager',
