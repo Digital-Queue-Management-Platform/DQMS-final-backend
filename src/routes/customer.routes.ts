@@ -52,6 +52,8 @@ router.post("/register", async (req, res) => {
   try {
     const { name, mobileNumber, serviceType, outletId, qrToken, preferredLanguages } = req.body
 
+    console.log(`Registration attempt - Mobile: ${mobileNumber}, Outlet: ${outletId}, Service: ${serviceType}`)
+
     // Validate input
     if (!name || !mobileNumber || !serviceType || !outletId) {
       return res.status(400).json({ error: "Missing required fields" })
@@ -93,42 +95,71 @@ router.post("/register", async (req, res) => {
       return res.status(401).json({ error: "Invalid QR token" })
     }
 
-    // Find or create customer
-    let customer = await prisma.customer.findFirst({
-      where: { mobileNumber },
-    })
-
-    if (!customer) {
-      customer = await prisma.customer.create({
-        data: { name, mobileNumber },
+    // Use a database transaction to prevent race conditions
+    const token = await prisma.$transaction(async (tx) => {
+      // Check if customer already has an active token for this outlet
+      const existingToken = await tx.token.findFirst({
+        where: {
+          outlet: { id: outletId },
+          customer: { mobileNumber },
+          status: { in: ["waiting", "in_service"] },
+        },
+        include: {
+          customer: true,
+          outlet: true,
+        },
       })
-    }
 
-    // Get next token number for outlet
-    const lastToken = await prisma.token.findFirst({
-      where: { outletId },
-      orderBy: { tokenNumber: "desc" },
+      if (existingToken) {
+        throw new Error(`Customer with mobile number ${mobileNumber} already has an active token (#${existingToken.tokenNumber}) for this outlet`)
+      }
+
+      // Find or create customer within transaction
+      let customer = await tx.customer.findFirst({
+        where: { mobileNumber },
+      })
+
+      if (!customer) {
+        customer = await tx.customer.create({
+          data: { name, mobileNumber },
+        })
+      }
+
+      // Get next token number for outlet using row-level locking to prevent race conditions
+      const lastToken = await tx.token.findFirst({
+        where: { outletId },
+        orderBy: { tokenNumber: "desc" },
+        select: { tokenNumber: true },
+      })
+
+      const tokenNumber = (lastToken?.tokenNumber || 0) + 1
+
+      console.log(`Creating token #${tokenNumber} for customer ${name} (${mobileNumber}) at outlet ${outletId}`)
+
+      // Create token within the same transaction
+      const newToken = await tx.token.create({
+        data: {
+          tokenNumber,
+          customerId: customer.id,
+          serviceType,
+          outletId,
+          status: "waiting",
+          preferredLanguages: preferredLanguages ? JSON.stringify(preferredLanguages) : undefined,
+        },
+        include: {
+          customer: true,
+          outlet: true,
+        },
+      })
+
+      return newToken
+    }, {
+      timeout: 10000, // 10 second timeout to prevent long-running transactions
     })
 
-    const tokenNumber = (lastToken?.tokenNumber || 0) + 1
+    console.log(`Successfully created token #${token.tokenNumber} for customer ${token.customer.name}`)
 
-    // Create token
-    const token = await prisma.token.create({
-      data: {
-        tokenNumber,
-        customerId: customer.id,
-        serviceType,
-        outletId,
-        status: "waiting",
-        preferredLanguages: preferredLanguages ? JSON.stringify(preferredLanguages) : undefined,
-      },
-      include: {
-        customer: true,
-        outlet: true,
-      },
-    })
-
-    // Broadcast update
+    // Broadcast update after successful transaction
     broadcast({ type: "NEW_TOKEN", data: token })
 
     res.json({
@@ -136,8 +167,19 @@ router.post("/register", async (req, res) => {
       token,
       message: "Registration successful",
     })
-  } catch (error) {
+  } catch (error: any) {
     console.error("Registration error:", error)
+    
+    // Handle specific error cases
+    if (error.message && error.message.includes("already has an active token")) {
+      return res.status(409).json({ error: error.message })
+    }
+    
+    // Handle database constraint violations
+    if (error.code === 'P2002') {
+      return res.status(409).json({ error: "A registration with this information already exists" })
+    }
+    
     res.status(500).json({ error: "Registration failed" })
   }
 })
