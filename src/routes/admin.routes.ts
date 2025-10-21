@@ -835,3 +835,40 @@ router.patch('/officer/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to update officer' })
   }
 })
+
+// Delete region
+router.delete('/regions/:regionId', async (req, res) => {
+  try {
+    const { regionId } = req.params
+
+    // Check if region exists
+    const region = await prisma.region.findUnique({
+      where: { id: regionId },
+      include: { outlets: true }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: 'Region not found' })
+    }
+
+    // Check if region has outlets
+    if (region.outlets.length > 0) {
+      return res.status(400).json({ 
+        error: `Cannot delete region "${region.name}" because it has ${region.outlets.length} outlet(s). Please delete or reassign the outlets first.` 
+      })
+    }
+
+    // Delete the region
+    await prisma.region.delete({
+      where: { id: regionId }
+    })
+
+    res.json({ 
+      success: true, 
+      message: `Region "${region.name}" deleted successfully` 
+    })
+  } catch (error) {
+    console.error('Failed to delete region', error)
+    res.status(500).json({ error: 'Failed to delete region' })
+  }
+})
