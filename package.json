@@ -5,15 +5,21 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "dev:central-server": "tsx watch src/services/centralAnnouncementServer.ts",
+    "dev:branch-client": "tsx watch src/services/branchSpeakerClient.ts",
     "build": "tsc",
     "build:prod": "npx prisma migrate deploy && npx prisma generate && tsc",
     "start": "node dist/server.js",
+    "start:central-server": "node dist/services/centralAnnouncementServer.js",
+    "start:branch-client": "node dist/services/branchSpeakerClient.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:prod": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "seed:outlets": "tsx ./scripts/seedOutlets.ts",
     "test:email": "tsx ./scripts/testEmail.ts",
+    "test:central-server": "tsx ./scripts/testCentralServer.ts",
+    "test:vlc": "tsx ./scripts/testVLC.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
