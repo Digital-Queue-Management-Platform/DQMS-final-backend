@@ -53,14 +53,17 @@ router.post("/register", async (req, res) => {
     const { name, mobileNumber, serviceType, outletId, qrToken, preferredLanguages } = req.body
 
     console.log(`Registration attempt - Mobile: ${mobileNumber}, Outlet: ${outletId}, Service: ${serviceType}`)
+    console.log(`Request body:`, JSON.stringify({ name, mobileNumber, serviceType, outletId, qrToken: qrToken ? 'provided' : 'missing', preferredLanguages }))
 
     // Validate input
     if (!name || !mobileNumber || !serviceType || !outletId) {
+      console.log('Missing required fields:', { name: !!name, mobileNumber: !!mobileNumber, serviceType: !!serviceType, outletId: !!outletId })
       return res.status(400).json({ error: "Missing required fields" })
     }
 
     // Enforce QR gating: require a valid QR token bound to this outlet
     if (!qrToken) {
+      console.log('QR token missing')
       return res.status(403).json({ error: "QR verification required" })
     }
 
@@ -70,9 +73,10 @@ router.post("/register", async (req, res) => {
       const payload = (jwt as any).verify(qrToken, QR_JWT_SECRET as jwt.Secret) as any
       if (payload?.purpose === "customer_registration" && payload?.outletId === outletId) {
         validToken = true
+        console.log('Valid JWT token found')
       }
     } catch (err) {
-      // JWT validation failed, try manager QR token validation
+      console.log('JWT validation failed, trying manager QR token')
     }
 
     // If JWT validation failed, try manager QR token validation
@@ -84,19 +88,28 @@ router.post("/register", async (req, res) => {
         // Check if token is for correct outlet
         if (tokenData.outletId === outletId) {
           validToken = true
+          console.log('Valid manager QR token found')
         } else {
+          console.log('Manager QR token outlet mismatch:', { expected: outletId, actual: tokenData.outletId })
           return res.status(403).json({ error: "QR token is not for this outlet" })
         }
+      } else {
+        console.log('Manager QR token not found in store')
       }
     }
 
     // If neither validation method worked
     if (!validToken) {
+      console.log('No valid token found')
       return res.status(401).json({ error: "Invalid QR token" })
     }
 
+    console.log('Starting database transaction...')
+
     // Use a database transaction to prevent race conditions
     const token = await prisma.$transaction(async (tx) => {
+      console.log('Checking for existing tokens...')
+      
       // Check if customer already has an active token for this outlet
       const existingToken = await tx.token.findFirst({
         where: {
@@ -111,20 +124,29 @@ router.post("/register", async (req, res) => {
       })
 
       if (existingToken) {
+        console.log('Existing token found:', existingToken.tokenNumber)
         throw new Error(`Customer with mobile number ${mobileNumber} already has an active token (#${existingToken.tokenNumber}) for this outlet`)
       }
 
+      console.log('Looking for existing customer...')
+      
       // Find or create customer within transaction
       let customer = await tx.customer.findFirst({
         where: { mobileNumber },
       })
 
       if (!customer) {
+        console.log('Creating new customer...')
         customer = await tx.customer.create({
           data: { name, mobileNumber },
         })
+        console.log('Customer created:', customer.id)
+      } else {
+        console.log('Existing customer found:', customer.id)
       }
 
+      console.log('Getting next token number...')
+      
       // Get next token number for outlet using row-level locking to prevent race conditions
       const lastToken = await tx.token.findFirst({
         where: { outletId },
@@ -152,6 +174,7 @@ router.post("/register", async (req, res) => {
         },
       })
 
+      console.log('Token created successfully:', newToken.id)
       return newToken
     }, {
       timeout: 10000, // 10 second timeout to prevent long-running transactions
@@ -160,7 +183,12 @@ router.post("/register", async (req, res) => {
     console.log(`Successfully created token #${token.tokenNumber} for customer ${token.customer.name}`)
 
     // Broadcast update after successful transaction
-    broadcast({ type: "NEW_TOKEN", data: token })
+    try {
+      broadcast({ type: "NEW_TOKEN", data: token })
+      console.log('Broadcast sent successfully')
+    } catch (broadcastError) {
+      console.error('Broadcast error (non-critical):', broadcastError)
+    }
 
     res.json({
       success: true,
@@ -169,6 +197,7 @@ router.post("/register", async (req, res) => {
     })
   } catch (error: any) {
     console.error("Registration error:", error)
+    console.error("Error stack:", error.stack)
     
     // Handle specific error cases
     if (error.message && error.message.includes("already has an active token")) {
@@ -177,10 +206,21 @@ router.post("/register", async (req, res) => {
     
     // Handle database constraint violations
     if (error.code === 'P2002') {
+      console.error('Database constraint violation:', error.meta)
       return res.status(409).json({ error: "A registration with this information already exists" })
     }
     
-    res.status(500).json({ error: "Registration failed" })
+    // Handle transaction timeouts
+    if (error.code === 'P2028') {
+      console.error('Database transaction timeout')
+      return res.status(503).json({ error: "Registration timeout, please try again" })
+    }
+    
+    // General error with more details for debugging
+    res.status(500).json({ 
+      error: "Registration failed", 
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined 
+    })
   }
 })
 
