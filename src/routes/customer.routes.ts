@@ -34,7 +34,9 @@ router.get("/qr-token/:outletId", async (req, res) => {
 router.get("/validate-qr", async (req, res) => {
   try {
     const token = (req.query.token as string) || ""
-    if (!token) return res.status(400).json({ valid: false, error: "Missing token" })
+    if (!token || token === "default") {
+      return res.status(400).json({ valid: false, error: "Missing or invalid token" })
+    }
 
     const payload = (jwt as any).verify(token, QR_JWT_SECRET as jwt.Secret) as any
     if (payload?.purpose !== "customer_registration" || !payload?.outletId) {
@@ -50,39 +52,54 @@ router.get("/validate-qr", async (req, res) => {
 // Register customer and create token
 router.post("/register", async (req, res) => {
   try {
-    const { name, mobileNumber, serviceType, outletId, qrToken, preferredLanguages } = req.body
+    const { name, mobileNumber, serviceTypes, outletId, qrToken, preferredLanguages, sltMobileNumber, nicNumber, email } = req.body
 
-    console.log(`Registration attempt - Mobile: ${mobileNumber}, Outlet: ${outletId}, Service: ${serviceType}`)
+    console.log(`Registration attempt - Mobile: ${mobileNumber}, Outlet: ${outletId}, Services: ${serviceTypes}`)
 
     // Validate input
-    if (!name || !mobileNumber || !serviceType || !outletId) {
+    if (!name || !mobileNumber || !Array.isArray(serviceTypes) || serviceTypes.length === 0 || !outletId) {
       return res.status(400).json({ error: "Missing required fields" })
     }
 
-    // Enforce QR gating: require a valid QR token bound to this outlet
-    if (!qrToken) {
+    // Enforce QR gating: require a valid QR token bound to this outlet (unless outlet is specified directly)
+    if (!qrToken && !outletId) {
       return res.status(403).json({ error: "QR verification required" })
     }
 
     // Try validating as JWT token first (legacy system)
     let validToken = false
-    try {
-      const payload = (jwt as any).verify(qrToken, QR_JWT_SECRET as jwt.Secret) as any
-      if (payload?.purpose === "customer_registration" && payload?.outletId === outletId) {
-        validToken = true
+    if (qrToken) {
+      try {
+        const payload = (jwt as any).verify(qrToken, QR_JWT_SECRET as jwt.Secret) as any
+        if (payload?.purpose === "customer_registration" && payload?.outletId === outletId) {
+          validToken = true
+        }
+      } catch (err) {
+        // JWT validation failed, try manager QR token validation
       }
-    } catch (err) {
-      // JWT validation failed, try manager QR token validation
     }
 
-    // If JWT validation failed, try manager QR token validation
-    if (!validToken) {
+    // If JWT validation failed, try manager QR token validation (in-memory and DB)
+    if (!validToken && qrToken) {
+      let outletFromManagerToken: string | null = null
       if (managerQRTokens.has(qrToken)) {
         const tokenData = managerQRTokens.get(qrToken)!
-        
-        // Manager tokens are valid until manually refreshed (no automatic expiry)
-        // Check if token is for correct outlet
-        if (tokenData.outletId === outletId) {
+        outletFromManagerToken = tokenData.outletId
+      } else {
+        // Fallback to database persistence
+        const dbToken = await prisma.managerQRToken.findUnique({ where: { token: qrToken } })
+        if (dbToken) {
+          outletFromManagerToken = dbToken.outletId
+          // warm the in-memory cache to speed up subsequent checks
+          managerQRTokens.set(qrToken, {
+            outletId: dbToken.outletId,
+            generatedAt: dbToken.generatedAt.toISOString(),
+          })
+        }
+      }
+
+      if (outletFromManagerToken) {
+        if (outletFromManagerToken === outletId) {
           validToken = true
         } else {
           return res.status(403).json({ error: "QR token is not for this outlet" })
@@ -90,10 +107,21 @@ router.post("/register", async (req, res) => {
       }
     }
 
+    // If no QR token provided but outlet ID is valid, allow registration
+    if (!qrToken && outletId) {
+      // Verify the outlet exists and is active
+      const outlet = await prisma.outlet.findUnique({ where: { id: outletId } })
+      if (!outlet || !outlet.isActive) {
+        return res.status(404).json({ error: "Outlet not found or inactive" })
+      }
+      validToken = true
+    }
+
     // If neither validation method worked
     if (!validToken) {
       return res.status(401).json({ error: "Invalid QR token" })
     }
+
 
     // Use a database transaction to prevent race conditions
     const token = await prisma.$transaction(async (tx) => {
@@ -121,7 +149,13 @@ router.post("/register", async (req, res) => {
 
       if (!customer) {
         customer = await tx.customer.create({
-          data: { name, mobileNumber },
+          data: { 
+            name, 
+            mobileNumber,
+            sltMobileNumber: sltMobileNumber || undefined,
+            nicNumber: nicNumber || undefined,
+            email: email || undefined
+          },
         })
       }
 
@@ -141,7 +175,7 @@ router.post("/register", async (req, res) => {
         data: {
           tokenNumber,
           customerId: customer.id,
-          serviceType,
+          serviceTypes,
           outletId,
           status: "waiting",
           preferredLanguages: preferredLanguages ? JSON.stringify(preferredLanguages) : undefined,
@@ -265,13 +299,39 @@ router.post("/manager-qr-token", async (req, res) => {
       generatedAt: generatedAt || new Date().toISOString()
     })
 
+    // Persist in database for durability across restarts
+    await prisma.managerQRToken.upsert({
+      where: { token },
+      update: {
+        outletId,
+        generatedAt: generatedAt ? new Date(generatedAt) : new Date(),
+      },
+      create: {
+        token,
+        outletId,
+        generatedAt: generatedAt ? new Date(generatedAt) : new Date(),
+      },
+    })
+
     res.json({ 
       success: true, 
       message: "Manager QR token registered"
     })
   } catch (error) {
-    console.error("Manager QR registration error:", error)
-    res.status(500).json({ error: "Failed to register manager QR token" })
+    // Log detailed prisma/DB error information for troubleshooting
+    const anyErr: any = error
+    console.error("Manager QR registration error:", anyErr)
+    if (anyErr?.code) console.error("Prisma error code:", anyErr.code)
+    if (anyErr?.meta) console.error("Prisma error meta:", anyErr.meta)
+    if (anyErr?.message) console.error("Error message:", anyErr.message)
+    if (anyErr?.stack) console.error("Error stack:", anyErr.stack)
+
+    // Do not leak internals in production responses
+    const isProd = process.env.NODE_ENV === "production"
+    res.status(500).json({ 
+      error: "Failed to register manager QR token",
+      ...(isProd ? {} : { details: anyErr?.message, code: anyErr?.code, meta: anyErr?.meta })
+    })
   }
 })
 
@@ -283,12 +343,19 @@ router.get("/validate-manager-qr", async (req, res) => {
       return res.status(400).json({ valid: false, error: "Missing token" })
     }
 
-    // Check in-memory store
-    if (!managerQRTokens.has(token)) {
-      return res.status(400).json({ valid: false, error: "Invalid token" })
+    // Check in-memory store first, fallback to DB
+    let tokenData = managerQRTokens.get(token)
+    if (!tokenData) {
+      const dbToken = await prisma.managerQRToken.findUnique({ where: { token } })
+      if (!dbToken) {
+        return res.status(400).json({ valid: false, error: "Invalid token" })
+      }
+      tokenData = {
+        outletId: dbToken.outletId,
+        generatedAt: dbToken.generatedAt.toISOString(),
+      }
+      managerQRTokens.set(token, tokenData)
     }
-
-    const tokenData = managerQRTokens.get(token)!
     
     // Manager tokens are valid until manually refreshed (no automatic expiry)
     res.json({ 

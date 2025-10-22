@@ -232,7 +232,7 @@ router.get("/analytics", async (req, res) => {
 
     // Generate service types data
     const serviceTypes = await prisma.token.groupBy({
-      by: ["serviceType"],
+      by: ["serviceTypes"],
       where: {
         ...where,
         status: "completed",
@@ -240,15 +240,21 @@ router.get("/analytics", async (req, res) => {
       _count: true,
     })
 
-    const serviceTypesFormatted = serviceTypes.map(service => ({
-      name: service.serviceType === "bill_payment" ? "Bill Payments" :
-            service.serviceType === "technical_support" ? "Technical Support" :
-            service.serviceType === "account_services" ? "Account Services" :
-            service.serviceType === "new_connection" ? "New Connections" :
-            service.serviceType === "device_sim_issues" ? "Device/SIM Issues" :
-            service.serviceType || "Other Services",
-      count: service._count
-    }))
+    const serviceTypesFormatted = serviceTypes.map(service => {
+      // serviceTypes is an array, so we need to handle it differently
+      const serviceTypeArray = Array.isArray(service.serviceTypes) ? service.serviceTypes : [];
+      const firstServiceType = serviceTypeArray.length > 0 ? serviceTypeArray[0] : "other";
+      
+      return {
+        name: firstServiceType === "bill_payment" ? "Bill Payments" :
+              firstServiceType === "technical_support" ? "Technical Support" :
+              firstServiceType === "account_services" ? "Account Services" :
+              firstServiceType === "new_connection" ? "New Connections" :
+              firstServiceType === "device_sim_issues" ? "Device/SIM Issues" :
+              "Other Services",
+        count: service._count
+      };
+    })
 
     res.json({
       totalTokens,

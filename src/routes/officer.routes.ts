@@ -106,36 +106,106 @@ router.post("/register", async (req, res) => {
   }
 })
 
-// Get next token in queue
+// Get next token in queue (supports cross-service fallback when enabled)
 router.post("/next-token", async (req, res) => {
   try {
-    const { officerId } = req.body
+    const { officerId, allowFallback } = req.body
+
+    console.log(`Next token request - Officer: ${officerId}, AllowFallback: ${allowFallback}`)
 
     const officer = await prisma.officer.findUnique({
       where: { id: officerId },
+      select: {
+        id: true,
+        name: true,
+        outletId: true,
+        counterNumber: true,
+        assignedServices: true,
+      },
     })
 
     if (!officer) {
+      console.log("Officer not found:", officerId)
       return res.status(404).json({ error: "Officer not found" })
     }
 
-    // Get next waiting token
-    const nextToken = await prisma.token.findFirst({
-      where: {
-        outletId: officer.outletId,
-        status: "waiting",
-      },
-      orderBy: { tokenNumber: "asc" },
-      include: {
-        customer: true,
-      },
-    })
+    console.log("Officer found:", officer.name, "Outlet:", officer.outletId)
+
+    // Parse assignedServices (JSON array)
+    let assignedServices: string[] = [];
+    if (officer.assignedServices) {
+      try {
+        if (Array.isArray(officer.assignedServices)) {
+          assignedServices = officer.assignedServices as string[];
+        } else if (typeof officer.assignedServices === 'string') {
+          assignedServices = JSON.parse(officer.assignedServices);
+        } else if (typeof officer.assignedServices === 'object') {
+          assignedServices = Object.values(officer.assignedServices).filter(v => typeof v === 'string').map(v => v as string);
+        } else {
+          assignedServices = [];
+        }
+      } catch (e) {
+        console.log("Error parsing assignedServices:", e)
+        assignedServices = [];
+      }
+    }
+
+    console.log("Assigned services:", assignedServices)
+
+    // First, try to find a token that matches the officer's assigned services
+    let nextToken = null;
+    if (assignedServices.length > 0) {
+      nextToken = await prisma.token.findFirst({
+        where: {
+          outletId: officer.outletId,
+          status: "waiting",
+          serviceTypes: {
+            hasSome: assignedServices,
+          },
+        },
+        orderBy: { tokenNumber: "asc" },
+        include: {
+          customer: true,
+        },
+      })
+    }
+
+    console.log("Matching token found:", nextToken ? `Token #${nextToken.tokenNumber}` : "None")
+
+    // If no matching token found, try fallback to any waiting token
+    if (!nextToken) {
+      console.log("No matching token, trying fallback...")
+      
+      // Check if fallback is allowed
+      if (!allowFallback) {
+        return res.json({ 
+          fallbackAllowed: true, 
+          fallback: true, 
+          message: 'No tokens match your assigned services. Cross-service fallback required.' 
+        })
+      }
+
+      // Get the earliest waiting token (regardless of service type)
+      nextToken = await prisma.token.findFirst({
+        where: { 
+          outletId: officer.outletId, 
+          status: 'waiting' 
+        },
+        orderBy: { tokenNumber: 'asc' },
+        include: { customer: true },
+      })
+
+      console.log("Fallback token found:", nextToken ? `Token #${nextToken.tokenNumber}` : "None")
+    }
 
     if (!nextToken) {
+      console.log("No tokens in queue")
       return res.json({ message: "No tokens in queue" })
     }
 
-    // Assign token to officer
+    // Assign the token to the officer
+    console.log(`Assigning token #${nextToken.tokenNumber} to officer ${officer.name}`)
+    
     const updatedToken = await prisma.token.update({
       where: { id: nextToken.id },
       data: {
@@ -160,7 +230,18 @@ router.post("/next-token", async (req, res) => {
     // Broadcast update
     broadcast({ type: "TOKEN_CALLED", data: updatedToken })
 
-    res.json({ success: true, token: updatedToken })
+    console.log(`Successfully called token #${updatedToken.tokenNumber}`)
+    console.log(`Customer details:`, {
+      id: updatedToken.customer.id,
+      name: updatedToken.customer.name,
+      mobileNumber: updatedToken.customer.mobileNumber
+    })
+    return res.json({ 
+      success: true, 
+      token: updatedToken, 
+      fallback: !assignedServices.length || !assignedServices.some(s => nextToken?.serviceTypes?.includes(s))
+    })
+
   } catch (error) {
     console.error("Next token error:", error)
     res.status(500).json({ error: "Failed to get next token" })
@@ -649,7 +730,7 @@ router.get("/summary/served/:officerId", async (req, res) => {
       tokens: tokens.map(token => ({
         ...token,
         customerName: token.customer?.name || 'Anonymous',
-        serviceName: token.serviceType || 'General Service',
+        serviceNames: Array.isArray(token.serviceTypes) && token.serviceTypes.length > 0 ? token.serviceTypes : ['General Service'],
       })),
     })
   } catch (error) {
