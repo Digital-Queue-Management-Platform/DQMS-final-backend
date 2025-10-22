@@ -52,7 +52,7 @@ router.get("/validate-qr", async (req, res) => {
 // Register customer and create token
 router.post("/register", async (req, res) => {
   try {
-    const { name, mobileNumber, serviceTypes, outletId, qrToken, preferredLanguages } = req.body
+    const { name, mobileNumber, serviceTypes, outletId, qrToken, preferredLanguages, sltMobileNumber, nicNumber, email } = req.body
 
     console.log(`Registration attempt - Mobile: ${mobileNumber}, Outlet: ${outletId}, Services: ${serviceTypes}`)
 
@@ -149,7 +149,13 @@ router.post("/register", async (req, res) => {
 
       if (!customer) {
         customer = await tx.customer.create({
-          data: { name, mobileNumber },
+          data: { 
+            name, 
+            mobileNumber,
+            sltMobileNumber: sltMobileNumber || undefined,
+            nicNumber: nicNumber || undefined,
+            email: email || undefined
+          },
         })
       }
 
