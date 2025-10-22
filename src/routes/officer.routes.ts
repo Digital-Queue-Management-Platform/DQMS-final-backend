@@ -117,6 +117,7 @@ router.post("/next-token", async (req, res) => {
       where: { id: officerId },
       select: {
         id: true,
+        name: true,
         outletId: true,
         counterNumber: true,
         assignedServices: true,
@@ -230,6 +231,11 @@ router.post("/next-token", async (req, res) => {
     broadcast({ type: "TOKEN_CALLED", data: updatedToken })
 
     console.log(`Successfully called token #${updatedToken.tokenNumber}`)
+    console.log(`Customer details:`, {
+      id: updatedToken.customer.id,
+      name: updatedToken.customer.name,
+      mobileNumber: updatedToken.customer.mobileNumber
+    })
     return res.json({ 
       success: true, 
       token: updatedToken, 
