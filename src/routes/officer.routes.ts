@@ -106,61 +106,157 @@ router.post("/register", async (req, res) => {
   }
 })
 
-// Get next token in queue
+// Get next token in queue (supports cross-service fallback when enabled)
 router.post("/next-token", async (req, res) => {
   try {
-    const { officerId } = req.body
+    const { officerId, allowFallback } = req.body
 
     const officer = await prisma.officer.findUnique({
       where: { id: officerId },
-    })
+        select: {
+          id: true,
+          outletId: true,
+          counterNumber: true,
+          assignedServices: true,
+        },
+      })
 
     if (!officer) {
       return res.status(404).json({ error: "Officer not found" })
     }
 
-    // Get next waiting token
-    const nextToken = await prisma.token.findFirst({
-      where: {
-        outletId: officer.outletId,
-        status: "waiting",
-      },
-      orderBy: { tokenNumber: "asc" },
-      include: {
-        customer: true,
-      },
+      // Parse assignedServices (JSON array)
+      let assignedServices: string[] = [];
+      if (officer.assignedServices) {
+        try {
+          if (Array.isArray(officer.assignedServices)) {
+            assignedServices = officer.assignedServices as string[];
+          } else if (typeof officer.assignedServices === 'string') {
+            assignedServices = JSON.parse(officer.assignedServices);
+          } else if (typeof officer.assignedServices === 'object') {
+      assignedServices = Object.values(officer.assignedServices).filter(v => typeof v === 'string').map(v => v as string);
+          } else {
+            assignedServices = [];
+          }
+        } catch (e) {
+          assignedServices = [];
+        }
+      }
+
+      // Get next waiting token that matches officer's assignedServices
+      const nextToken = await prisma.token.findFirst({
+        where: {
+          outletId: officer.outletId,
+          status: "waiting",
+          // Filter tokens where serviceTypes has overlap with assignedServices
+          serviceTypes: {
+            hasSome: assignedServices.length > 0 ? assignedServices : undefined,
+          },
+        },
+        orderBy: { tokenNumber: "asc" },
+        include: {
+          customer: true,
+        },
+      })
+    
+    if (nextToken) {
+      // Assign token to officer
+      const updatedToken = await prisma.token.update({
+        where: { id: nextToken.id },
+        data: {
+          status: "in_service",
+          assignedTo: officerId,
+          counterNumber: officer.counterNumber,
+          calledAt: new Date(),
+          startedAt: new Date(),
+        },
+        include: {
+          customer: true,
+          officer: true,
+        },
+      })
+
+      // Update officer status
+      await prisma.officer.update({
+        where: { id: officerId },
+        data: { status: "serving" },
+      })
+
+      // Broadcast update
+      broadcast({ type: "TOKEN_CALLED", data: updatedToken })
+
+      return res.json({ success: true, token: updatedToken, fallback: false })
+    }
+
+    // No matching token for officer's services. Consider cross-service fallback (always enabled).
+
+    // Check if there are any waiting tokens at the outlet
+    const earliestWaiting = await prisma.token.findFirst({
+      where: { outletId: officer.outletId, status: 'waiting' },
+      orderBy: { tokenNumber: 'asc' },
+      select: { id: true, serviceTypes: true, tokenNumber: true },
     })
 
-    if (!nextToken) {
+    if (!earliestWaiting) {
       return res.json({ message: "No tokens in queue" })
     }
 
-    // Assign token to officer
-    const updatedToken = await prisma.token.update({
-      where: { id: nextToken.id },
-      data: {
-        status: "in_service",
-        assignedTo: officerId,
-        counterNumber: officer.counterNumber,
-        calledAt: new Date(),
-        startedAt: new Date(),
-      },
-      include: {
-        customer: true,
-        officer: true,
-      },
+    // Determine if there are any relevant officers online/available for these service types in this outlet
+    const outletOfficers = await prisma.officer.findMany({
+      where: { outletId: officer.outletId },
+      select: { id: true, status: true, assignedServices: true },
     })
 
-    // Update officer status
-    await prisma.officer.update({
-      where: { id: officerId },
-      data: { status: "serving" },
+    const hasRelevantOnline = outletOfficers.some((o) => {
+      if (o.status === 'offline') return false
+      let svc: string[] = []
+      const raw = o.assignedServices as any
+      if (raw) {
+        if (Array.isArray(raw)) svc = raw as string[]
+        else if (typeof raw === 'string') { try { svc = JSON.parse(raw) } catch { svc = [] } }
+        else if (typeof raw === 'object') svc = Object.values(raw).filter(v => typeof v === 'string') as string[]
+      }
+      const overlaps = (earliestWaiting.serviceTypes || []).some(s => svc.includes(s))
+      return overlaps && (o.status === 'available' || o.status === 'serving' || o.status === 'on_break')
     })
 
-    // Broadcast update
-    broadcast({ type: "TOKEN_CALLED", data: updatedToken })
+    // Fallback allowed only when zero online/available relevant officers
+    if (!hasRelevantOnline) {
+      if (!allowFallback) {
+        return res.json({ fallbackAllowed: true, fallback: true, message: 'No online/available relevant officers for the requested service types.' })
+      }
 
-    res.json({ success: true, token: updatedToken })
+      // Proceed to assign earliest waiting token regardless of service type
+      const crossServiceToken = await prisma.token.findFirst({
+        where: { outletId: officer.outletId, status: 'waiting' },
+        orderBy: { tokenNumber: 'asc' },
+        include: { customer: true },
+      })
+
+      if (!crossServiceToken) {
+        return res.json({ message: "No tokens in queue" })
+      }
+
+      const updatedToken = await prisma.token.update({
+        where: { id: crossServiceToken.id },
+        data: {
+          status: 'in_service',
+          assignedTo: officerId,
+          counterNumber: officer.counterNumber,
+          calledAt: new Date(),
+          startedAt: new Date(),
+        },
+        include: { customer: true, officer: true },
+      })
+
+      await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
+
+      broadcast({ type: 'TOKEN_CALLED', data: updatedToken })
+
+      return res.json({ success: true, token: updatedToken, fallback: true })
+    }
+
+    return res.json({ message: "No tokens in queue" })
   } catch (error) {
     console.error("Next token error:", error)
     res.status(500).json({ error: "Failed to get next token" })
@@ -649,7 +745,7 @@ router.get("/summary/served/:officerId", async (req, res) => {
       tokens: tokens.map(token => ({
         ...token,
         customerName: token.customer?.name || 'Anonymous',
-        serviceName: token.serviceType || 'General Service',
+        serviceNames: Array.isArray(token.serviceTypes) && token.serviceTypes.length > 0 ? token.serviceTypes : ['General Service'],
       })),
     })
   } catch (error) {

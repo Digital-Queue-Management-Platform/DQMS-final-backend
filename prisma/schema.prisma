@@ -23,7 +23,7 @@ model Token {
   id                 String    @id @default(uuid())
   tokenNumber        Int
   customerId         String
-  serviceType        String
+    serviceTypes       String[] @default([]) @map("serviceType")
   preferredLanguages Json?
   accountRef         String?
   status             String    @default("waiting")
@@ -73,6 +73,7 @@ model Outlet {
   officers     Officer[]
   region       Region    @relation(fields: [regionId], references: [id])
   tokens       Token[]
+  managerQRTokens ManagerQRToken[]
 }
 
 model Region {
@@ -142,4 +143,15 @@ model BreakLog {
   Officer   Officer   @relation(fields: [officerId], references: [id])
 
   @@index([officerId, startedAt])
+}
+
+model ManagerQRToken {
+  token       String   @id
+  outletId    String
+  generatedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  outlet      Outlet   @relation(fields: [outletId], references: [id])
+
+  @@index([outletId])
 }
