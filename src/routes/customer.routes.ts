@@ -312,8 +312,20 @@ router.post("/manager-qr-token", async (req, res) => {
       message: "Manager QR token registered"
     })
   } catch (error) {
-    console.error("Manager QR registration error:", error)
-    res.status(500).json({ error: "Failed to register manager QR token" })
+    // Log detailed prisma/DB error information for troubleshooting
+    const anyErr: any = error
+    console.error("Manager QR registration error:", anyErr)
+    if (anyErr?.code) console.error("Prisma error code:", anyErr.code)
+    if (anyErr?.meta) console.error("Prisma error meta:", anyErr.meta)
+    if (anyErr?.message) console.error("Error message:", anyErr.message)
+    if (anyErr?.stack) console.error("Error stack:", anyErr.stack)
+
+    // Do not leak internals in production responses
+    const isProd = process.env.NODE_ENV === "production"
+    res.status(500).json({ 
+      error: "Failed to register manager QR token",
+      ...(isProd ? {} : { details: anyErr?.message, code: anyErr?.code, meta: anyErr?.meta })
+    })
   }
 })
 

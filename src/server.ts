@@ -90,7 +90,8 @@ server.listen(PORT, () => {
 
 // Periodic job: detect long-wait tokens and create alerts
 const LONG_WAIT_MINUTES = Number(process.env.LONG_WAIT_MINUTES || 10)
-const LONG_WAIT_CHECK_MS = 1000 * 60 // check every minute
+// In production, reduce frequency to ease DB connection pressure
+const LONG_WAIT_CHECK_MS = process.env.NODE_ENV === "production" ? 1000 * 60 * 5 : 1000 * 60
 
 const checkLongWait = async () => {
   try {
@@ -128,7 +129,10 @@ const checkLongWait = async () => {
   }
 }
 
-setInterval(checkLongWait, LONG_WAIT_CHECK_MS)
+// Allow disabling the job via env if needed (e.g., multi-instance deployments)
+if (process.env.DISABLE_LONG_WAIT_JOB !== "true") {
+  setInterval(checkLongWait, LONG_WAIT_CHECK_MS)
+}
 
 // Graceful shutdown
 process.on("SIGINT", async () => {
