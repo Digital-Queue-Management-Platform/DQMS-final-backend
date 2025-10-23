@@ -22,6 +22,7 @@ interface VLCStreamConfig {
   ip?: string
   path?: string
   multicast?: boolean
+  webMode?: boolean  // For hosted environment fallback
 }
 
 interface StreamingSession {
@@ -51,6 +52,7 @@ class VLCStreamingService {
   private cleanupInterval: NodeJS.Timeout | null = null
   private metrics: ServiceMetrics
   private vlcAvailable: boolean | null = null
+  private vlcPath: string = 'vlc'
 
   constructor() {
     this.audioDirectory = join(process.cwd(), 'temp', 'audio')
@@ -92,18 +94,31 @@ class VLCStreamingService {
   }
 
   private async checkVLCAvailability(): Promise<boolean> {
-    try {
-      await execAsync('vlc --version')
-      this.vlcAvailable = true
-      this.metrics.vlcAvailable = true
-      this.log('info', 'VLC Media Player is available')
-      return true
-    } catch (error) {
-      this.vlcAvailable = false
-      this.metrics.vlcAvailable = false
-      this.log('warn', 'VLC Media Player not found. Audio streaming will be limited to browser synthesis.')
-      return false
+    const vlcPaths = [
+      'vlc', // PATH
+      'C:\\Program Files\\VideoLAN\\VLC\\vlc.exe', // Default Windows installation
+      'C:\\Program Files (x86)\\VideoLAN\\VLC\\vlc.exe', // 32-bit on 64-bit Windows
+      '/usr/bin/vlc', // Linux
+      '/Applications/VLC.app/Contents/MacOS/VLC' // macOS
+    ]
+
+    for (const vlcPath of vlcPaths) {
+      try {
+        await execAsync(`"${vlcPath}" --version`)
+        this.vlcAvailable = true
+        this.metrics.vlcAvailable = true
+        this.vlcPath = vlcPath
+        this.log('info', `VLC Media Player found at: ${vlcPath}`)
+        return true
+      } catch (error) {
+        // Continue to next path
+      }
     }
+
+    this.vlcAvailable = false
+    this.metrics.vlcAvailable = false
+    this.log('warn', 'VLC Media Player not found in any common locations. Audio streaming will be limited to browser synthesis.')
+    return false
   }
 
   private startCleanupInterval() {
@@ -267,7 +282,7 @@ class VLCStreamingService {
   }
 
   /**
-   * Start VLC streaming session
+   * Start VLC streaming session - Works in both local and hosted environments
    */
   async startStream(sessionId: string, text: string, language: string, config: VLCStreamConfig): Promise<boolean> {
     try {
@@ -281,9 +296,10 @@ class VLCStreamingService {
         return false
       }
 
+      // Hybrid approach: Use VLC if available, otherwise use web streaming
       if (!this.vlcAvailable) {
-        this.log('warn', 'VLC not available. Cannot start streaming session.')
-        return false
+        this.log('info', 'VLC not available. Using web-based streaming fallback.')
+        return await this.startWebStream(sessionId, text, language, config)
       }
 
       // Clean up any existing session
@@ -325,7 +341,7 @@ class VLCStreamingService {
       this.log('info', `VLC Command: ${vlcCommand}`)
 
       // Start VLC process
-      const vlcProcess = spawn('vlc', vlcCommand.split(' '), {
+      const vlcProcess = spawn(this.vlcPath, vlcCommand.split(' '), {
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: false
       })
@@ -480,6 +496,70 @@ class VLCStreamingService {
   }
 
   /**
+   * Web streaming fallback for hosted environments (when VLC not available)
+   */
+  private async startWebStream(sessionId: string, text: string, language: string, config: VLCStreamConfig): Promise<boolean> {
+    try {
+      this.log('info', `Starting web stream session: ${sessionId}`)
+      
+      // Generate audio file for web streaming
+      const audioFile = await this.generateAudioFile(text, language)
+      
+      // Create session with web streaming metadata
+      const session: StreamingSession = {
+        id: sessionId,
+        process: null, // No VLC process in web mode
+        config: { ...config, webMode: true },
+        audioFile,
+        startTime: new Date(),
+        status: 'active',
+        lastActivity: new Date(),
+        errorCount: 0
+      }
+      
+      this.sessions.set(sessionId, session)
+      this.metrics.totalSessions++
+      this.metrics.activeSessions++
+      this.metrics.audioFilesGenerated++
+
+      // In web mode, we serve the audio file directly via HTTP
+      // The frontend will handle the streaming via browser APIs
+      
+      this.log('info', `Web stream session started: ${sessionId}`)
+      
+      // Auto-cleanup after timeout
+      setTimeout(() => {
+        if (this.sessions.has(sessionId)) {
+          this.stopStream(sessionId)
+        }
+      }, PRODUCTION_CONFIG.VLC_TIMEOUT_MS)
+
+      return true
+    } catch (error) {
+      this.log('error', `Failed to start web stream for session ${sessionId}`, error)
+      this.metrics.failedSessions++
+      return false
+    }
+  }
+
+  /**
+   * Get audio file path for web streaming (hosted environment)
+   */
+  getAudioFilePath(sessionId: string): string | null {
+    const session = this.sessions.get(sessionId)
+    if (!session || !session.audioFile) return null
+    return session.audioFile
+  }
+
+  /**
+   * Check if session is in web streaming mode
+   */
+  isWebStream(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId)
+    return session?.config?.webMode === true
+  }
+
+  /**
    * Clean up session resources
    */
   private async cleanupSession(sessionId: string): Promise<void> {
@@ -502,7 +582,7 @@ class VLCStreamingService {
       // Remove session
       this.sessions.delete(sessionId)
       
-      this.log('info', `Cleaned up VLC streaming session: ${sessionId}`)
+      this.log('info', `Cleaned up streaming session: ${sessionId}`)
     } catch (error) {
       this.log('error', `Failed to cleanup session ${sessionId}`, error)
     }

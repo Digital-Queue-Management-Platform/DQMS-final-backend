@@ -29,12 +29,30 @@ const frontendOrigins = (process.env.FRONTEND_ORIGIN || "http://localhost:3000,h
   .split(",")
   .map((s) => s.trim())
 
+// Add local network IPs for VLC testing
+const localNetworkOrigins = [
+  "http://192.168.1.11:57308", // Test interface
+  "http://localhost:57308",    // Local test interface
+  "http://127.0.0.1:57308",    // Loopback test interface
+]
+
 app.use(
   cors({
     origin: (origin, callback) => {
-      // allow requests with no origin (mobile apps, curl)
+      // allow requests with no origin (mobile apps, curl, VLC, etc.)
       if (!origin) return callback(null, true)
+      
+      // allow configured frontend origins
       if (frontendOrigins.includes(origin)) return callback(null, true)
+      
+      // allow local network testing
+      if (localNetworkOrigins.includes(origin)) return callback(null, true)
+      
+      // allow any localhost/127.0.0.1 for development
+      if (origin.includes('localhost') || origin.includes('127.0.0.1') || origin.includes('192.168.1.')) {
+        return callback(null, true)
+      }
+      
       return callback(new Error("CORS not allowed"))
     },
     credentials: true,

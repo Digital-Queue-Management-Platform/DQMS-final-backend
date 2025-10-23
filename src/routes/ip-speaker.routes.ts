@@ -624,4 +624,81 @@ router.post("/metrics/reset", (req, res) => {
   }
 })
 
+// Audio streaming endpoint for hosted environments
+router.get("/audio/:sessionId", async (req, res) => {
+  try {
+    const { sessionId } = req.params
+    
+    // Check if session exists
+    const status = vlcStreamingService.getSessionStatus(sessionId)
+    if (!status) {
+      return res.status(404).json({ error: "Session not found" })
+    }
+
+    // Get audio file path
+    const audioFilePath = vlcStreamingService.getAudioFilePath(sessionId)
+    if (!audioFilePath) {
+      return res.status(404).json({ error: "Audio file not found" })
+    }
+
+    // Check if file exists
+    const fs = require('fs')
+    if (!fs.existsSync(audioFilePath)) {
+      return res.status(404).json({ error: "Audio file does not exist" })
+    }
+
+    // Set appropriate headers for audio streaming
+    res.setHeader('Content-Type', 'audio/mpeg')
+    res.setHeader('Accept-Ranges', 'bytes')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Access-Control-Allow-Methods', 'GET')
+    
+    // Stream the audio file
+    const readStream = fs.createReadStream(audioFilePath)
+    readStream.pipe(res)
+    
+    readStream.on('error', (error: any) => {
+      console.error('Audio streaming error:', error)
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Audio streaming failed' })
+      }
+    })
+    
+  } catch (error) {
+    console.error("Audio streaming failed:", error)
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Audio streaming failed" })
+    }
+  }
+})
+
+// Environment detection endpoint
+router.get("/environment", (req, res) => {
+  try {
+    const isHosted = !vlcStreamingService.getMetrics().vlcAvailable
+    const environment = process.env.NODE_ENV || 'development'
+    const serverInfo = {
+      environment,
+      isHosted,
+      vlcAvailable: vlcStreamingService.getMetrics().vlcAvailable,
+      supportedFeatures: {
+        vlcStreaming: vlcStreamingService.getMetrics().vlcAvailable,
+        webStreaming: true,
+        browserSynthesis: true,
+        audioFileStreaming: true
+      },
+      recommendedMode: vlcStreamingService.getMetrics().vlcAvailable ? 'vlc' : 'web'
+    }
+    
+    res.json({
+      success: true,
+      ...serverInfo
+    })
+  } catch (error) {
+    console.error("Environment detection failed:", error)
+    res.status(500).json({ error: "Environment detection failed" })
+  }
+})
+
 export default router
