@@ -1,4 +1,5 @@
 import { Router } from "express"
+import vlcStreamingService from "../services/vlcStreamingService"
 
 const router = Router()
 
@@ -77,6 +78,36 @@ const IP_SPEAKER_APIS = {
     method: 'GET',
     announceMethod: 'POST',
     authType: 'custom'
+  },
+  vlc_http: {
+    testEndpoint: '/status.xml',
+    announceEndpoint: '/stream/announce',
+    stopEndpoint: '/stream/stop',
+    method: 'GET',
+    announceMethod: 'POST',
+    authType: 'none',
+    protocol: 'http',
+    streamType: 'vlc'
+  },
+  vlc_udp: {
+    testEndpoint: '/status',
+    announceEndpoint: '/stream/udp',
+    stopEndpoint: '/stream/stop',
+    method: 'GET',
+    announceMethod: 'POST',
+    authType: 'none',
+    protocol: 'udp',
+    streamType: 'vlc'
+  },
+  vlc_rtsp: {
+    testEndpoint: '/describe',
+    announceEndpoint: '/stream/rtsp',
+    stopEndpoint: '/stream/stop',
+    method: 'DESCRIBE',
+    announceMethod: 'ANNOUNCE',
+    authType: 'none',
+    protocol: 'rtsp',
+    streamType: 'vlc'
   }
 }
 
@@ -273,6 +304,44 @@ router.post("/announce", async (req, res) => {
     let requestBody: any
     let contentType = 'application/json'
 
+    // Handle VLC streaming
+    if (model.startsWith('vlc_')) {
+      const protocol = model.replace('vlc_', '') as 'http' | 'udp' | 'rtsp'
+      const sessionId = `${ip}_${port}_${Date.now()}`
+      
+      const vlcConfig = {
+        protocol,
+        port: port,
+        ip: ip,
+        path: '/audio',
+        multicast: protocol === 'udp' // Enable multicast for UDP
+      }
+
+      try {
+        const success = await vlcStreamingService.startStream(sessionId, text, language, vlcConfig)
+        
+        if (success) {
+          res.json({ 
+            success: true, 
+            message: `VLC ${protocol.toUpperCase()} stream started successfully`,
+            sessionId,
+            streamUrl: protocol === 'http' ? `http://${ip}:${port}/audio` :
+                      protocol === 'udp' ? `udp://${ip}:${port}` :
+                      `rtsp://${ip}:${port}/audio`
+          })
+        } else {
+          res.status(500).json({ error: 'Failed to start VLC stream' })
+        }
+        return
+      } catch (vlcError: any) {
+        res.status(500).json({ 
+          error: `VLC streaming error: ${vlcError.message}`,
+          details: 'Make sure VLC is installed and accessible'
+        })
+        return
+      }
+    }
+
     switch (model) {
       case 'hikvision':
         requestBody = JSON.stringify({
@@ -366,13 +435,38 @@ router.post("/announce", async (req, res) => {
 // Stop current announcement
 router.post("/stop", async (req, res) => {
   try {
-    const { config } = req.body
+    const { config, sessionId } = req.body
 
     if (!config) {
       return res.status(400).json({ error: "Missing configuration" })
     }
 
     const { ip, port, username, password, model } = config
+
+    // Handle VLC streaming stop
+    if (model.startsWith('vlc_') && sessionId) {
+      try {
+        const success = await vlcStreamingService.stopStream(sessionId)
+        
+        if (success) {
+          res.json({ 
+            success: true, 
+            message: 'VLC stream stopped successfully' 
+          })
+        } else {
+          res.status(404).json({ 
+            error: 'Stream session not found or already stopped' 
+          })
+        }
+        return
+      } catch (vlcError: any) {
+        res.status(500).json({ 
+          error: `Failed to stop VLC stream: ${vlcError.message}` 
+        })
+        return
+      }
+    }
+
     const apiConfig = IP_SPEAKER_APIS[model as keyof typeof IP_SPEAKER_APIS]
     
     if (!apiConfig) {
@@ -437,6 +531,97 @@ router.get("/models", (req, res) => {
       description: `${model.charAt(0).toUpperCase() + model.slice(1)} IP Speaker`
     }))
   })
+})
+
+// Get VLC streaming sessions status
+router.get("/vlc/sessions", (req, res) => {
+  try {
+    const activeSessions = vlcStreamingService.getActiveSessions()
+    res.json({
+      success: true,
+      activeSessions,
+      count: activeSessions.length
+    })
+  } catch (error) {
+    console.error("Failed to get VLC sessions:", error)
+    res.status(500).json({ error: "Failed to get streaming sessions" })
+  }
+})
+
+// Get specific VLC session status
+router.get("/vlc/sessions/:sessionId", (req, res) => {
+  try {
+    const { sessionId } = req.params
+    const status = vlcStreamingService.getSessionStatus(sessionId)
+    
+    if (status) {
+      res.json({
+        success: true,
+        sessionId,
+        status
+      })
+    } else {
+      res.status(404).json({
+        error: "Session not found"
+      })
+    }
+  } catch (error) {
+    console.error("Failed to get VLC session status:", error)
+    res.status(500).json({ error: "Failed to get session status" })
+  }
+})
+
+// Health check endpoint
+router.get("/health", async (req, res) => {
+  try {
+    const health = await vlcStreamingService.getHealthStatus()
+    
+    if (health.healthy) {
+      res.json({
+        status: "healthy",
+        ...health
+      })
+    } else {
+      res.status(503).json({
+        status: "unhealthy",
+        ...health
+      })
+    }
+  } catch (error) {
+    console.error("Health check failed:", error)
+    res.status(500).json({
+      status: "error",
+      error: error instanceof Error ? error.message : "Unknown error"
+    })
+  }
+})
+
+// Metrics endpoint
+router.get("/metrics", (req, res) => {
+  try {
+    const metrics = vlcStreamingService.getMetrics()
+    res.json({
+      success: true,
+      metrics
+    })
+  } catch (error) {
+    console.error("Failed to get metrics:", error)
+    res.status(500).json({ error: "Failed to get metrics" })
+  }
+})
+
+// Reset metrics endpoint (for monitoring/testing)
+router.post("/metrics/reset", (req, res) => {
+  try {
+    vlcStreamingService.resetMetrics()
+    res.json({
+      success: true,
+      message: "Metrics reset successfully"
+    })
+  } catch (error) {
+    console.error("Failed to reset metrics:", error)
+    res.status(500).json({ error: "Failed to reset metrics" })
+  }
 })
 
 export default router
