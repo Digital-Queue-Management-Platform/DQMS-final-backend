@@ -1,5 +1,6 @@
 import { Router } from "express"
 import { prisma } from "../server"
+import { getLastDailyReset } from "../utils/resetWindow"
 
 const router = Router()
 
@@ -25,6 +26,7 @@ const managerQRTokens = global.globalManagerQRTokens;
 router.get("/outlet/:outletId", async (req, res) => {
   try {
     const { outletId } = req.params
+    const lastReset = getLastDailyReset()
 
     // Use a transaction to ensure consistent data
     const queueData = await prisma.$transaction(async (tx) => {
@@ -32,6 +34,7 @@ router.get("/outlet/:outletId", async (req, res) => {
         where: {
           outletId,
           status: { in: ["waiting", "skipped"] },
+          createdAt: { gte: lastReset },
         },
         orderBy: { tokenNumber: "asc" },
         include: {
@@ -43,6 +46,7 @@ router.get("/outlet/:outletId", async (req, res) => {
         where: {
           outletId,
           status: "in_service",
+          createdAt: { gte: lastReset },
         },
         include: {
           customer: true,
