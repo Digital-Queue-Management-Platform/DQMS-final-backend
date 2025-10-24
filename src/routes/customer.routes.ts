@@ -1,5 +1,6 @@
 import { Router } from "express"
 import { prisma, broadcast } from "../server"
+import { getLastDailyReset } from "../utils/resetWindow"
 import * as jwt from "jsonwebtoken"
 
 const router = Router()
@@ -159,9 +160,10 @@ router.post("/register", async (req, res) => {
         })
       }
 
-      // Get next token number for outlet using row-level locking to prevent race conditions
+      // Get next token number for outlet within the current daily window (resets at 12:00 PM)
+      const lastReset = getLastDailyReset()
       const lastToken = await tx.token.findFirst({
-        where: { outletId },
+        where: { outletId, createdAt: { gte: lastReset } },
         orderBy: { tokenNumber: "desc" },
         select: { tokenNumber: true },
       })

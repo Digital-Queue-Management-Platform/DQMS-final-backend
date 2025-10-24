@@ -1,5 +1,6 @@
 import { Router } from "express"
 import { prisma, broadcast } from "../server"
+import { getLastDailyReset } from "../utils/resetWindow"
 import * as jwt from "jsonwebtoken"
 
 const router = Router()
@@ -153,7 +154,8 @@ router.post("/next-token", async (req, res) => {
     console.log("Assigned services:", assignedServices)
 
     // First, try to find a token that matches the officer's assigned services
-    let nextToken = null;
+  let nextToken = null;
+  const lastReset = getLastDailyReset()
     if (assignedServices.length > 0) {
       nextToken = await prisma.token.findFirst({
         where: {
@@ -162,6 +164,7 @@ router.post("/next-token", async (req, res) => {
           serviceTypes: {
             hasSome: assignedServices,
           },
+          createdAt: { gte: lastReset },
         },
         orderBy: { tokenNumber: "asc" },
         include: {
@@ -189,7 +192,8 @@ router.post("/next-token", async (req, res) => {
       nextToken = await prisma.token.findFirst({
         where: { 
           outletId: officer.outletId, 
-          status: 'waiting' 
+          status: 'waiting',
+          createdAt: { gte: lastReset },
         },
         orderBy: { tokenNumber: 'asc' },
         include: { customer: true },

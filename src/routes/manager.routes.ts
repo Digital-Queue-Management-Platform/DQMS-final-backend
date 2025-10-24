@@ -683,7 +683,8 @@ router.get("/outlets", async (req, res) => {
 
     const outlets = await prisma.outlet.findMany({
       where: {
-        regionId: decoded.regionId
+        regionId: decoded.regionId,
+        isActive: true,
       },
       include: {
         officers: {
@@ -840,6 +841,128 @@ router.put("/outlets/:outletId", async (req, res) => {
     } else {
       res.status(500).json({ error: "Failed to update outlet", details: error.message || "Unknown error" })
     }
+  }
+})
+
+// Soft-delete outlet in manager's region
+router.delete("/outlets/:outletId", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization
+    if (!authHeader) {
+      return res.status(401).json({ error: "Authorization header required" })
+    }
+
+    const token = authHeader.split(" ")[1]
+    const decoded = (jwt as any).verify(token, JWT_SECRET) as { regionId: string }
+
+    const { outletId } = req.params
+
+    // Verify outlet belongs to manager's region
+    const existingOutlet = await prisma.outlet.findFirst({
+      where: { id: outletId, regionId: decoded.regionId }
+    })
+
+    if (!existingOutlet) {
+      return res.status(404).json({ error: "Outlet not found in your region" })
+    }
+
+    const outlet = await prisma.outlet.update({
+      where: { id: outletId },
+      data: { isActive: false },
+    })
+
+    res.json({ success: true, outlet })
+  } catch (error) {
+    console.error("Delete outlet error:", error)
+    res.status(500).json({ error: "Failed to delete outlet" })
+  }
+})
+
+// HARD delete outlet in manager's region (removes dependent data)
+router.delete("/outlets/:outletId/hard", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization
+    if (!authHeader) {
+      return res.status(401).json({ error: "Authorization header required" })
+    }
+
+    const token = authHeader.split(" ")[1]
+    const decoded = (jwt as any).verify(token, JWT_SECRET) as { regionId: string }
+
+    const { outletId } = req.params
+
+    // Verify outlet belongs to manager's region
+    const existingOutlet = await prisma.outlet.findFirst({
+      where: { id: outletId, regionId: decoded.regionId }
+    })
+
+    if (!existingOutlet) {
+      return res.status(404).json({ error: "Outlet not found in your region" })
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      // Collect token IDs for this outlet
+      const tokens = await tx.token.findMany({
+        where: { outletId },
+        select: { id: true },
+      })
+      const tokenIds = tokens.map((t) => t.id)
+
+      // Collect officer IDs for this outlet
+      const officers = await tx.officer.findMany({
+        where: { outletId },
+        select: { id: true },
+      })
+      const officerIds = officers.map((o) => o.id)
+
+      // Delete dependent data in safe order
+      const deleted = {
+        feedback: 0,
+        alerts: 0,
+        managerQRTokens: 0,
+        breakLogs: 0,
+        officers: 0,
+        tokens: 0,
+      }
+
+      if (tokenIds.length > 0) {
+        const fb = await tx.feedback.deleteMany({ where: { tokenId: { in: tokenIds } } })
+        deleted.feedback = fb.count
+        // Alerts reference tokens by relatedEntity (string), not FK
+        const al = await tx.alert.deleteMany({ where: { relatedEntity: { in: tokenIds } } })
+        deleted.alerts = al.count
+      }
+
+      // Manager QR tokens for outlet
+      const mqr = await tx.managerQRToken.deleteMany({ where: { outletId } })
+      deleted.managerQRTokens = mqr.count
+
+      if (officerIds.length > 0) {
+        const bl = await tx.breakLog.deleteMany({ where: { officerId: { in: officerIds } } })
+        deleted.breakLogs = bl.count
+      }
+
+      // Delete officers and tokens
+      const off = await tx.officer.deleteMany({ where: { outletId } })
+      deleted.officers = off.count
+
+      const tks = await tx.token.deleteMany({ where: { outletId } })
+      deleted.tokens = tks.count
+
+      // Finally delete the outlet
+      await tx.outlet.delete({ where: { id: outletId } })
+
+      return deleted
+    })
+
+    res.json({ success: true, deleted: result })
+  } catch (error: any) {
+    console.error("Hard delete outlet error:", error)
+    // Prisma foreign key errors
+    if (error.code === 'P2003') {
+      return res.status(409).json({ error: "Cannot delete outlet due to related data constraints" })
+    }
+    res.status(500).json({ error: "Failed to hard delete outlet" })
   }
 })
 

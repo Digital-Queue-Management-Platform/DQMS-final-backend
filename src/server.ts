@@ -5,6 +5,7 @@ import dotenv from "dotenv"
 import { WebSocketServer } from "ws"
 import { createServer } from "http"
 import { PrismaClient } from "@prisma/client"
+import { getNextDailyReset } from "./utils/resetWindow"
 
 // Import routes
 import customerRoutes from "./routes/customer.routes"
@@ -133,6 +134,30 @@ const checkLongWait = async () => {
 if (process.env.DISABLE_LONG_WAIT_JOB !== "true") {
   setInterval(checkLongWait, LONG_WAIT_CHECK_MS)
 }
+
+// Daily reset signal: broadcast an event exactly at the configured reset time
+function scheduleDailyResetTick() {
+  const next = getNextDailyReset()
+  const ms = Math.max(0, next.getTime() - Date.now())
+  console.log(
+    `Next daily reset at ${next.toLocaleString()} (in ${(ms / 1000 / 60).toFixed(1)} minutes)`
+  )
+  setTimeout(async () => {
+    try {
+      const ts = new Date()
+      console.log(`Daily reset boundary reached: ${ts.toLocaleString()}`)
+      // Broadcast a lightweight signal; clients may optionally refresh views
+      broadcast({ type: "DAILY_RESET", data: { timestamp: ts.toISOString() } })
+    } catch (e) {
+      console.error("Error broadcasting DAILY_RESET:", e)
+    } finally {
+      // Schedule the next tick
+      scheduleDailyResetTick()
+    }
+  }, ms)
+}
+
+scheduleDailyResetTick()
 
 // Graceful shutdown
 process.on("SIGINT", async () => {
