@@ -122,6 +122,7 @@ router.post("/next-token", async (req, res) => {
         outletId: true,
         counterNumber: true,
         assignedServices: true,
+        languages: true,
       },
     })
 
@@ -153,45 +154,81 @@ router.post("/next-token", async (req, res) => {
 
     console.log("Assigned services:", assignedServices)
 
-    // First, try to find a token that matches the officer's assigned services
-  let nextToken = null;
-  const lastReset = getLastDailyReset()
-    if (assignedServices.length > 0) {
-      nextToken = await prisma.token.findFirst({
-        where: {
-          outletId: officer.outletId,
-          status: "waiting",
-          serviceTypes: {
-            hasSome: assignedServices,
-          },
-          createdAt: { gte: lastReset },
-        },
-        orderBy: { tokenNumber: "asc" },
-        include: {
-          customer: true,
-        },
-      })
+    // Parse officer languages (JSON array)
+    let officerLanguages: string[] = []
+    if (officer.languages) {
+      try {
+        if (Array.isArray(officer.languages)) {
+          officerLanguages = officer.languages as string[]
+        } else if (typeof officer.languages === 'string') {
+          officerLanguages = JSON.parse(officer.languages)
+        } else if (typeof officer.languages === 'object') {
+          officerLanguages = Object.values(officer.languages).filter(v => typeof v === 'string') as string[]
+        }
+      } catch (e) {
+        console.log("Error parsing officer languages:", e)
+        officerLanguages = []
+      }
     }
 
-    console.log("Matching token found:", nextToken ? `Token #${nextToken.tokenNumber}` : "None")
+    const lastReset = getLastDailyReset()
 
-    // If no matching token found, try fallback to any waiting token
-    if (!nextToken) {
-      console.log("No matching token, trying fallback...")
-      
-      // Check if fallback is allowed
-      if (!allowFallback) {
-        return res.json({ 
-          fallbackAllowed: true, 
-          fallback: true, 
-          message: 'No tokens match your assigned services. Cross-service fallback required.' 
-        })
+    // Helper: normalize token preferred languages to array
+    const toLangArray = (val: any): string[] => {
+      try {
+        if (!val) return []
+        if (Array.isArray(val)) return val.filter(v => typeof v === 'string') as string[]
+        if (typeof val === 'string') {
+          const parsed = JSON.parse(val)
+          return Array.isArray(parsed) ? parsed.filter(v => typeof v === 'string') : []
+        }
+        if (typeof val === 'object') {
+          // If stored as object-map, convert values
+          return Object.values(val).filter(v => typeof v === 'string') as string[]
+        }
+      } catch {}
+      return []
+    }
+
+    const hasAny = (a: string[], b: string[]) => a.some(x => b.includes(x))
+
+    // 1) Try strict match: serviceTypes ∩ assignedServices AND preferredLanguages ∩ officerLanguages
+    let nextToken: any = null
+    if (assignedServices.length > 0) {
+      // Get a small batch ordered by earliest and filter in memory for language
+      const candidateTokens = await prisma.token.findMany({
+        where: {
+          outletId: officer.outletId,
+          status: 'waiting',
+          serviceTypes: { hasSome: assignedServices },
+          createdAt: { gte: lastReset },
+        },
+        orderBy: { tokenNumber: 'asc' },
+        take: 25,
+        include: { customer: true },
+      })
+
+      for (const t of candidateTokens) {
+        const tokenLangs = toLangArray(t.preferredLanguages)
+        if (tokenLangs.length === 0 || officerLanguages.length === 0) {
+          // If either side has no language specified, treat as non-match for strict phase
+          continue
+        }
+        if (hasAny(tokenLangs, officerLanguages)) {
+          nextToken = t
+          break
+        }
       }
+    }
 
-      // Get the earliest waiting token (regardless of service type)
-      nextToken = await prisma.token.findFirst({
-        where: { 
-          outletId: officer.outletId, 
+    console.log("Strict match token:", nextToken ? `Token #${nextToken.tokenNumber}` : 'None')
+
+    // 2) If no strict match, check for globally unmatched earliest token
+    if (!nextToken) {
+      // Get the earliest waiting token overall
+      const earliest = await prisma.token.findFirst({
+        where: {
+          outletId: officer.outletId,
           status: 'waiting',
           createdAt: { gte: lastReset },
         },
@@ -199,51 +236,79 @@ router.post("/next-token", async (req, res) => {
         include: { customer: true },
       })
 
-      console.log("Fallback token found:", nextToken ? `Token #${nextToken.tokenNumber}` : "None")
+      if (!earliest) {
+        console.log('No tokens in queue')
+        return res.json({ message: 'No tokens in queue' })
+      }
+
+      // Determine if ANY officer in this outlet can serve earliest by service+language
+      const outletOfficers = await prisma.officer.findMany({
+        where: { outletId: officer.outletId },
+        select: { id: true, assignedServices: true, languages: true },
+      })
+
+      const tokenLangs = toLangArray(earliest.preferredLanguages)
+      const tokenServices = Array.isArray(earliest.serviceTypes) ? earliest.serviceTypes as string[] : []
+
+      const anyOfficerMatches = outletOfficers.some(o => {
+        // parse services
+        let svc: string[] = []
+        if (o.assignedServices) {
+          try {
+            if (Array.isArray(o.assignedServices)) svc = o.assignedServices as string[]
+            else if (typeof o.assignedServices === 'string') svc = JSON.parse(o.assignedServices)
+            else if (typeof o.assignedServices === 'object') svc = Object.values(o.assignedServices).filter(v => typeof v === 'string') as string[]
+          } catch {}
+        }
+        // parse languages
+        let langs: string[] = []
+        if (o.languages) {
+          try {
+            if (Array.isArray(o.languages)) langs = o.languages as string[]
+            else if (typeof o.languages === 'string') langs = JSON.parse(o.languages)
+            else if (typeof o.languages === 'object') langs = Object.values(o.languages).filter(v => typeof v === 'string') as string[]
+          } catch {}
+        }
+        return hasAny(tokenServices, svc) && hasAny(tokenLangs, langs)
+      })
+
+      if (!anyOfficerMatches) {
+        // Globally unmatched token -> visible to all officers
+        nextToken = earliest
+        console.log('Assigning globally unmatched token:', `Token #${earliest.tokenNumber}`)
+      } else {
+        // Respect service+language constraints; do not allow generic fallback
+        return res.json({ message: 'No tokens match your assigned services and languages right now' })
+      }
     }
 
-    if (!nextToken) {
-      console.log("No tokens in queue")
-      return res.json({ message: "No tokens in queue" })
-    }
-
-    // Assign the token to the officer
+    // Assign the selected token to the officer
     console.log(`Assigning token #${nextToken.tokenNumber} to officer ${officer.name}`)
-    
+
     const updatedToken = await prisma.token.update({
       where: { id: nextToken.id },
       data: {
-        status: "in_service",
+        status: 'in_service',
         assignedTo: officerId,
         counterNumber: officer.counterNumber,
         calledAt: new Date(),
         startedAt: new Date(),
       },
-      include: {
-        customer: true,
-        officer: true,
-      },
+      include: { customer: true, officer: true },
     })
 
-    // Update officer status
-    await prisma.officer.update({
-      where: { id: officerId },
-      data: { status: "serving" },
-    })
+    await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
 
-    // Broadcast update
-    broadcast({ type: "TOKEN_CALLED", data: updatedToken })
+    broadcast({ type: 'TOKEN_CALLED', data: updatedToken })
 
-    console.log(`Successfully called token #${updatedToken.tokenNumber}`)
-    console.log(`Customer details:`, {
-      id: updatedToken.customer.id,
-      name: updatedToken.customer.name,
-      mobileNumber: updatedToken.customer.mobileNumber
-    })
-    return res.json({ 
-      success: true, 
-      token: updatedToken, 
-      fallback: !assignedServices.length || !assignedServices.some(s => nextToken?.serviceTypes?.includes(s))
+  const tokenLangs = toLangArray((updatedToken as any).preferredLanguages)
+    return res.json({
+      success: true,
+      token: updatedToken,
+      matchedBy: {
+        service: assignedServices.some(s => (updatedToken.serviceTypes || []).includes(s)),
+        language: officerLanguages.length > 0 ? hasAny(tokenLangs, officerLanguages) : false,
+      }
     })
 
   } catch (error) {
@@ -871,6 +936,29 @@ router.get("/summary/feedback/:officerId", async (req, res) => {
 // Logout: clear cookie
 router.post("/logout", async (req, res) => {
   try {
+    // Try to set officer status to offline based on JWT cookie
+    let token = req.cookies?.dq_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+
+    if (token) {
+      try {
+        const payload: any = (jwt as any).verify(token, JWT_SECRET)
+        if (payload?.officerId) {
+          await prisma.officer.update({
+            where: { id: payload.officerId },
+            data: { status: 'offline' },
+          })
+        }
+      } catch (e) {
+        // ignore invalid/expired token
+      }
+    }
+
     res.clearCookie("dq_jwt", { path: "/" })
     res.json({ success: true })
   } catch (error) {

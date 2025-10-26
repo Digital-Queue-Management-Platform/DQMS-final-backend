@@ -481,7 +481,7 @@ router.get("/officers", async (req, res) => {
 // Create new officer in manager's region
 router.post("/officers", async (req, res) => {
   try {
-    const { name, mobileNumber, outletId, counterNumber, isTraining, languages } = req.body
+    const { name, mobileNumber, outletId, counterNumber, isTraining, languages, assignedServices, services } = req.body
     
     // Check for JWT token
     let token = req.cookies?.dq_manager_jwt
@@ -545,8 +545,16 @@ router.post("/officers", async (req, res) => {
       officerData.isTraining = isTraining
     }
 
-    if (languages && languages.length > 0) {
-      officerData.assignedServices = languages
+    // Assign services and languages to proper fields
+    // Prefer 'assignedServices' field; fall back to 'services' for backward compatibility
+    if (Array.isArray(assignedServices) && assignedServices.length > 0) {
+      officerData.assignedServices = assignedServices
+    } else if (Array.isArray(services) && services.length > 0) {
+      officerData.assignedServices = services
+    }
+
+    if (Array.isArray(languages) && languages.length > 0) {
+      officerData.languages = languages
     }
 
     console.log("Creating officer with data:", JSON.stringify(officerData, null, 2))
@@ -578,7 +586,7 @@ router.post("/officers", async (req, res) => {
 router.patch("/officer/:officerId", async (req, res) => {
   try {
     const { officerId } = req.params
-    const { name, counterNumber, assignedServices, isTraining, languages } = req.body
+    const { name, counterNumber, assignedServices, isTraining, languages, services } = req.body
     
     // Check for JWT token
     let token = req.cookies?.dq_manager_jwt
@@ -642,8 +650,10 @@ router.patch("/officer/:officerId", async (req, res) => {
     if (name !== undefined) updateData.name = name
     if (counterNumber !== undefined) updateData.counterNumber = counterNumber
     if (isTraining !== undefined) updateData.isTraining = isTraining
-    if (assignedServices !== undefined) updateData.assignedServices = assignedServices
-    if (languages !== undefined) updateData.assignedServices = languages
+  // Update services and languages to the correct fields
+  if (assignedServices !== undefined) updateData.assignedServices = assignedServices
+  if (services !== undefined && assignedServices === undefined) updateData.assignedServices = services
+  if (languages !== undefined) updateData.languages = languages
 
     console.log("Updating officer with data:", JSON.stringify(updateData, null, 2))
     
