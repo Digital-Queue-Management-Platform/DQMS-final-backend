@@ -23,7 +23,7 @@ model Token {
   id                 String    @id @default(uuid())
   tokenNumber        Int
   customerId         String
-    serviceTypes       String[] @default([]) @map("serviceType")
+  serviceTypes       String[] @default([]) @map("serviceType")
   preferredLanguages Json?
   accountRef         String?
   status             String    @default("waiting")

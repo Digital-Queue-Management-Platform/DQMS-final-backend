@@ -180,7 +180,10 @@ router.post("/register", async (req, res) => {
           serviceTypes,
           outletId,
           status: "waiting",
-          preferredLanguages: preferredLanguages ? JSON.stringify(preferredLanguages) : undefined,
+          // Store preferredLanguages as a JSON array (not a string) for easier matching
+          preferredLanguages: Array.isArray(preferredLanguages) && preferredLanguages.length > 0
+            ? preferredLanguages
+            : undefined,
         },
         include: {
           customer: true,
