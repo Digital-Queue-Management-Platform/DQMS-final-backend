@@ -107,6 +107,76 @@ router.post("/register", async (req, res) => {
   }
 })
 
+// Create or update camera settings for an outlet
+router.post("/camera-settings", async (req, res) => {
+  try {
+    // Get token from cookie or Authorization header
+    let token = req.cookies?.dq_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+        console.log(token)
+      }
+    }
+
+    if (!token) {
+      return res.status(401).json({ error: "Not authenticated" })
+    }
+
+    // Verify token and get officerId
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch (e) {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    if (!payload.officerId) {
+      return res.status(401).json({ error: "Invalid token payload" })
+    }
+
+    // Get officer and their outlet
+    const officer = await prisma.officer.findUnique({
+      where: { id: payload.officerId }
+    })
+
+    if (!officer) {
+      return res.status(404).json({ error: "Officer not found" })
+    }
+
+    const { ipAddress, port, password } = req.body
+
+    if (!ipAddress || !port || !password) {
+      return res.status(400).json({ error: "Missing required fields: ipAddress, port, password" })
+    }
+
+    // Create or update camera settings using upsert with officer's outletId
+    const cameraSettings = await prisma.cameraSetting.upsert({
+      where: {
+        outletId: officer.outletId,
+      },
+      update: {
+        ipAddress,
+        port,
+        password,
+        updatedAt: new Date(),
+      },
+      create: {
+        outletId: officer.outletId,
+        ipAddress,
+        port,
+        password,
+      },
+    })
+
+    res.json({ success: true, cameraSettings })
+  } catch (error) {
+    console.error("Camera settings error:", error)
+    res.status(500).json({ error: "Failed to create/update camera settings" })
+  }
+})
+
 // Get next token in queue (supports cross-service fallback when enabled)
 router.post("/next-token", async (req, res) => {
   try {

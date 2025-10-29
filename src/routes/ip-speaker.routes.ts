@@ -1,6 +1,161 @@
 import { Router } from "express"
+import { prisma } from "../server"
+import * as jwt from "jsonwebtoken"
+import axios from "axios"
 
 const router = Router()
+const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
+
+// Test route to get camera settings based on officer's JWT token
+router.post("/testing", async (req, res) => {
+  try {
+    // Get the authorization header
+    const authHeader = req.headers.authorization
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: "No token provided" })
+    }
+
+    // Extract and verify the token
+    const token = authHeader.substring(7)
+    let payload: any
+    try {
+      payload = jwt.verify(token, JWT_SECRET)
+    } catch (e) {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    if (!payload.officerId) {
+      return res.status(401).json({ error: "Invalid token payload" })
+    }
+
+    // Get the officer and their outlet
+    const officer = await prisma.officer.findUnique({
+      where: { id: payload.officerId },
+      include: {
+        outlet: {
+          include: {
+            cameraSetting: true
+          }
+        }
+      }
+    })
+    if (!officer) {
+      return res.status(404).json({ error: "Officer not found" })
+    }
+
+    if (!officer.outlet) {
+      return res.status(404).json({ error: "Officer's outlet not found" })
+    }
+
+    // Return the camera settings if they exist
+    if (!officer.outlet.cameraSetting) {
+      return res.status(404).json({ error: "No camera settings found for this outlet" })
+    }
+
+    const responseData = { 
+      success: true, 
+      cameraSettings: {
+        ipAddress: officer.outlet.cameraSetting.ipAddress,
+        port: officer.outlet.cameraSetting.port,
+        password: officer.outlet.cameraSetting.password,
+      }
+    }
+    console.log('Camera settings response:', responseData.cameraSettings)
+    res.json(responseData)
+    setTimeout(() => {
+  console.log("3 seconds passed!");
+}, 3000);
+    const axiosResponse = await axios.get(`http://${officer.outlet.cameraSetting.ipAddress}:${officer.outlet.cameraSetting.port}/requests/status.json?command=in_play&input=http://10.40.215.117:8000/jbl.mp3`, {
+  auth: {
+    username: "",
+    password: `${officer.outlet.cameraSetting.password}`
+  }
+});
+  } catch (error) {
+    console.error("Testing route error:", error)
+    res.status(500).json({ error: "Internal server error" })
+  }
+})
+
+router.post("/custom", async (req, res) => {
+  try {
+    // Get the authorization header
+    const data = req.body
+    console.log('Custom route data received:', data)
+  
+    setTimeout(async () => {
+  console.log("3 seconds passed!");
+  const axiosResponse = await axios.get(`http://${data.ipAddress}:${data.port}/requests/status.json?command=in_play&input=http://10.40.215.117:8000/announce.mp3`, {
+auth: {
+  username: "",
+  password: `${data.password}`
+}
+});
+}, 6000);
+  } catch (error) {
+    console.error("Testing route error:", error)
+    res.status(500).json({ error: "Internal server error" })
+  }
+})
+
+router.get("/speaker-settings", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "No token provided" })
+    }
+
+    const token = authHeader.substring(7)
+    let payload: any
+    try {
+      payload = jwt.verify(token, JWT_SECRET)
+    } catch (e) {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    if (!payload?.officerId) {
+      return res.status(401).json({ error: "Invalid token payload" })
+    }
+
+    const officer = await prisma.officer.findUnique({
+      where: { id: payload.officerId },
+      include: {
+        outlet: {
+          include: {
+            cameraSetting: true
+          }
+        }
+      }
+    })
+
+    if (!officer) {
+      return res.status(404).json({ error: "Officer not found" })
+    }
+
+    if (!officer.outlet) {
+      return res.status(404).json({ error: "Officer's outlet not found" })
+    }
+
+    if (!officer.outlet.cameraSetting) {
+      return res.status(404).json({ error: "No camera settings found for this outlet" })
+    }
+
+    const responseData = {
+      success: true,
+      cameraSettings: {
+        ipAddress: officer.outlet.cameraSetting.ipAddress,
+        port: officer.outlet.cameraSetting.port,
+        password: officer.outlet.cameraSetting.password
+      }
+    }
+
+    console.log("camera-settings responseData:", responseData)
+    return res.json(responseData.cameraSettings)
+  } catch (error) {
+    console.error("camera-settings error:", error)
+    return res.status(500).json({ error: "Internal server error" })
+  }
+})
 
 // IP Speaker manufacturers and their API endpoints
 const IP_SPEAKER_APIS = {

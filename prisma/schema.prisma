@@ -74,6 +74,7 @@ model Outlet {
   region       Region    @relation(fields: [regionId], references: [id])
   tokens       Token[]
   managerQRTokens ManagerQRToken[]
+  cameraSetting CameraSetting?
 }
 
 model Region {
@@ -154,4 +155,16 @@ model ManagerQRToken {
   outlet      Outlet   @relation(fields: [outletId], references: [id])
 
   @@index([outletId])
+}
+
+model CameraSetting {
+  id          String   @id @default(uuid())
+  outletId    String   @unique
+  ipAddress   String
+  port        Int
+  password    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  outlet      Outlet   @relation(fields: [outletId], references: [id])
 }
