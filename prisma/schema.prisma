@@ -8,97 +8,129 @@ datasource db {
 }
 
 model Customer {
-  id              String     @id @default(uuid())
-  name            String
-  mobileNumber    String
-  createdAt       DateTime   @default(now())
-  sltMobileNumber String?
-  nicNumber       String?
-  email           String?
-  feedbacks       Feedback[]
-  tokens          Token[]
+  id                String             @id @default(uuid())
+  name              String
+  mobileNumber      String
+  createdAt         DateTime           @default(now())
+  sltMobileNumber   String?
+  nicNumber         String?
+  email             String?
+  feedbacks         Feedback[]
+  tokens            Token[]
+  completedServices CompletedService[]
 }
 
 model Token {
-  id                 String    @id @default(uuid())
+  id                 String             @id @default(uuid())
   tokenNumber        Int
   customerId         String
-  serviceTypes       String[] @default([]) @map("serviceType")
+  serviceTypes       String[]           @default([]) @map("serviceType")
   preferredLanguages Json?
   accountRef         String?
-  status             String    @default("waiting")
+  status             String             @default("waiting")
   outletId           String
   assignedTo         String?
   counterNumber      Int?
-  createdAt          DateTime  @default(now())
+  createdAt          DateTime           @default(now())
   calledAt           DateTime?
   startedAt          DateTime?
   completedAt        DateTime?
   feedback           Feedback?
-  officer            Officer?  @relation(fields: [assignedTo], references: [id])
-  customer           Customer  @relation(fields: [customerId], references: [id])
-  outlet             Outlet    @relation(fields: [outletId], references: [id])
+  completedServices  CompletedService[]
+  officer            Officer?           @relation(fields: [assignedTo], references: [id])
+  customer           Customer           @relation(fields: [customerId], references: [id])
+  outlet             Outlet             @relation(fields: [outletId], references: [id])
 
   @@index([outletId, status])
   @@index([assignedTo])
 }
 
+model TeleshopManager {
+  id                String             @id @default(uuid())
+  name              String
+  mobileNumber      String             @unique
+  email             String?
+  regionId          String
+  isActive          Boolean            @default(true)
+  createdAt         DateTime           @default(now())
+  lastLoginAt       DateTime?
+  region            Region             @relation(fields: [regionId], references: [id])
+  officers          Officer[]
+  completedServices CompletedService[]
+
+  @@index([regionId])
+  @@index([mobileNumber])
+}
+
 model Officer {
-  id               String     @id @default(uuid())
-  name             String
-  mobileNumber     String     @unique
-  outletId         String
-  status           String     @default("offline")
-  counterNumber    Int?
-  isTraining       Boolean    @default(false)
-  createdAt        DateTime   @default(now())
-  lastLoginAt      DateTime?
-  assignedServices Json?
-  languages        Json?
-  BreakLog         BreakLog[]
-  outlet           Outlet     @relation(fields: [outletId], references: [id])
-  tokens           Token[]
+  id                String             @id @default(uuid())
+  name              String
+  mobileNumber      String             @unique
+  outletId          String
+  teleshopManagerId String?
+  status            String             @default("offline")
+  counterNumber     Int?
+  isTraining        Boolean            @default(false)
+  createdAt         DateTime           @default(now())
+  lastLoginAt       DateTime?
+  assignedServices  Json?
+  languages         Json?
+  BreakLog          BreakLog[]
+  completedServices CompletedService[]
+  outlet            Outlet             @relation(fields: [outletId], references: [id])
+  teleshopManager   TeleshopManager?   @relation(fields: [teleshopManagerId], references: [id])
+  tokens            Token[]
 
   @@index([outletId, status])
+  @@index([teleshopManagerId])
 }
 
 model Outlet {
-  id           String    @id @default(uuid())
-  name         String
-  location     String
-  regionId     String
-  isActive     Boolean   @default(true)
-  createdAt    DateTime  @default(now())
-  counterCount Int?      @default(0)
-  officers     Officer[]
-  region       Region    @relation(fields: [regionId], references: [id])
-  tokens       Token[]
-  managerQRTokens ManagerQRToken[]
+  id                String             @id @default(uuid())
+  name              String
+  location          String
+  regionId          String
+  isActive          Boolean            @default(true)
+  createdAt         DateTime           @default(now())
+  counterCount      Int?               @default(0)
+  officers          Officer[]
+  completedServices CompletedService[]
+  region            Region             @relation(fields: [regionId], references: [id])
+  tokens            Token[]
+  managerQRTokens   ManagerQRToken[]
 }
 
 model Region {
-  id              String   @id @default(uuid())
-  name            String
-  managerId       String?
-  managerEmail    String?
-  managerMobile   String?
-  managerPassword String?
-  createdAt       DateTime @default(now())
-  outlets         Outlet[]
+  id               String            @id @default(uuid())
+  name             String
+  managerId        String?
+  managerEmail     String?
+  managerMobile    String?
+  managerPassword  String?
+  createdAt        DateTime          @default(now())
+  outlets          Outlet[]
+  teleshopManagers TeleshopManager[]
 }
 
 model Feedback {
-  id         String   @id @default(uuid())
-  tokenId    String   @unique
-  customerId String
-  rating     Int
-  comment    String?
-  createdAt  DateTime @default(now())
-  customer   Customer @relation(fields: [customerId], references: [id])
-  token      Token    @relation(fields: [tokenId], references: [id])
+  id                String   @id @default(uuid())
+  tokenId           String   @unique
+  customerId        String
+  rating            Int
+  comment           String?
+  assignedTo        String?  // Based on rating: admin, regional_manager, teleshop_manager
+  assignedToId      String?  // ID of the person/role it's assigned to
+  isResolved        Boolean  @default(false)
+  resolvedAt        DateTime?
+  resolvedBy        String?
+  resolutionComment String?
+  createdAt         DateTime @default(now())
+  customer          Customer @relation(fields: [customerId], references: [id])
+  token             Token    @relation(fields: [tokenId], references: [id])
 
   @@index([rating])
   @@index([createdAt])
+  @@index([assignedTo, assignedToId])
 }
 
 model Document {
@@ -127,12 +159,38 @@ model Alert {
 }
 
 model Service {
-  id          String   @id @default(uuid())
-  code        String   @unique
-  title       String
-  description String?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
+  id               String             @id @default(uuid())
+  code             String             @unique
+  title            String
+  description      String?
+  isActive         Boolean            @default(true)
+  createdAt        DateTime           @default(now())
+  completedServices CompletedService[]
+}
+
+model CompletedService {
+  id                String          @id @default(uuid())
+  tokenId           String
+  serviceId         String
+  officerId         String
+  teleshopManagerId String?
+  customerId        String
+  outletId          String
+  duration          Int?            // Service duration in minutes
+  notes             String?
+  completedAt       DateTime        @default(now())
+  
+  // Relations
+  token             Token           @relation(fields: [tokenId], references: [id])
+  service           Service         @relation(fields: [serviceId], references: [id])
+  officer           Officer         @relation(fields: [officerId], references: [id])
+  teleshopManager   TeleshopManager? @relation(fields: [teleshopManagerId], references: [id])
+  customer          Customer        @relation(fields: [customerId], references: [id])
+  outlet            Outlet          @relation(fields: [outletId], references: [id])
+
+  @@index([teleshopManagerId, completedAt])
+  @@index([officerId, completedAt])
+  @@index([outletId, completedAt])
 }
 
 model BreakLog {

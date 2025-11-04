@@ -69,7 +69,7 @@ async function main() {
   console.log("\n📋 Summary:")
   console.log(`   - Generated QR codes for ${outlets.length} outlets`)
   console.log(`   - Each QR code expires in 24 hours`)
-  console.log(`   - Regional managers can refresh QR codes as needed`)
+  console.log(`   - RTOMs can refresh QR codes as needed`)
   console.log(`   - QR codes are automatically generated when new outlets are created`)
 }
 
