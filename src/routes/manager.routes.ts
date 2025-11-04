@@ -9,19 +9,19 @@ const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 // No expiration for production system - managers need continuous access
 const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
 
-// Manager login - authenticate using email and password
+// RTOM login - authenticate using mobile number only
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body
+    const { mobileNumber } = req.body
 
-    if (!email || !password) {
-      return res.status(400).json({ error: "Email and password are required" })
+    if (!mobileNumber) {
+      return res.status(400).json({ error: "Mobile number is required" })
     }
 
-    // Find manager by email in the Region model
+    // Find manager by mobile number in the Region model
     const region = await prisma.region.findFirst({
       where: {
-        managerEmail: email,
+        managerMobile: mobileNumber,
       },
       include: {
         outlets: {
@@ -33,34 +33,17 @@ router.post("/login", async (req, res) => {
     })
 
     if (!region) {
-      return res.status(401).json({ error: "Manager not found" })
+      return res.status(401).json({ error: "RTOM not found with this mobile number" })
     }
 
-    // Check if manager has a password set (for new JWT auth)
-    // If no password is set, fall back to email-only authentication for backward compatibility
-    const regionWithPassword = region as any
-    if (regionWithPassword.managerPassword) {
-      // New JWT authentication with password
-      const isPasswordValid = await bcrypt.compare(password, regionWithPassword.managerPassword)
-      if (!isPasswordValid) {
-        return res.status(401).json({ error: "Invalid password" })
-      }
-    } else {
-      // Backward compatibility: email-only authentication
-      if (!password) {
-        // If no password provided and no password in DB, treat as legacy email-only login
-        console.log("Using legacy email-only authentication for manager:", email)
-      } else {
-        return res.status(401).json({ error: "Manager account not yet configured for password authentication. Please contact admin." })
-      }
-    }
+    console.log("RTOM mobile login successful for:", mobileNumber)
 
     // Create manager object from region data
     const manager = {
       id: region.managerId,
       name: region.managerId, // Manager name from admin registration
       email: region.managerEmail,
-      mobile: region.managerMobile,
+      mobileNumber: region.managerMobile,
       regionId: region.id,
       regionName: region.name,
       outlets: region.outlets
@@ -70,7 +53,8 @@ router.post("/login", async (req, res) => {
     const tokenOptions: any = { 
       managerId: region.managerId,
       managerName: region.managerId, // Include name in token
-      email: region.managerEmail, 
+      mobileNumber: region.managerMobile,
+      email: region.managerEmail, // Keep for backward compatibility 
       regionId: region.id 
     }
     
@@ -141,30 +125,35 @@ router.get("/me", async (req, res) => {
       }
     }
     
+    let managerMobile: string | undefined
     let managerEmail: string | undefined
 
     if (token) {
       // Try JWT authentication first
       try {
         const payload = (jwt as any).verify(token, JWT_SECRET)
-        managerEmail = payload.email
-        console.log("Manager JWT verified successfully for:", managerEmail)
+        managerMobile = payload.mobileNumber
+        managerEmail = payload.email // Keep for backward compatibility
+        console.log("RTOM JWT verified successfully for:", managerMobile || managerEmail)
       } catch (e: any) {
-        console.log("Manager JWT verification failed:", e.message || e)
+        console.log("RTOM JWT verification failed:", e.message || e)
         return res.status(401).json({ error: "Session expired. Please login again." })
       }
     } else {
-      // Fallback: check for email in query params or body (for backwards compatibility)
+      // Fallback: check for mobile or email in query params or body (for backwards compatibility)
+      managerMobile = (req.query.mobileNumber as string) || (req.body?.mobileNumber)
       managerEmail = (req.query.email as string) || (req.body?.email)
       
-      if (!managerEmail) {
-        return res.status(401).json({ error: "Manager authentication required. Please login again." })
+      if (!managerMobile && !managerEmail) {
+        return res.status(401).json({ error: "RTOM authentication required. Please login again." })
       }
     }
 
-    // Find region using the manager email
+    // Find region using the manager mobile or email (fallback)
     const region = await prisma.region.findFirst({
-      where: { managerEmail: managerEmail },
+      where: managerMobile ? 
+        { managerMobile: managerMobile } : 
+        { managerEmail: managerEmail },
       include: {
         outlets: {
           include: {
@@ -175,14 +164,14 @@ router.get("/me", async (req, res) => {
     })
 
     if (!region) {
-      return res.status(404).json({ error: "Manager not found" })
+      return res.status(404).json({ error: "RTOM not found" })
     }
 
     const manager = {
       id: region.managerId,
       name: region.managerId, // Manager name from admin registration
       email: region.managerEmail,
-      mobile: region.managerMobile,
+      mobileNumber: region.managerMobile,
       regionId: region.id,
       regionName: region.name,
       outlets: region.outlets
@@ -677,6 +666,319 @@ router.patch("/officer/:officerId", async (req, res) => {
     } else {
       res.status(500).json({ error: "Failed to update officer", details: error.message || "Unknown error" })
     }
+  }
+})
+
+// Get teleshop managers in region
+router.get("/teleshop-managers", async (req, res) => {
+  try {
+    // Check for JWT token
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+    
+    let managerEmail: string | undefined
+
+    if (token) {
+      try {
+        const payload = (jwt as any).verify(token, JWT_SECRET)
+        managerEmail = payload.email
+      } catch (e) {
+        return res.status(401).json({ error: "Invalid token" })
+      }
+    } else {
+      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
+      
+      if (!managerEmail) {
+        return res.status(401).json({ error: "Manager authentication required" })
+      }
+    }
+
+    // Find manager's region
+    const region = await prisma.region.findFirst({
+      where: { managerEmail: managerEmail }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager not found" })
+    }
+
+    // Get teleshop managers in this region
+    const teleshopManagers = await prisma.teleshopManager.findMany({
+      where: {
+        regionId: region.id
+      },
+      include: {
+        officers: {
+          include: {
+            outlet: true
+          }
+        }
+      },
+      orderBy: {
+        name: 'asc'
+      }
+    })
+
+    res.json(teleshopManagers)
+  } catch (error) {
+    console.error("Get teleshop managers error:", error)
+    res.status(500).json({ error: "Failed to get teleshop managers" })
+  }
+})
+
+// Create new teleshop manager
+router.post("/teleshop-managers", async (req, res) => {
+  try {
+    // Check for JWT token
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+    
+    let managerEmail: string | undefined
+
+    if (token) {
+      try {
+        const payload = (jwt as any).verify(token, JWT_SECRET)
+        managerEmail = payload.email
+      } catch (e) {
+        return res.status(401).json({ error: "Invalid token" })
+      }
+    } else {
+      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
+      
+      if (!managerEmail) {
+        return res.status(401).json({ error: "Manager authentication required" })
+      }
+    }
+
+    // Find manager's region
+    const region = await prisma.region.findFirst({
+      where: { managerEmail: managerEmail }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager not found" })
+    }
+
+    const { name, mobileNumber, email } = req.body
+
+    if (!name || !mobileNumber || !email) {
+      return res.status(400).json({ error: "Name, mobile number, and email are required" })
+    }
+
+    // Create teleshop manager
+    const teleshopManager = await prisma.teleshopManager.create({
+      data: {
+        name: name.trim(),
+        mobileNumber: mobileNumber.trim(),
+        email: email.trim(),
+        regionId: region.id
+      },
+      include: {
+        region: true,
+        officers: true
+      }
+    })
+
+    // Send welcome email to the teleshop manager
+    try {
+      const emailService = require('../services/emailService').default
+      const emailSent = await emailService.sendTeleshopManagerWelcomeEmail({
+        managerName: teleshopManager.name,
+        managerEmail: teleshopManager.email!,
+        managerMobile: teleshopManager.mobileNumber,
+        regionName: region.name,
+        loginUrl: 'https://digital-queue-management-platform.vercel.app/teleshop-manager/login'
+      })
+
+      if (emailSent) {
+        console.log('Welcome email sent successfully to teleshop manager:', teleshopManager.email)
+      } else {
+        console.error('Failed to send welcome email to teleshop manager:', teleshopManager.email)
+      }
+    } catch (emailError) {
+      console.error('Error sending welcome email:', emailError)
+      // Don't fail the teleshop manager creation if email fails
+    }
+
+    res.json({ success: true, teleshopManager })
+  } catch (error: any) {
+    console.error("Create teleshop manager error:", error)
+    
+    if (error.code === 'P2002') {
+      res.status(400).json({ error: "A teleshop manager with this mobile number already exists" })
+    } else {
+      res.status(500).json({ error: "Failed to create teleshop manager", details: error.message || "Unknown error" })
+    }
+  }
+})
+
+// Update teleshop manager
+router.patch("/teleshop-managers/:teleshopManagerId", async (req, res) => {
+  try {
+    // Check for JWT token
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+    
+    let managerEmail: string | undefined
+
+    if (token) {
+      try {
+        const payload = (jwt as any).verify(token, JWT_SECRET)
+        managerEmail = payload.email
+      } catch (e) {
+        return res.status(401).json({ error: "Invalid token" })
+      }
+    } else {
+      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
+      
+      if (!managerEmail) {
+        return res.status(401).json({ error: "Manager authentication required" })
+      }
+    }
+
+    // Find manager's region
+    const region = await prisma.region.findFirst({
+      where: { managerEmail: managerEmail }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager not found" })
+    }
+
+    const { teleshopManagerId } = req.params
+    const { name, mobileNumber, isActive } = req.body
+
+    // Verify teleshop manager belongs to this region
+    const existingTeleshopManager = await prisma.teleshopManager.findFirst({
+      where: {
+        id: teleshopManagerId,
+        regionId: region.id
+      }
+    })
+
+    if (!existingTeleshopManager) {
+      return res.status(403).json({ error: "Teleshop manager not found in your region" })
+    }
+
+    // Prepare update data
+    const updateData: any = {}
+    if (name !== undefined) updateData.name = name.trim()
+    if (mobileNumber !== undefined) updateData.mobileNumber = mobileNumber.trim()
+    if (isActive !== undefined) updateData.isActive = Boolean(isActive)
+
+    const teleshopManager = await prisma.teleshopManager.update({
+      where: { id: teleshopManagerId },
+      data: updateData,
+      include: {
+        region: true,
+        officers: {
+          include: {
+            outlet: true
+          }
+        }
+      }
+    })
+
+    res.json({ success: true, teleshopManager })
+  } catch (error: any) {
+    console.error("Update teleshop manager error:", error)
+    
+    if (error.code === 'P2002') {
+      res.status(400).json({ error: "A teleshop manager with this mobile number already exists" })
+    } else if (error.code === 'P2025') {
+      res.status(404).json({ error: "Teleshop manager not found" })
+    } else {
+      res.status(500).json({ error: "Failed to update teleshop manager", details: error.message || "Unknown error" })
+    }
+  }
+})
+
+// Delete teleshop manager
+router.delete("/teleshop-managers/:teleshopManagerId", async (req, res) => {
+  try {
+    // Check for JWT token
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+    
+    let managerEmail: string | undefined
+
+    if (token) {
+      try {
+        const payload = (jwt as any).verify(token, JWT_SECRET)
+        managerEmail = payload.email
+      } catch (e) {
+        return res.status(401).json({ error: "Invalid token" })
+      }
+    } else {
+      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
+      
+      if (!managerEmail) {
+        return res.status(401).json({ error: "Manager authentication required" })
+      }
+    }
+
+    // Find manager's region
+    const region = await prisma.region.findFirst({
+      where: { managerEmail: managerEmail }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager not found" })
+    }
+
+    const { teleshopManagerId } = req.params
+
+    // Verify teleshop manager belongs to this region
+    const existingTeleshopManager = await prisma.teleshopManager.findFirst({
+      where: {
+        id: teleshopManagerId,
+        regionId: region.id
+      },
+      include: {
+        officers: true
+      }
+    })
+
+    if (!existingTeleshopManager) {
+      return res.status(403).json({ error: "Teleshop manager not found in your region" })
+    }
+
+    // Check if teleshop manager has officers
+    if (existingTeleshopManager.officers.length > 0) {
+      return res.status(400).json({ 
+        error: `Cannot delete teleshop manager "${existingTeleshopManager.name}" because they have ${existingTeleshopManager.officers.length} officer(s). Please reassign the officers first.` 
+      })
+    }
+
+    // Delete the teleshop manager
+    await prisma.teleshopManager.delete({
+      where: { id: teleshopManagerId }
+    })
+
+    res.json({ success: true, message: `Teleshop manager "${existingTeleshopManager.name}" deleted successfully` })
+  } catch (error) {
+    console.error("Delete teleshop manager error:", error)
+    res.status(500).json({ error: "Failed to delete teleshop manager" })
   }
 })
 

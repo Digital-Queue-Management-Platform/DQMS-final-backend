@@ -414,25 +414,21 @@ router.post("/register-region", async (req, res) => {
       return res.status(400).json({ error: "Manager with this email already exists" })
     }
 
-    // Generate a secure 8-character password for the manager
-    const defaultPassword = generateSecurePassword()
-    const hashedPassword = await bcrypt.hash(defaultPassword, 10)
-
-    // Create region with manager password
+    // Create region with RTOM mobile-only login
     const region = await prisma.region.create({
       data: {
         name,
         managerId: managerName || undefined,
         managerEmail: managerEmail,
         managerMobile: managerMobile || undefined,
-        managerPassword: hashedPassword,
+        // No password needed - RTOMs login with mobile number only
       } as any,
     })
 
-    let credentials: ManagerCredentials = {
+    let credentials: any = {
       email: managerEmail,
-      temporaryPassword: defaultPassword,
-      message: "Please provide these credentials to the regional manager"
+      mobileNumber: managerMobile,
+      message: "Please provide these credentials to the RTOM"
     }
     
     // Send welcome email to the manager
@@ -440,10 +436,10 @@ router.post("/register-region", async (req, res) => {
       const loginUrl = 'https://digital-queue-management-platform.vercel.app/manager/login'
       
       const emailResult = await emailService.sendManagerWelcomeEmail({
-        managerName: managerName || 'Regional Manager',
+        managerName: managerName || 'RTOM',
         managerEmail: managerEmail,
+        managerMobile: managerMobile,
         regionName: name,
-        temporaryPassword: credentials.temporaryPassword,
         loginUrl: loginUrl
       })
       
@@ -486,7 +482,7 @@ router.post("/register-region", async (req, res) => {
   }
 })
 
-// Get all regional managers
+// Get all RTOMs
 router.get("/managers", async (req, res) => {
   try {
     const regions = await prisma.region.findMany({
@@ -530,67 +526,31 @@ router.post("/managers/:regionId/reset-password", async (req, res) => {
         id: true,
         name: true,
         managerId: true,
-        managerEmail: true
+        managerEmail: true,
+        managerMobile: true
       }
     })
 
     if (!region) {
-      return res.status(404).json({ error: "Manager not found" })
+      return res.status(404).json({ error: "RTOM not found" })
     }
 
     if (!region.managerEmail) {
-      return res.status(400).json({ error: "Manager email not found" })
+      return res.status(400).json({ error: "RTOM email not found" })
     }
 
-    // Generate a secure 8-character password
-    const newPassword = generateSecurePassword()
-    const hashedPassword = await bcrypt.hash(newPassword, 10)
-
-    // Update the password in database
-    await prisma.region.update({
-      where: { id: regionId },
-      data: { managerPassword: hashedPassword } as any,
+    // RTOMs use mobile-only login, provide mobile number info
+    res.json({ 
+      success: true, 
+      message: "RTOM uses mobile number login. No password required.",
+      loginMethod: "mobile",
+      mobileNumber: region.managerMobile,
+      instructions: "RTOM can login directly using their mobile number at the RTOM portal."
     })
 
-    // Send password reset email
-    try {
-      // Always use production URL for password reset emails
-      const loginUrl = 'https://digital-queue-management-platform.vercel.app/manager/login'
-      
-      const emailResult = await emailService.sendManagerPasswordResetEmail({
-        managerName: region.managerId || 'Regional Manager',
-        managerEmail: region.managerEmail,
-        regionName: region.name,
-        newPassword: newPassword,
-        loginUrl: loginUrl
-      })
-      
-      if (emailResult) {
-        res.json({ 
-          success: true, 
-          message: "Password reset successfully. New password sent to manager's email.",
-          emailSent: true
-        })
-      } else {
-        res.json({ 
-          success: true, 
-          message: "Password reset successfully, but email notification failed. Please provide the new password manually.",
-          emailSent: false,
-          temporaryPassword: newPassword // Only send if email fails
-        })
-      }
-    } catch (emailError) {
-      console.error("Email sending error:", emailError)
-      res.json({ 
-        success: true, 
-        message: "Password reset successfully, but email notification failed. Please provide the new password manually.",
-        emailSent: false,
-        temporaryPassword: newPassword // Only send if email fails
-      })
-    }
   } catch (error) {
-    console.error("Reset manager password error:", error)
-    res.status(500).json({ error: "Failed to reset manager password" })
+    console.error("RTOM info retrieval error:", error)
+    res.status(500).json({ error: "Failed to retrieve RTOM information" })
   }
 })
 
