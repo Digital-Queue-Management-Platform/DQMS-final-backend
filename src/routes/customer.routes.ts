@@ -2,11 +2,146 @@ import { Router } from "express"
 import { prisma, broadcast } from "../server"
 import { getLastDailyReset } from "../utils/resetWindow"
 import * as jwt from "jsonwebtoken"
+import Twilio from "twilio"
 
 const router = Router()
 
 const QR_JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 const QR_JWT_EXPIRES = process.env.QR_JWT_EXPIRES || "5m" // short-lived token
+
+// OTP verification config
+const OTP_JWT_SECRET = process.env.OTP_JWT_SECRET || "otp-dev-secret"
+const OTP_JWT_EXPIRES = process.env.OTP_JWT_EXPIRES || "10m"
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || ""
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || ""
+const TWILIO_FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || ""
+const OTP_DEV_MODE = process.env.OTP_DEV_MODE === "true"
+const OTP_DEV_ECHO = process.env.OTP_DEV_ECHO === "true"
+
+const twilioClient = (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN)
+  ? Twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+  : null
+
+// In-memory OTP store (mobile -> record)
+type OtpRecord = {
+  code: string
+  expiresAt: number
+  attempts: number
+  lastSentAt: number
+}
+const otpStore = new Map<string, OtpRecord>()
+
+const now = () => Date.now()
+const genOtp = () => Math.floor(100000 + Math.random() * 900000).toString()
+const FIVE_MIN = 5 * 60 * 1000
+const RESEND_WINDOW = 30 * 1000
+
+function toE164(mobile: string): string {
+  // Default to Sri Lanka if starting with 0 and length 10: 07XXXXXXXX -> +947XXXXXXXX
+  const cleaned = (mobile || "").replace(/\D/g, "")
+  if (!cleaned) return mobile
+  if (cleaned.startsWith("0") && cleaned.length === 10) {
+    return "+94" + cleaned.substring(1)
+  }
+  if (cleaned.startsWith("94") && cleaned.length === 11) {
+    return "+" + cleaned
+  }
+  if (mobile.startsWith("+")) return mobile
+  // As a fallback, prefix + if it seems already international without +
+  return mobile.startsWith("+") ? mobile : "+" + cleaned
+}
+
+// Start OTP: send code to mobile
+router.post("/otp/start", async (req, res) => {
+  try {
+    const { mobileNumber } = req.body || {}
+    if (!mobileNumber) return res.status(400).json({ error: "mobileNumber is required" })
+
+  // Prefer explicit DEV mode override first
+  const twilioConfigured = !!(twilioClient && TWILIO_FROM_NUMBER)
+
+    const key = mobileNumber
+    const existing = otpStore.get(key)
+    if (existing && now() - existing.lastSentAt < RESEND_WINDOW) {
+      const wait = Math.ceil((RESEND_WINDOW - (now() - existing.lastSentAt)) / 1000)
+      return res.status(429).json({ error: `Please wait ${wait}s before requesting another OTP` })
+    }
+
+    const code = genOtp()
+    const record: OtpRecord = {
+      code,
+      expiresAt: now() + FIVE_MIN,
+      attempts: 0,
+      lastSentAt: now(),
+    }
+    otpStore.set(key, record)
+
+    const to = toE164(mobileNumber)
+    const body = `Your verification code is ${code}. It expires in 5 minutes.`
+
+    // DEV mode takes precedence even if Twilio is configured
+    if (OTP_DEV_MODE) {
+      console.log(`[OTP-DEV] OTP for ${to}: ${code}`)
+      return res.json({ success: true, message: "OTP sent (dev mode)", ...(OTP_DEV_ECHO ? { devCode: code } : {}) })
+    }
+
+    if (!twilioConfigured) {
+      return res.status(500).json({ error: "OTP service not configured" })
+    }
+
+    await twilioClient!.messages.create({
+      to,
+      from: TWILIO_FROM_NUMBER,
+      body,
+    })
+
+    res.json({ success: true, message: "OTP sent" })
+  } catch (error) {
+    console.error("OTP start error:", error)
+    res.status(500).json({ error: "Failed to send OTP" })
+  }
+})
+
+// Verify OTP: validate code and return a short-lived JWT proving verification
+router.post("/otp/verify", async (req, res) => {
+  try {
+    const { mobileNumber, code } = req.body || {}
+    if (!mobileNumber || !code) return res.status(400).json({ error: "mobileNumber and code are required" })
+
+    const key = mobileNumber
+    const record = otpStore.get(key)
+    if (!record) return res.status(400).json({ error: "OTP not requested" })
+
+    if (now() > record.expiresAt) {
+      otpStore.delete(key)
+      return res.status(400).json({ error: "OTP expired" })
+    }
+
+    if (record.attempts >= 5) {
+      otpStore.delete(key)
+      return res.status(429).json({ error: "Too many attempts. Request a new OTP." })
+    }
+
+    record.attempts += 1
+    if (record.code !== String(code)) {
+      return res.status(400).json({ error: "Invalid OTP code" })
+    }
+
+    // Success: issue a short-lived token binding this mobile number
+    const verifiedToken = (jwt as any).sign(
+      { purpose: "phone_verification", mobileNumber },
+      OTP_JWT_SECRET as jwt.Secret,
+      { expiresIn: OTP_JWT_EXPIRES }
+    )
+    // Clean up used record
+    otpStore.delete(key)
+
+    res.json({ success: true, verifiedMobileToken: verifiedToken, expiresIn: OTP_JWT_EXPIRES })
+  } catch (error) {
+    console.error("OTP verify error:", error)
+    res.status(500).json({ error: "Failed to verify OTP" })
+  }
+})
 
 // Issue a short-lived QR token for a given outlet; used to embed in the QR code URL
 router.get("/qr-token/:outletId", async (req, res) => {
@@ -53,13 +188,23 @@ router.get("/validate-qr", async (req, res) => {
 // Register customer and create token
 router.post("/register", async (req, res) => {
   try {
-    const { name, mobileNumber, serviceTypes, outletId, qrToken, preferredLanguages, sltMobileNumber, nicNumber, email } = req.body
+    const { name, mobileNumber, serviceTypes, outletId, qrToken, preferredLanguages, sltMobileNumber, nicNumber, email, verifiedMobileToken } = req.body
 
     console.log(`Registration attempt - Mobile: ${mobileNumber}, Outlet: ${outletId}, Services: ${serviceTypes}`)
 
     // Validate input
     if (!name || !mobileNumber || !Array.isArray(serviceTypes) || serviceTypes.length === 0 || !outletId) {
       return res.status(400).json({ error: "Missing required fields" })
+    }
+
+    // Enforce phone verification via OTP
+    try {
+      const payload = (jwt as any).verify(verifiedMobileToken || "", OTP_JWT_SECRET as jwt.Secret) as any
+      if (payload?.purpose !== "phone_verification" || payload?.mobileNumber !== mobileNumber) {
+        return res.status(403).json({ error: "Phone verification required" })
+      }
+    } catch {
+      return res.status(403).json({ error: "Phone verification required" })
     }
 
     // Enforce QR gating: require a valid QR token bound to this outlet (unless outlet is specified directly)
