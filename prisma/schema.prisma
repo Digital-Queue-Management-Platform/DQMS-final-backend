@@ -98,6 +98,7 @@ model Outlet {
   region            Region             @relation(fields: [regionId], references: [id])
   tokens            Token[]
   managerQRTokens   ManagerQRToken[]
+  appointments      Appointment[]
 }
 
 model Region {
@@ -212,4 +213,26 @@ model ManagerQRToken {
   outlet      Outlet   @relation(fields: [outletId], references: [id])
 
   @@index([outletId])
+}
+
+model Appointment {
+  id                String   @id @default(uuid())
+  name              String
+  mobileNumber      String
+  outletId          String
+  serviceTypes      String[]
+  preferredLanguage String?  // 'en' | 'si' | 'ta'
+  appointmentAt     DateTime
+  status            String   @default("booked") // booked | queued | completed | cancelled | no_show
+  tokenId           String?
+  notes             String?
+  createdAt         DateTime @default(now())
+  queuedAt          DateTime?
+  completedAt       DateTime?
+
+  outlet            Outlet   @relation(fields: [outletId], references: [id])
+
+  @@index([outletId, appointmentAt])
+  @@index([mobileNumber, appointmentAt])
+  @@index([status, appointmentAt])
 }
