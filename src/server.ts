@@ -5,7 +5,7 @@ import dotenv from "dotenv"
 import { WebSocketServer } from "ws"
 import { createServer } from "http"
 import { PrismaClient } from "@prisma/client"
-import { getNextDailyReset } from "./utils/resetWindow"
+import { getNextDailyReset, getLastDailyReset } from "./utils/resetWindow"
 
 // Import routes
 import customerRoutes from "./routes/customer.routes"
@@ -16,6 +16,7 @@ import feedbackRoutes from "./routes/feedback.routes"
 import documentRoutes from "./routes/document.routes"
 import managerRoutes from "./routes/manager.routes"
 import teleshopManagerRoutes from "./routes/teleshop-manager.routes"
+import appointmentRoutes from "./routes/appointment.routes"
 import ipSpeakerRoutes from "./routes/ip-speaker.routes"
 
 dotenv.config()
@@ -79,6 +80,7 @@ app.use("/api/document", documentRoutes)
 app.use("/api/manager", managerRoutes)
 app.use("/api/teleshop-manager", teleshopManagerRoutes)
 app.use("/api/ip-speaker", ipSpeakerRoutes)
+app.use("/api/appointment", appointmentRoutes)
 
 // Health check
 app.get("/api/health", (req, res) => {
@@ -135,6 +137,107 @@ const checkLongWait = async () => {
 // Allow disabling the job via env if needed (e.g., multi-instance deployments)
 if (process.env.DISABLE_LONG_WAIT_JOB !== "true") {
   setInterval(checkLongWait, LONG_WAIT_CHECK_MS)
+}
+
+// Auto-enqueue upcoming appointments
+const APPOINTMENT_ENQUEUE_AHEAD_MIN = Number(process.env.APPOINTMENT_ENQUEUE_AHEAD_MIN || 15) // minutes before slot
+const APPOINTMENT_POLL_MS = 60 * 1000
+
+async function processAppointments() {
+  try {
+    const now = new Date()
+    const ahead = new Date(now.getTime() + APPOINTMENT_ENQUEUE_AHEAD_MIN * 60 * 1000)
+
+    // Fetch due appointments (booked, today, appointmentAt <= ahead)
+    const startOfDay = new Date()
+    startOfDay.setHours(0,0,0,0)
+    const endOfDay = new Date()
+    endOfDay.setHours(23,59,59,999)
+
+    const dueAppointments: any = await prisma.$queryRaw`
+      SELECT * FROM "Appointment"
+      WHERE "status" = 'booked'
+        AND "appointmentAt" >= ${startOfDay}
+        AND "appointmentAt" <= ${ahead}
+      ORDER BY "appointmentAt" ASC
+    `
+
+    for (const appt of dueAppointments as any[]) {
+      try {
+        const result = await prisma.$transaction(async (tx) => {
+          // Skip if already queued
+          const apptRows = await (tx as any).$queryRaw`SELECT * FROM "Appointment" WHERE "id" = ${appt.id} FOR UPDATE`
+          const apptRow: any = Array.isArray(apptRows) ? apptRows[0] : null
+          if (!apptRow || apptRow.status !== 'booked') return
+
+          // Check existing active token today
+          const lastReset = getLastDailyReset()
+          const existingToken: any = await tx.token.findFirst({
+            where: {
+              outletId: apptRow.outletId,
+              status: { in: ["waiting", "in_service"] },
+              createdAt: { gte: lastReset },
+              customer: { mobileNumber: apptRow.mobileNumber }
+            },
+            include: { customer: true }
+          })
+
+          let tokenId = existingToken?.id
+          let createdTokenId: string | null = null
+          if (!existingToken) {
+            // Ensure customer exists
+            let customer = await tx.customer.findFirst({ where: { mobileNumber: apptRow.mobileNumber } })
+            if (!customer) {
+              customer = await tx.customer.create({ data: { name: apptRow.name, mobileNumber: apptRow.mobileNumber } })
+            }
+
+            // Next token number for outlet today
+            const lastToken = await tx.token.findFirst({
+              where: { outletId: apptRow.outletId, createdAt: { gte: lastReset } },
+              orderBy: { tokenNumber: 'desc' },
+              select: { tokenNumber: true }
+            })
+            const tokenNumber = (lastToken?.tokenNumber || 0) + 1
+
+            const newToken = await tx.token.create({
+              data: {
+                tokenNumber,
+                customerId: customer.id,
+                serviceTypes: apptRow.serviceTypes,
+                outletId: apptRow.outletId,
+                status: 'waiting',
+                preferredLanguages: apptRow.preferredLanguage ? [apptRow.preferredLanguage] : undefined,
+              }
+            })
+            tokenId = newToken.id
+            createdTokenId = newToken.id
+          }
+
+          // Update appointment to queued
+          await tx.$executeRaw`
+            UPDATE "Appointment"
+            SET "status" = 'queued', "queuedAt" = now(), "tokenId" = ${tokenId}
+            WHERE "id" = ${apptRow.id}
+          `
+
+          return { createdTokenId, outletId: apptRow.outletId }
+        }, { timeout: 10000 })
+
+        if (result?.createdTokenId) {
+          // Notify clients so officer queue refreshes automatically
+          broadcast({ type: 'NEW_TOKEN', data: { tokenId: result.createdTokenId, outletId: result.outletId } })
+        }
+      } catch (e) {
+        console.error('Failed to enqueue appointment', appt?.id, e)
+      }
+    }
+  } catch (err) {
+    console.error('Appointment processing error:', err)
+  }
+}
+
+if (process.env.DISABLE_APPOINTMENT_JOB !== 'true') {
+  setInterval(processAppointments, APPOINTMENT_POLL_MS)
 }
 
 // Daily reset signal: broadcast an event exactly at the configured reset time

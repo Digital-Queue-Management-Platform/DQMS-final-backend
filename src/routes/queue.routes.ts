@@ -42,6 +42,22 @@ router.get("/outlet/:outletId", async (req, res) => {
         },
       })
 
+      // Determine which waiting tokens originated from appointments
+      const waitingTokenIds = waitingTokens.map((t) => t.id)
+      let appointmentTokenIdSet = new Set<string>()
+      if (waitingTokenIds.length > 0) {
+        // Use raw query for broad compatibility across client versions
+        const appts: any[] = await tx.$queryRaw`
+          SELECT "tokenId" FROM "Appointment" WHERE "tokenId" = ANY(${waitingTokenIds})
+        `
+        appointmentTokenIdSet = new Set((appts || []).map((a: any) => a.tokenId).filter(Boolean) as string[])
+      }
+      // Attach a non-schema helper flag for frontend rendering
+      const waitingWithFlags = waitingTokens.map((t: any) => ({
+        ...t,
+        fromAppointment: appointmentTokenIdSet.has(t.id),
+      }))
+
       const inServiceTokens = await tx.token.findMany({
         where: {
           outletId,
@@ -62,7 +78,7 @@ router.get("/outlet/:outletId", async (req, res) => {
       })
 
       return {
-        waiting: waitingTokens,
+        waiting: waitingWithFlags,
         inService: inServiceTokens,
         availableOfficers,
         totalWaiting: waitingTokens.length,
