@@ -18,6 +18,8 @@ import managerRoutes from "./routes/manager.routes"
 import teleshopManagerRoutes from "./routes/teleshop-manager.routes"
 import appointmentRoutes from "./routes/appointment.routes"
 import ipSpeakerRoutes from "./routes/ip-speaker.routes"
+import twilioRoutes from "./routes/twilio.routes"
+
 
 dotenv.config()
 
@@ -81,7 +83,7 @@ app.use("/api/manager", managerRoutes)
 app.use("/api/teleshop-manager", teleshopManagerRoutes)
 app.use("/api/ip-speaker", ipSpeakerRoutes)
 app.use("/api/appointment", appointmentRoutes)
-app.use("/api/test", appointmentRoutes)
+app.use("/api/test", twilioRoutes)
 
 
 // Health check
