@@ -83,7 +83,7 @@ app.use("/api/manager", managerRoutes)
 app.use("/api/teleshop-manager", teleshopManagerRoutes)
 app.use("/api/ip-speaker", ipSpeakerRoutes)
 app.use("/api/appointment", appointmentRoutes)
-app.use("/api/test", twilioRoutes)
+app.use("/api/twilio", twilioRoutes)
 
 
 // Health check

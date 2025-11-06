@@ -28,9 +28,8 @@ router.get("/outlet/:outletId", async (req, res) => {
     const { outletId } = req.params
     const lastReset = getLastDailyReset()
 
-    // Use a transaction to ensure consistent data
-    const queueData = await prisma.$transaction(async (tx) => {
-      const waitingTokens = await tx.token.findMany({
+    // Fetch in separate queries to avoid long-lived interactive transaction issues (P2028)
+    const waitingTokens = await prisma.token.findMany({
         where: {
           outletId,
           status: { in: ["waiting", "skipped"] },
@@ -42,50 +41,47 @@ router.get("/outlet/:outletId", async (req, res) => {
         },
       })
 
-      // Determine which waiting tokens originated from appointments
-      const waitingTokenIds = waitingTokens.map((t) => t.id)
-      let appointmentTokenIdSet = new Set<string>()
-      if (waitingTokenIds.length > 0) {
-        // Use raw query for broad compatibility across client versions
-        const appts: any[] = await tx.$queryRaw`
-          SELECT "tokenId" FROM "Appointment" WHERE "tokenId" = ANY(${waitingTokenIds})
-        `
-        appointmentTokenIdSet = new Set((appts || []).map((a: any) => a.tokenId).filter(Boolean) as string[])
-      }
-      // Attach a non-schema helper flag for frontend rendering
-      const waitingWithFlags = waitingTokens.map((t: any) => ({
-        ...t,
-        fromAppointment: appointmentTokenIdSet.has(t.id),
-      }))
+    // Determine which waiting tokens originated from appointments
+    const waitingTokenIds = waitingTokens.map((t) => t.id)
+    let appointmentTokenIdSet = new Set<string>()
+    if (waitingTokenIds.length > 0) {
+      // Use raw query for broad compatibility across client versions
+      const appts: any[] = await prisma.$queryRaw`
+        SELECT "tokenId" FROM "Appointment" WHERE "tokenId" = ANY(${waitingTokenIds})
+      `
+      appointmentTokenIdSet = new Set((appts || []).map((a: any) => a.tokenId).filter(Boolean) as string[])
+    }
+    // Attach a non-schema helper flag for frontend rendering
+    const waitingWithFlags = waitingTokens.map((t: any) => ({
+      ...t,
+      fromAppointment: appointmentTokenIdSet.has(t.id),
+    }))
 
-      const inServiceTokens = await tx.token.findMany({
-        where: {
-          outletId,
-          status: "in_service",
-          createdAt: { gte: lastReset },
-        },
-        include: {
-          customer: true,
-          officer: true,
-        },
-      })
-
-      const availableOfficers = await tx.officer.count({
-        where: {
-          outletId,
-          status: "available",
-        },
-      })
-
-      return {
-        waiting: waitingWithFlags,
-        inService: inServiceTokens,
-        availableOfficers,
-        totalWaiting: waitingTokens.length,
-      }
+    const inServiceTokens = await prisma.token.findMany({
+      where: {
+        outletId,
+        status: "in_service",
+        createdAt: { gte: lastReset },
+      },
+      include: {
+        customer: true,
+        officer: true,
+      },
     })
 
-    res.json(queueData)
+    const availableOfficers = await prisma.officer.count({
+      where: {
+        outletId,
+        status: "available",
+      },
+    })
+
+    res.json({
+      waiting: waitingWithFlags,
+      inService: inServiceTokens,
+      availableOfficers,
+      totalWaiting: waitingTokens.length,
+    })
   } catch (error) {
     console.error("Queue fetch error:", error)
     res.status(500).json({ error: "Failed to fetch queue" })
