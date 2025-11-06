@@ -81,6 +81,8 @@ app.use("/api/manager", managerRoutes)
 app.use("/api/teleshop-manager", teleshopManagerRoutes)
 app.use("/api/ip-speaker", ipSpeakerRoutes)
 app.use("/api/appointment", appointmentRoutes)
+app.use("/api/test", appointmentRoutes)
+
 
 // Health check
 app.get("/api/health", (req, res) => {
