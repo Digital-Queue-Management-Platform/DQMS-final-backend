@@ -14,13 +14,13 @@ const client = twilio(accountSid as string, authToken as string)
 router.post('/test', async (req, res) => {
   try {
     const { to, body: messageBody = 'Test message from DQMS' } = req.body
-    const accountSid = 'AC29f068a67e514a456dd04b485eb43602';
-const authToken = 'c8c39638215ad0587aa5b4c8cd7a1114';
+    const accountSid = process.env.TWILIO_ACCOUNT_SID || '';
+const authToken = process.env.TWILIO_AUTH_TOKEN || '';
 const client = require('twilio')(accountSid, authToken);
 client.messages
     .create({
         body: 'Ahoy 👋',
-        messagingServiceSid: 'MG865db1b9c135edbeb85e755570c561cb',
+        messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID || 'MG865db1b9c135edbeb85e755570c561cb',
         to: '+94718738041'
     })
     .then((message: { sid: any }) => console.log(message.sid));
