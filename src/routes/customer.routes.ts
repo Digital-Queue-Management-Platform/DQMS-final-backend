@@ -12,14 +12,14 @@ const QR_JWT_EXPIRES = process.env.QR_JWT_EXPIRES || "5m" // short-lived token
 // OTP verification config
 const OTP_JWT_SECRET = process.env.OTP_JWT_SECRET || "otp-dev-secret"
 const OTP_JWT_EXPIRES = process.env.OTP_JWT_EXPIRES || "10m"
-const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || ""
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || ""
-const TWILIO_FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || ""
+const TWILIO_ACCOUNT_SID1 = process.env.TWILIO_ACCOUNT_SID1 || ""
+const TWILIO_AUTH_TOKEN1 = process.env.TWILIO_AUTH_TOKEN1 || ""
+const TWILIO_FROM_NUMBER1 = process.env.TWILIO_FROM_NUMBER1 || ""
 const OTP_DEV_MODE = process.env.OTP_DEV_MODE === "true"
 const OTP_DEV_ECHO = process.env.OTP_DEV_ECHO === "true"
 
-const twilioClient = (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN)
-  ? Twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+const twilioClient = (TWILIO_ACCOUNT_SID1 && TWILIO_AUTH_TOKEN1)
+  ? Twilio(TWILIO_ACCOUNT_SID1, TWILIO_AUTH_TOKEN1)
   : null
 
 // In-memory OTP store (mobile -> record)
@@ -58,7 +58,7 @@ router.post("/otp/start", async (req, res) => {
     if (!mobileNumber) return res.status(400).json({ error: "mobileNumber is required" })
 
   // Prefer explicit DEV mode override first
-  const twilioConfigured = !!(twilioClient && TWILIO_FROM_NUMBER)
+  const twilioConfigured = !!(twilioClient && TWILIO_FROM_NUMBER1)
 
     const key = mobileNumber
     const existing = otpStore.get(key)
@@ -91,7 +91,7 @@ router.post("/otp/start", async (req, res) => {
 
     await twilioClient!.messages.create({
       to,
-      from: TWILIO_FROM_NUMBER,
+      from: TWILIO_FROM_NUMBER1,
       body,
     })
 
