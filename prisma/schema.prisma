@@ -18,6 +18,7 @@ model Customer {
   feedbacks         Feedback[]
   tokens            Token[]
   completedServices CompletedService[]
+  serviceCases      ServiceCase[]
 }
 
 model Token {
@@ -37,6 +38,7 @@ model Token {
   completedAt        DateTime?
   feedback           Feedback?
   completedServices  CompletedService[]
+  serviceCases       ServiceCase[]
   officer            Officer?           @relation(fields: [assignedTo], references: [id])
   customer           Customer           @relation(fields: [customerId], references: [id])
   outlet             Outlet             @relation(fields: [outletId], references: [id])
@@ -77,6 +79,7 @@ model Officer {
   languages         Json?
   BreakLog          BreakLog[]
   completedServices CompletedService[]
+  serviceCases      ServiceCase[]
   outlet            Outlet             @relation(fields: [outletId], references: [id])
   teleshopManager   TeleshopManager?   @relation(fields: [teleshopManagerId], references: [id])
   tokens            Token[]
@@ -95,6 +98,7 @@ model Outlet {
   counterCount      Int?               @default(0)
   officers          Officer[]
   completedServices CompletedService[]
+  serviceCases      ServiceCase[]
   region            Region             @relation(fields: [regionId], references: [id])
   tokens            Token[]
   managerQRTokens   ManagerQRToken[]
@@ -235,4 +239,44 @@ model Appointment {
   @@index([outletId, appointmentAt])
   @@index([mobileNumber, appointmentAt])
   @@index([status, appointmentAt])
+}
+
+// Service Tracking: a multi-stage process after the counter service completes
+model ServiceCase {
+  id            String      @id @default(uuid())
+  refNumber     String      @unique
+  tokenId       String
+  outletId      String
+  officerId     String
+  teleshopManagerId String?
+  customerId    String
+  serviceTypes  String[]
+  status        String      @default("open") // open | completed | cancelled
+  createdAt     DateTime    @default(now())
+  completedAt   DateTime?
+  lastUpdatedAt DateTime    @default(now())
+
+  // Relations
+  token         Token       @relation(fields: [tokenId], references: [id])
+  outlet        Outlet      @relation(fields: [outletId], references: [id])
+  officer       Officer     @relation(fields: [officerId], references: [id])
+  customer      Customer    @relation(fields: [customerId], references: [id])
+  updates       ServiceCaseUpdate[]
+
+  @@index([refNumber])
+  @@index([outletId, createdAt])
+}
+
+model ServiceCaseUpdate {
+  id         String      @id @default(uuid())
+  caseId     String
+  actorRole  String
+  actorId    String?
+  status     String?
+  note       String
+  createdAt  DateTime    @default(now())
+
+  serviceCase ServiceCase @relation(fields: [caseId], references: [id])
+
+  @@index([caseId, createdAt])
 }
