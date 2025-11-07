@@ -978,3 +978,63 @@ router.patch("/feedback/:feedbackId/resolve", async (req: any, res) => {
 })
 
 export default router
+
+// Service case updates (Teleshop Manager)
+router.post('/service-case/update', async (req: any, res) => {
+  try {
+    const tm = req.teleshopManager
+    const { refNumber, note, status } = req.body || {}
+    if (!refNumber || !note) return res.status(400).json({ error: 'refNumber and note are required' })
+
+    const sc: any = await (prisma as any).serviceCase.findUnique({ where: { refNumber } })
+    if (!sc) return res.status(404).json({ error: 'Reference not found' })
+
+    const upd = await (prisma as any).serviceCaseUpdate.create({
+      data: {
+        caseId: sc.id,
+        actorRole: 'teleshop_manager',
+        actorId: tm.id,
+        status: status || null,
+        note,
+      }
+    })
+
+    await (prisma as any).serviceCase.update({ where: { id: sc.id }, data: { lastUpdatedAt: new Date() } })
+
+    res.json({ success: true, update: upd })
+  } catch (e) {
+    console.error('Teleshop manager service-case update error:', e)
+    res.status(500).json({ error: 'Failed to add update' })
+  }
+})
+
+router.post('/service-case/complete', async (req: any, res) => {
+  try {
+    const tm = req.teleshopManager
+    const { refNumber, note } = req.body || {}
+    if (!refNumber) return res.status(400).json({ error: 'refNumber is required' })
+
+    const sc: any = await (prisma as any).serviceCase.findUnique({ where: { refNumber } })
+    if (!sc) return res.status(404).json({ error: 'Reference not found' })
+
+    const updated = await (prisma as any).serviceCase.update({
+      where: { id: sc.id },
+      data: { status: 'completed', completedAt: new Date(), lastUpdatedAt: new Date() }
+    })
+
+    await (prisma as any).serviceCaseUpdate.create({
+      data: {
+        caseId: sc.id,
+        actorRole: 'teleshop_manager',
+        actorId: tm.id,
+        status: 'completed',
+        note: note || 'Marked completed',
+      }
+    })
+
+    res.json({ success: true, case: updated })
+  } catch (e) {
+    console.error('Teleshop manager service-case complete error:', e)
+    res.status(500).json({ error: 'Failed to complete case' })
+  }
+})

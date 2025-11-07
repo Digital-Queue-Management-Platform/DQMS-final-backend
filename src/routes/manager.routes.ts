@@ -184,6 +184,84 @@ router.get("/me", async (req, res) => {
   }
 })
 
+// Add/update a status note for a service case (RTOM)
+router.post("/service-case/update", async (req, res) => {
+  try {
+    // Authenticate via JWT similar to /me
+    let token = (req as any).cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.substring(7)
+    }
+    if (!token) return res.status(401).json({ error: "RTOM authentication required" })
+    let payload: any
+    try { payload = (jwt as any).verify(token, JWT_SECRET) } catch { return res.status(401).json({ error: "Invalid token" }) }
+
+    const { refNumber, note, status } = req.body || {}
+    if (!refNumber || !note) return res.status(400).json({ error: 'refNumber and note are required' })
+
+    const sc: any = await (prisma as any).serviceCase.findUnique({ where: { refNumber } })
+    if (!sc) return res.status(404).json({ error: 'Reference not found' })
+
+    const upd = await (prisma as any).serviceCaseUpdate.create({
+      data: {
+        caseId: sc.id,
+        actorRole: 'manager',
+        actorId: payload?.managerId || payload?.mobileNumber || null,
+        status: status || null,
+        note,
+      }
+    })
+
+    await (prisma as any).serviceCase.update({ where: { id: sc.id }, data: { lastUpdatedAt: new Date() } })
+
+    res.json({ success: true, update: upd })
+  } catch (e) {
+    console.error('Manager service-case update error:', e)
+    res.status(500).json({ error: 'Failed to add update' })
+  }
+})
+
+// Mark a service case completed (RTOM)
+router.post("/service-case/complete", async (req, res) => {
+  try {
+    let token = (req as any).cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.substring(7)
+    }
+    if (!token) return res.status(401).json({ error: "RTOM authentication required" })
+    let payload: any
+    try { payload = (jwt as any).verify(token, JWT_SECRET) } catch { return res.status(401).json({ error: "Invalid token" }) }
+
+    const { refNumber, note } = req.body || {}
+    if (!refNumber) return res.status(400).json({ error: 'refNumber is required' })
+
+    const sc: any = await (prisma as any).serviceCase.findUnique({ where: { refNumber } })
+    if (!sc) return res.status(404).json({ error: 'Reference not found' })
+
+    const updated = await (prisma as any).serviceCase.update({
+      where: { id: sc.id },
+      data: { status: 'completed', completedAt: new Date(), lastUpdatedAt: new Date() }
+    })
+
+    await (prisma as any).serviceCaseUpdate.create({
+      data: {
+        caseId: sc.id,
+        actorRole: 'manager',
+        actorId: payload?.managerId || payload?.mobileNumber || null,
+        status: 'completed',
+        note: note || 'Marked completed',
+      }
+    })
+
+    res.json({ success: true, case: updated })
+  } catch (e) {
+    console.error('Manager service-case complete error:', e)
+    res.status(500).json({ error: 'Failed to complete case' })
+  }
+})
+
 // Get manager's region analytics
 router.get("/analytics", async (req, res) => {
   try {

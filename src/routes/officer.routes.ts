@@ -408,6 +408,8 @@ router.post("/complete-service", async (req, res) => {
       },
       include: {
         customer: true,
+        outlet: true,
+        officer: true,
       },
     })
 
@@ -419,6 +421,53 @@ router.post("/complete-service", async (req, res) => {
 
     // Broadcast update
     broadcast({ type: "TOKEN_COMPLETED", data: token })
+
+    // Create ServiceCase (tracking) and initial update, and print SMS to console
+    try {
+      // Generate reference number: YYYY-MM-DD/OutletName/TokenNumber for uniqueness
+      const refDate = new Date().toISOString().slice(0,10)
+  const outletName = (token.outlet?.name || 'Outlet').replace(/\//g, '-')
+      const refNumber = `${refDate}/${outletName}/${token.tokenNumber}`
+
+      // Check if case exists for this token already
+      let serviceCase = await (prisma as any).serviceCase.findFirst({ where: { tokenId: token.id } })
+      if (!serviceCase) {
+        serviceCase = await (prisma as any).serviceCase.create({
+          data: {
+            refNumber,
+            tokenId: token.id,
+            outletId: token.outletId,
+            officerId,
+            customerId: token.customerId,
+            serviceTypes: (token as any).serviceTypes || [],
+            status: 'open',
+          }
+        })
+
+        await (prisma as any).serviceCaseUpdate.create({
+          data: {
+            caseId: serviceCase.id,
+            actorRole: 'officer',
+            actorId: officerId,
+            status: 'submitted',
+            note: 'Service submitted for further processing',
+          }
+        })
+      }
+
+      // "SMS" via console output
+      try {
+        const services = Array.isArray((token as any).serviceTypes) ? (token as any).serviceTypes.join(', ') : ''
+  const officerName = (token as any)?.officer?.name || 'Officer'
+        const outlet = token.outlet?.name || ''
+        const msg = `Ref: ${serviceCase.refNumber} | Officer: ${officerName} | Outlet: ${outlet} | Services: ${services}. Track: /service/status?ref=${encodeURIComponent(serviceCase.refNumber)}`
+        console.log(`[SMS][${token.customer.mobileNumber}] ${msg}`)
+      } catch (e) {
+        console.log('SMS print failed:', e)
+      }
+    } catch (err) {
+      console.error('ServiceCase creation error:', err)
+    }
 
     res.json({ success: true, token })
   } catch (error) {
