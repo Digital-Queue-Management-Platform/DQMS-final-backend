@@ -424,9 +424,10 @@ router.post("/complete-service", async (req, res) => {
 
     // Create ServiceCase (tracking) and initial update, and print SMS to console
     try {
+      let completedRef: string | null = null
       // Generate reference number: YYYY-MM-DD/OutletName/TokenNumber for uniqueness
       const refDate = new Date().toISOString().slice(0,10)
-  const outletName = (token.outlet?.name || 'Outlet').replace(/\//g, '-')
+      const outletName = (token.outlet?.name || 'Outlet').replace(/\//g, '-')
       const refNumber = `${refDate}/${outletName}/${token.tokenNumber}`
 
       // Check if case exists for this token already
@@ -454,11 +455,12 @@ router.post("/complete-service", async (req, res) => {
           }
         })
       }
+      completedRef = serviceCase.refNumber
 
       // "SMS" via console output
       try {
         const services = Array.isArray((token as any).serviceTypes) ? (token as any).serviceTypes.join(', ') : ''
-  const officerName = (token as any)?.officer?.name || 'Officer'
+        const officerName = (token as any)?.officer?.name || 'Officer'
         const outlet = token.outlet?.name || ''
         const msg = `Ref: ${serviceCase.refNumber} | Officer: ${officerName} | Outlet: ${outlet} | Services: ${services}. Track: /service/status?ref=${encodeURIComponent(serviceCase.refNumber)}`
         console.log(`[SMS][${token.customer.mobileNumber}] ${msg}`)
@@ -469,7 +471,23 @@ router.post("/complete-service", async (req, res) => {
       console.error('ServiceCase creation error:', err)
     }
 
-    res.json({ success: true, token })
+    // Include the generated reference number and absolute tracking URL in response
+    try {
+      const caseRecord = await (prisma as any).serviceCase.findFirst({ where: { tokenId: token.id } })
+      const refNumber = caseRecord?.refNumber || null
+      const trackRef = refNumber ? `/service/status?ref=${encodeURIComponent(refNumber)}` : null
+      // Build absolute URL for SMS so it becomes clickable
+      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+      let baseUrl = origins[0] || ''
+      if (process.env.NODE_ENV === 'production') {
+        // Prefer a production host if present
+        baseUrl = origins.find(o => /vercel\.app|https?:\/\//i.test(o) && o.includes('vercel.app')) || baseUrl
+      }
+      const trackUrl = trackRef && baseUrl ? `${baseUrl}${trackRef}` : trackRef
+      return res.json({ success: true, token, refNumber, trackRef, trackUrl })
+    } catch {
+      return res.json({ success: true, token, refNumber: null, trackRef: null, trackUrl: null })
+    }
   } catch (error) {
     console.error("Complete service error:", error)
     res.status(500).json({ error: "Failed to complete service" })

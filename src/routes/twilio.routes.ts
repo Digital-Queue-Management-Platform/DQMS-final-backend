@@ -14,16 +14,10 @@ const client = twilio(accountSid as string, authToken as string)
 router.post('/test', async (req, res) => {
   try {
     const { to, body: messageBody = 'Test message from DQMS' } = req.body
-    const accountSid = process.env.TWILIO_ACCOUNT_SID || '';
-const authToken = process.env.TWILIO_AUTH_TOKEN || '';
-const client = require('twilio')(accountSid, authToken);
-client.messages
-    .create({
-        body: 'Ahoy 👋',
-        messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID || 'MG865db1b9c135edbeb85e755570c561cb',
-        to: '+94718738041'
-    })
-    .then((message: { sid: any }) => console.log(message.sid));
+    
+    if (!to) {
+      return res.status(400).json({ error: 'Missing required field: to' })
+    }
 
     // If a Messaging Service SID is configured, prefer it (handles sender ID / country rules)
     const createParams: any = { to, body: messageBody }
