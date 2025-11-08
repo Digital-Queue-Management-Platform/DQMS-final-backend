@@ -1,11 +1,28 @@
 import { Router } from "express"
 import { prisma } from "../server"
 import * as jwt from "jsonwebtoken"
+import Twilio from "twilio"
 
 const router = Router()
 
 // Reuse OTP JWT for booking verification
 const OTP_JWT_SECRET = process.env.OTP_JWT_SECRET || "otp-dev-secret"
+
+// Twilio configuration (reuse main credentials)
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || ""
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || ""
+const TWILIO_FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || ""
+const TWILIO_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || ""
+const twilioClient = (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) ? Twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) : null
+
+function toE164(mobile: string): string {
+  const cleaned = (mobile || "").replace(/\D/g, "")
+  if (!cleaned) return mobile
+  if (cleaned.startsWith("0") && cleaned.length === 10) return "+94" + cleaned.substring(1)
+  if (cleaned.startsWith("94") && cleaned.length === 11) return "+" + cleaned
+  if (mobile.startsWith("+")) return mobile
+  return "+" + cleaned
+}
 
 // Book an appointment
 router.post("/book", async (req, res) => {
@@ -48,6 +65,33 @@ router.post("/book", async (req, res) => {
       }
     } catch (e) {
       // best-effort, ignore failures
+    }
+
+    // Best-effort SMS confirmation via Twilio
+    try {
+      if (twilioClient && (TWILIO_MESSAGING_SERVICE_SID || TWILIO_FROM_NUMBER)) {
+        const to = toE164(mobileNumber)
+        const when = new Date(appointmentAt)
+        const whenStr = when.toLocaleString()
+        const services = Array.isArray(serviceTypes) ? serviceTypes.join(', ') : ''
+        // Build absolute link to 'My Appointments' page
+        const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+        let baseUrl = origins[0] || ''
+        if (process.env.NODE_ENV === 'production') {
+          baseUrl = origins.find(o => /vercel\.app|https?:\/\//i.test(o) && o.includes('vercel.app')) || baseUrl
+        }
+        const manageUrl = baseUrl ? `${baseUrl}/appointment/my` : '/appointment/my'
+        const body = `Appointment confirmed for ${whenStr} at ${outlet.name}. Services: ${services}. Manage: ${manageUrl}`
+
+        const params: any = { to, body }
+        if (TWILIO_MESSAGING_SERVICE_SID) params.messagingServiceSid = TWILIO_MESSAGING_SERVICE_SID
+        else if (TWILIO_FROM_NUMBER) params.from = TWILIO_FROM_NUMBER
+        await twilioClient.messages.create(params)
+      } else {
+        console.log('[APPT][SMS] Twilio not configured; skipping SMS')
+      }
+    } catch (e) {
+      console.error('Appointment SMS send failed:', e)
     }
 
     res.json({ success: true, appointment: appt })
