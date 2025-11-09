@@ -35,7 +35,7 @@ const otpStore = new Map<string, OtpRecord>()
 
 const now = () => Date.now()
 const genOtp = () => Math.floor(100000 + Math.random() * 900000).toString()
-const FIVE_MIN = 5 * 60 * 1000
+const FIVE_MIN = 1 * 60 * 1000
 const RESEND_WINDOW = 30 * 1000
 
 function toE164(mobile: string): string {
@@ -79,7 +79,7 @@ router.post("/otp/start", async (req, res) => {
     otpStore.set(key, record)
 
     const to = toE164(mobileNumber)
-    const body = `Your verification code is ${code}. It expires in 2 minutes.`
+    const body = `Your verification code is ${code}. It expires in 1 minute.`
 
     // DEV mode takes precedence even if Twilio is configured
     if (OTP_DEV_MODE) {
