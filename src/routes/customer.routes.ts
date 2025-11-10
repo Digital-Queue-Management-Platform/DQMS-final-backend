@@ -309,6 +309,17 @@ router.post("/register", async (req, res) => {
             email: email || undefined
           },
         })
+      } else {
+        // Update existing customer with current registration data
+        customer = await tx.customer.update({
+          where: { id: customer.id },
+          data: {
+            name, // Always update name to current registration
+            sltMobileNumber: sltMobileNumber || customer.sltMobileNumber,
+            nicNumber: nicNumber || customer.nicNumber,
+            email: email || customer.email,
+          },
+        })
       }
 
       // Get next token number for outlet within the current daily window (resets at 12:00 PM)
