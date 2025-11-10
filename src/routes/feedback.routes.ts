@@ -47,19 +47,59 @@ router.post("/submit", async (req, res) => {
       // Don't fail the entire request if assignment fails
     }
 
-    // Create alert for negative feedback (rating 1 or 2)
-    if (numericRating <= 2) {
-      await prisma.alert.create({
+    // Create rating-based alerts with proper routing
+    if (numericRating <= 3) {
+      let alertType = ""
+      let alertSeverity = "medium"
+      let broadcastType = ""
+      let alertMessage = ""
+
+      if (numericRating === 1) {
+        // 1 star - Critical alert for Admin Dashboard
+        alertType = "critical_feedback"
+        alertSeverity = "critical"
+        broadcastType = "CRITICAL_FEEDBACK_ALERT"
+        alertMessage = `CRITICAL: 1-star feedback received for token ${token.tokenNumber} at ${token.outlet.name}. Immediate admin attention required.`
+      } else if (numericRating === 2) {
+        // 2 star - High priority alert for RTOM/Manager Dashboard  
+        alertType = "high_priority_feedback"
+        alertSeverity = "high"
+        broadcastType = "RTOM_FEEDBACK_ALERT"
+        alertMessage = `HIGH PRIORITY: 2-star feedback received for token ${token.tokenNumber} at ${token.outlet.name}. Regional manager intervention needed.`
+      } else if (numericRating === 3) {
+        // 3 star - Medium priority alert for Teleshop Manager Dashboard
+        alertType = "moderate_feedback"
+        alertSeverity = "medium"
+        broadcastType = "TELESHOP_MANAGER_FEEDBACK_ALERT"
+        alertMessage = `MODERATE: 3-star feedback received for token ${token.tokenNumber} at ${token.outlet.name}. Local manager attention recommended.`
+      }
+
+      // Create the alert in database
+      const alert = await prisma.alert.create({
         data: {
-          type: "negative_feedback",
-          severity: "high",
-          message: `Negative feedback (${numericRating}/5) received for token ${token.tokenNumber} at ${token.outlet.name}`,
+          type: alertType,
+          severity: alertSeverity,
+          message: alertMessage,
           relatedEntity: tokenId,
         },
       })
 
-      // Broadcast alert
-      broadcast({ type: "NEGATIVE_FEEDBACK", data: { feedback, token } })
+      // Broadcast to appropriate dashboards
+      broadcast({ 
+        type: broadcastType, 
+        data: { 
+          feedback, 
+          token, 
+          alert,
+          rating: numericRating,
+          alertLevel: numericRating === 1 ? "admin" : numericRating === 2 ? "rtom" : "teleshop_manager"
+        } 
+      })
+
+      // Also broadcast the generic negative feedback for backward compatibility (for ratings 1-2)
+      if (numericRating <= 2) {
+        broadcast({ type: "NEGATIVE_FEEDBACK", data: { feedback, token } })
+      }
     }
 
     // Create completed service records for all services in the token
