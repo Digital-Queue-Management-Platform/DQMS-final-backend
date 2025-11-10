@@ -1643,7 +1643,7 @@ router.get("/alerts", async (req, res) => {
     const outletIds = region.outlets.map(outlet => outlet.id)
 
     const where: any = {
-      type: "RTOM_FEEDBACK_ALERT", // Only 2-star feedback alerts for RTOM
+      type: "high_priority_feedback", // 2-star feedback alerts for RTOM (this is the actual type created)
     }
     
     if (isRead !== undefined) {
