@@ -143,6 +143,73 @@ if (process.env.DISABLE_LONG_WAIT_JOB !== "true") {
   setInterval(checkLongWait, LONG_WAIT_CHECK_MS)
 }
 
+// Officer presence monitoring - check for inactive officers
+const OFFICER_HEARTBEAT_TIMEOUT_MINUTES = 3 // Consider officer offline after 3 minutes of no heartbeat
+const OFFICER_PRESENCE_CHECK_MS = 60 * 1000 // Check every minute
+
+async function checkOfficerPresence() {
+  try {
+    const timeoutThreshold = new Date(Date.now() - OFFICER_HEARTBEAT_TIMEOUT_MINUTES * 60 * 1000)
+    
+    // Find officers who are marked as available/serving/busy but haven't sent heartbeat recently
+    const inactiveOfficers = await prisma.officer.findMany({
+      where: {
+        status: {
+          in: ['available', 'serving', 'busy']
+        },
+        OR: [
+          {
+            lastLoginAt: {
+              lt: timeoutThreshold
+            }
+          },
+          {
+            lastLoginAt: null
+          }
+        ]
+      },
+      select: {
+        id: true,
+        name: true,
+        status: true,
+        lastLoginAt: true
+      }
+    })
+
+    // Set inactive officers to offline
+    for (const officer of inactiveOfficers) {
+      console.log(`Setting officer ${officer.name} (${officer.id}) to offline due to inactivity`)
+      
+      await prisma.officer.update({
+        where: { id: officer.id },
+        data: { status: 'offline' }
+      })
+
+      // Broadcast status change for real-time updates
+      broadcast({ 
+        type: "OFFICER_STATUS_CHANGE", 
+        data: { 
+          officerId: officer.id, 
+          status: "offline", 
+          reason: "inactive",
+          timestamp: new Date().toISOString() 
+        } 
+      })
+    }
+
+    if (inactiveOfficers.length > 0) {
+      console.log(`Set ${inactiveOfficers.length} inactive officers to offline`)
+    }
+  } catch (error) {
+    console.error("Officer presence check error:", error)
+  }
+}
+
+// Enable officer presence monitoring
+if (process.env.DISABLE_OFFICER_PRESENCE_CHECK !== "true") {
+  setInterval(checkOfficerPresence, OFFICER_PRESENCE_CHECK_MS)
+}
+
 // Auto-enqueue upcoming appointments
 const APPOINTMENT_ENQUEUE_AHEAD_MIN = Number(process.env.APPOINTMENT_ENQUEUE_AHEAD_MIN || 15) // minutes before slot
 const APPOINTMENT_POLL_MS = 60 * 1000
