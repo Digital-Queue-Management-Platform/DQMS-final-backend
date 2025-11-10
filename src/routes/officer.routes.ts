@@ -467,12 +467,28 @@ router.post("/complete-service", async (req, res) => {
       }
       completedRef = serviceCase.refNumber
 
-      // "SMS" via console output
+      // "SMS" via console output with full tracking URL
       try {
         const services = Array.isArray((token as any).serviceTypes) ? (token as any).serviceTypes.join(', ') : ''
         const officerName = (token as any)?.officer?.name || 'Officer'
         const outlet = token.outlet?.name || ''
-        const msg = `Ref: ${serviceCase.refNumber} | Officer: ${officerName} | Outlet: ${outlet} | Services: ${services}. Track: /service/status?ref=${encodeURIComponent(serviceCase.refNumber)}`
+        
+        // Build absolute tracking URL using same logic as below
+        const trackRef = `/service/status?ref=${encodeURIComponent(serviceCase.refNumber)}`
+        const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+        let baseUrl = origins[0] || ''
+        
+        // Always prioritize Vercel URLs if available
+        const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+        if (vercelUrl) {
+          baseUrl = vercelUrl
+        } else if (process.env.NODE_ENV === 'production') {
+          // In production, prefer any HTTPS URL over localhost
+          baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
+        }
+        
+        const trackUrl = baseUrl ? `${baseUrl}${trackRef}` : trackRef
+        const msg = `Ref: ${serviceCase.refNumber} | Officer: ${officerName} | Outlet: ${outlet} | Services: ${services}. Track: ${trackUrl}`
         console.log(`[SMS][${token.customer.mobileNumber}] ${msg}`)
       } catch (e) {
         console.log('SMS print failed:', e)
@@ -489,10 +505,16 @@ router.post("/complete-service", async (req, res) => {
       // Build absolute URL for SMS so it becomes clickable
       const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
       let baseUrl = origins[0] || ''
-      if (process.env.NODE_ENV === 'production') {
-        // Prefer a production host if present
-        baseUrl = origins.find(o => /vercel\.app|https?:\/\//i.test(o) && o.includes('vercel.app')) || baseUrl
+      
+      // Always prioritize Vercel URLs if available
+      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+      if (vercelUrl) {
+        baseUrl = vercelUrl
+      } else if (process.env.NODE_ENV === 'production') {
+        // In production, prefer any HTTPS URL over localhost
+        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
       }
+      
       const trackUrl = trackRef && baseUrl ? `${baseUrl}${trackRef}` : trackRef
       return res.json({ success: true, token, refNumber, trackRef, trackUrl })
     } catch {
