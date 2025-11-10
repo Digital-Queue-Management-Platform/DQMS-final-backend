@@ -143,6 +143,10 @@ if (process.env.DISABLE_LONG_WAIT_JOB !== "true") {
   setInterval(checkLongWait, LONG_WAIT_CHECK_MS)
 }
 
+// Officer presence monitoring - REMOVED automatic timeout system
+// Officers should only go offline when they explicitly logout or close browser window
+// The timeout-based presence detection has been disabled as requested
+
 // Auto-enqueue upcoming appointments
 const APPOINTMENT_ENQUEUE_AHEAD_MIN = Number(process.env.APPOINTMENT_ENQUEUE_AHEAD_MIN || 15) // minutes before slot
 const APPOINTMENT_POLL_MS = 60 * 1000

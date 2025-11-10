@@ -1603,4 +1603,178 @@ router.post("/logout", async (req, res) => {
   }
 })
 
+// Get alerts for RTOM (specifically 2-star feedback alerts)
+router.get("/alerts", async (req, res) => {
+  try {
+    const { isRead, outletId } = req.query
+    
+    // Authenticate via JWT similar to other manager endpoints
+    let token = (req as any).cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.substring(7)
+    }
+    if (!token) return res.status(401).json({ error: "RTOM authentication required" })
+    
+    let payload: any
+    try { 
+      payload = (jwt as any).verify(token, JWT_SECRET) 
+    } catch { 
+      return res.status(401).json({ error: "Invalid token" }) 
+    }
+
+    const managerId = payload?.managerId || payload?.mobileNumber
+
+    // Get manager's region to filter alerts by their outlets
+    const region = await prisma.region.findFirst({
+      where: { 
+        OR: [
+          { managerId: managerId },
+          { managerMobile: managerId }
+        ]
+      },
+      include: { outlets: true }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager region not found" })
+    }
+
+    const outletIds = region.outlets.map(outlet => outlet.id)
+
+    const where: any = {
+      type: "RTOM_FEEDBACK_ALERT", // Only 2-star feedback alerts for RTOM
+    }
+    
+    if (isRead !== undefined) {
+      where.isRead = isRead === "true"
+    }
+
+    // Get all alerts
+    let alerts = await prisma.alert.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    })
+
+    // Filter alerts to only include those from manager's outlets
+    if (alerts.length > 0) {
+      const tokenIds = alerts.map((a) => a.relatedEntity).filter((x): x is string => !!x)
+      if (tokenIds.length > 0) {
+        const tokens = await prisma.token.findMany({
+          where: { 
+            id: { in: tokenIds }, 
+            outletId: { in: outletIds }
+          },
+          include: {
+            customer: { select: { name: true } },
+            outlet: { select: { name: true } }
+          }
+        })
+        
+        const validTokenIds = new Set(tokens.map((t) => t.id))
+        alerts = alerts.filter((a) => a.relatedEntity && validTokenIds.has(a.relatedEntity))
+        
+        // Enrich alerts with outlet and customer information
+        const tokenMap = new Map(tokens.map(t => [t.id, {
+          outletId: t.outletId,
+          outletName: t.outlet.name,
+          customerName: t.customer?.name
+        }]))
+        
+        alerts = alerts.map(alert => ({
+          ...alert,
+          outletInfo: alert.relatedEntity ? tokenMap.get(alert.relatedEntity) : null
+        }))
+      } else {
+        alerts = []
+      }
+    }
+
+    // If specific outletId filter is requested
+    if (outletId && alerts.length > 0) {
+      alerts = alerts.filter((alert: any) => 
+        alert.outletInfo && alert.outletInfo.outletId === outletId
+      )
+    }
+
+    res.json(alerts)
+  } catch (error) {
+    console.error("Manager alerts fetch error:", error)
+    res.status(500).json({ error: "Failed to fetch alerts" })
+  }
+})
+
+// Mark alert as read for RTOM
+router.patch("/alerts/:alertId/read", async (req, res) => {
+  try {
+    const { alertId } = req.params
+    
+    // Authenticate via JWT similar to other manager endpoints
+    let token = (req as any).cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.substring(7)
+    }
+    if (!token) return res.status(401).json({ error: "RTOM authentication required" })
+    
+    let payload: any
+    try { 
+      payload = (jwt as any).verify(token, JWT_SECRET) 
+    } catch { 
+      return res.status(401).json({ error: "Invalid token" }) 
+    }
+
+    const managerId = payload?.managerId || payload?.mobileNumber
+
+    // Verify the alert belongs to manager's outlets
+    const alert = await prisma.alert.findUnique({
+      where: { id: alertId }
+    })
+
+    if (!alert) {
+      return res.status(404).json({ error: "Alert not found" })
+    }
+
+    // Get manager's region to verify ownership
+    const region = await prisma.region.findFirst({
+      where: { 
+        OR: [
+          { managerId: managerId },
+          { managerMobile: managerId }
+        ]
+      },
+      include: { outlets: true }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager region not found" })
+    }
+
+    const outletIds = region.outlets.map(outlet => outlet.id)
+
+    // If alert has a related token, verify it's from manager's outlets
+    if (alert.relatedEntity) {
+      const token = await prisma.token.findUnique({
+        where: { id: alert.relatedEntity },
+        select: { outletId: true }
+      })
+
+      if (!token || !outletIds.includes(token.outletId)) {
+        return res.status(403).json({ error: "Access denied to this alert" })
+      }
+    }
+
+    const updatedAlert = await prisma.alert.update({
+      where: { id: alertId },
+      data: { isRead: true }
+    })
+
+    res.json(updatedAlert)
+  } catch (error) {
+    console.error("Mark alert as read error:", error)
+    res.status(500).json({ error: "Failed to mark alert as read" })
+  }
+})
+
 export default router
