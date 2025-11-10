@@ -1084,38 +1084,4 @@ router.post("/logout", async (req, res) => {
   }
 })
 
-// Heartbeat endpoint to track active officers
-router.post("/heartbeat", async (req, res) => {
-  try {
-    // Get JWT token from cookie or Authorization header
-    let token = req.cookies?.dq_jwt
-    
-    if (!token) {
-      const authHeader = req.headers.authorization
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        token = authHeader.substring(7)
-      }
-    }
-
-    if (!token) {
-      return res.status(401).json({ error: "Authentication required" })
-    }
-
-    const payload: any = (jwt as any).verify(token, JWT_SECRET)
-    
-    // Update last heartbeat timestamp
-    await prisma.officer.update({
-      where: { id: payload.officerId },
-      data: { 
-        lastLoginAt: new Date() // Use lastLoginAt as last activity timestamp
-      }
-    })
-
-    res.json({ success: true, timestamp: new Date().toISOString() })
-  } catch (error) {
-    console.error("Heartbeat error:", error)
-    res.status(401).json({ error: "Invalid token" })
-  }
-})
-
 export default router
