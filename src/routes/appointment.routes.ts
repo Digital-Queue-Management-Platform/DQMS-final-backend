@@ -77,9 +77,16 @@ router.post("/book", async (req, res) => {
         // Build absolute link to 'My Appointments' page
         const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
         let baseUrl = origins[0] || ''
-        if (process.env.NODE_ENV === 'production') {
-          baseUrl = origins.find(o => /vercel\.app|https?:\/\//i.test(o) && o.includes('vercel.app')) || baseUrl
+        
+        // Always prioritize Vercel URLs if available
+        const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+        if (vercelUrl) {
+          baseUrl = vercelUrl
+        } else if (process.env.NODE_ENV === 'production') {
+          // In production, prefer any HTTPS URL over localhost
+          baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
         }
+        
         const manageUrl = baseUrl ? `${baseUrl}/appointment/my` : '/appointment/my'
         const body = `Appointment confirmed for ${whenStr} at ${outlet.name}. Services: ${services}. Manage: ${manageUrl}`
 
