@@ -224,13 +224,9 @@ router.get("/officers", async (req: any, res) => {
       }, 0)
 
       // Determine status
-      let status = 'offline' // default
+      let status = officer.status || 'offline' // Use actual officer status
       if (activeBreak) {
-        status = 'break'
-      } else {
-        // You might want to implement online/offline logic based on last activity
-        // For now, we'll use a simple check
-        status = 'offline' // This should be determined by actual online status logic
+        status = 'on_break' // Override to on_break if there's an active break
       }
 
       return {

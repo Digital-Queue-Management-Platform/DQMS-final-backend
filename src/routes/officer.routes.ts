@@ -32,6 +32,16 @@ router.post("/login", async (req, res) => {
       },
     })
 
+    // Broadcast status change for real-time updates
+    broadcast({ 
+      type: "OFFICER_STATUS_CHANGE", 
+      data: { 
+        officerId: officer.id, 
+        status: "available", 
+        timestamp: new Date().toISOString() 
+      } 
+    })
+
     // sign JWT and set httpOnly cookie (no expiration for production)
     const tokenOptions = { officerId: officer.id }
     const signOptions: any = {}
@@ -592,6 +602,16 @@ router.post("/status", async (req, res) => {
       data: { status },
     })
 
+    // Broadcast status change for real-time updates
+    broadcast({ 
+      type: "OFFICER_STATUS_CHANGE", 
+      data: { 
+        officerId: officer.id, 
+        status: officer.status, 
+        timestamp: new Date().toISOString() 
+      } 
+    })
+
     res.json({ success: true, officer })
   } catch (error) {
     console.error("Status update error:", error)
@@ -1019,6 +1039,16 @@ router.post("/logout", async (req, res) => {
           await prisma.officer.update({
             where: { id: payload.officerId },
             data: { status: 'offline' },
+          })
+
+          // Broadcast status change for real-time updates
+          broadcast({ 
+            type: "OFFICER_STATUS_CHANGE", 
+            data: { 
+              officerId: payload.officerId, 
+              status: "offline", 
+              timestamp: new Date().toISOString() 
+            } 
           })
         }
       } catch (e) {
