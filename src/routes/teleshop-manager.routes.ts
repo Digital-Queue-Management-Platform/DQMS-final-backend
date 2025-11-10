@@ -1034,3 +1034,139 @@ router.post('/service-case/complete', async (req: any, res) => {
     res.status(500).json({ error: 'Failed to complete case' })
   }
 })
+
+// Get alerts for Teleshop Manager (specifically 3-star feedback alerts)
+router.get("/alerts", async (req: any, res) => {
+  try {
+    const { isRead, outletId } = req.query
+    const teleshopManager = req.teleshopManager
+
+    // Get teleshop manager's outlets to filter alerts
+    const outlets = await prisma.outlet.findMany({
+      where: { 
+        officers: {
+          some: {
+            teleshopManagerId: teleshopManager.id
+          }
+        }
+      },
+      select: { id: true }
+    })
+
+    const outletIds = outlets.map(outlet => outlet.id)
+
+    const where: any = {
+      type: "TELESHOP_MANAGER_FEEDBACK_ALERT", // Only 3-star feedback alerts for Teleshop Manager
+    }
+    
+    if (isRead !== undefined) {
+      where.isRead = isRead === "true"
+    }
+
+    // Get all alerts
+    let alerts = await prisma.alert.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    })
+
+    // Filter alerts to only include those from teleshop manager's outlets
+    if (alerts.length > 0) {
+      const tokenIds = alerts.map((a) => a.relatedEntity).filter((x): x is string => !!x)
+      if (tokenIds.length > 0) {
+        const tokens = await prisma.token.findMany({
+          where: { 
+            id: { in: tokenIds }, 
+            outletId: { in: outletIds }
+          },
+          include: {
+            customer: { select: { name: true } },
+            outlet: { select: { name: true } }
+          }
+        })
+        
+        const validTokenIds = new Set(tokens.map((t) => t.id))
+        alerts = alerts.filter((a) => a.relatedEntity && validTokenIds.has(a.relatedEntity))
+        
+        // Enrich alerts with outlet and customer information
+        const tokenMap = new Map(tokens.map(t => [t.id, {
+          outletId: t.outletId,
+          outletName: t.outlet.name,
+          customerName: t.customer?.name
+        }]))
+        
+        alerts = alerts.map(alert => ({
+          ...alert,
+          outletInfo: alert.relatedEntity ? tokenMap.get(alert.relatedEntity) : null
+        }))
+      } else {
+        alerts = []
+      }
+    }
+
+    // If specific outletId filter is requested
+    if (outletId && alerts.length > 0) {
+      alerts = alerts.filter((alert: any) => 
+        alert.outletInfo && alert.outletInfo.outletId === outletId
+      )
+    }
+
+    res.json(alerts)
+  } catch (error) {
+    console.error("Teleshop Manager alerts fetch error:", error)
+    res.status(500).json({ error: "Failed to fetch alerts" })
+  }
+})
+
+// Mark alert as read for Teleshop Manager
+router.patch("/alerts/:alertId/read", async (req: any, res) => {
+  try {
+    const { alertId } = req.params
+    const teleshopManager = req.teleshopManager
+
+    // Verify the alert belongs to teleshop manager's outlets
+    const alert = await prisma.alert.findUnique({
+      where: { id: alertId }
+    })
+
+    if (!alert) {
+      return res.status(404).json({ error: "Alert not found" })
+    }
+
+    // Get teleshop manager's outlets to verify ownership
+    const outlets = await prisma.outlet.findMany({
+      where: { 
+        officers: {
+          some: {
+            teleshopManagerId: teleshopManager.id
+          }
+        }
+      },
+      select: { id: true }
+    })
+
+    const outletIds = outlets.map(outlet => outlet.id)
+
+    // If alert has a related token, verify it's from teleshop manager's outlets
+    if (alert.relatedEntity) {
+      const token = await prisma.token.findUnique({
+        where: { id: alert.relatedEntity },
+        select: { outletId: true }
+      })
+
+      if (!token || !outletIds.includes(token.outletId)) {
+        return res.status(403).json({ error: "Access denied to this alert" })
+      }
+    }
+
+    const updatedAlert = await prisma.alert.update({
+      where: { id: alertId },
+      data: { isRead: true }
+    })
+
+    res.json(updatedAlert)
+  } catch (error) {
+    console.error("Mark alert as read error:", error)
+    res.status(500).json({ error: "Failed to mark alert as read" })
+  }
+})
