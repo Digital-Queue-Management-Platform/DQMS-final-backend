@@ -12,17 +12,8 @@ const QR_JWT_EXPIRES = process.env.QR_JWT_EXPIRES || "5m" // short-lived token
 // OTP verification config
 const OTP_JWT_SECRET = process.env.OTP_JWT_SECRET || "otp-dev-secret"
 const OTP_JWT_EXPIRES = process.env.OTP_JWT_EXPIRES || "10m"
-// Use main Twilio credentials (the *_1 variants are empty)
-const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || ""
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || ""
-const TWILIO_FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || ""
-const TWILIO_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || ""
-const OTP_DEV_MODE = process.env.OTP_DEV_MODE === "true"
-const OTP_DEV_ECHO = process.env.OTP_DEV_ECHO === "true"
-
-const twilioClient = (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN)
-  ? Twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-  : null
+// Note: Do NOT read Twilio env vars at module-load time because imports may run before dotenv.config().
+// We'll read env and construct the client inside request handlers.
 
 // In-memory OTP store (mobile -> record)
 type OtpRecord = {
@@ -56,11 +47,33 @@ function toE164(mobile: string): string {
 // Start OTP: send code to mobile
 router.post("/otp/start", async (req, res) => {
   try {
-    const { mobileNumber } = req.body || {}
+    const { mobileNumber, preferredLanguage } = req.body || {}
     if (!mobileNumber) return res.status(400).json({ error: "mobileNumber is required" })
+    // Read env at request time to avoid early-evaluation issues
+    const ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || ""
+    const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || ""
+    const FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || ""
+    const MSG_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || ""
+    const OTP_DEV_MODE = process.env.OTP_DEV_MODE === "true"
+    const OTP_DEV_ECHO = process.env.OTP_DEV_ECHO === "true"
 
-  // Prefer explicit DEV mode override first
-  const twilioConfigured = !!(twilioClient && (TWILIO_MESSAGING_SERVICE_SID || TWILIO_FROM_NUMBER))
+    const twilioClient = (ACCOUNT_SID && AUTH_TOKEN) ? Twilio(ACCOUNT_SID, AUTH_TOKEN) : null
+    const twilioConfigured = !!(twilioClient && (MSG_SERVICE_SID || FROM_NUMBER))
+
+    // Debug instrumentation (non-secret) to trace 500 causes
+    const debugMeta = {
+      OTP_DEV_MODE,
+      OTP_DEV_ECHO,
+      hasTwilioClient: !!twilioClient,
+      TWILIO_MESSAGING_SERVICE_SID_PRESENT: !!MSG_SERVICE_SID,
+      TWILIO_FROM_NUMBER_PRESENT: !!FROM_NUMBER,
+      twilioConfigured,
+      preferredLanguage,
+      rawMobileNumber: mobileNumber,
+    }
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[OTP-START][DEBUG] incoming request', debugMeta)
+    }
 
     const key = mobileNumber
     const existing = otpStore.get(key)
@@ -79,7 +92,14 @@ router.post("/otp/start", async (req, res) => {
     otpStore.set(key, record)
 
     const to = toE164(mobileNumber)
-    const body = `Your verification code is ${code}. It expires in 1 minute.`
+    // Localize OTP message by language; fallback to English
+    const lang = (typeof preferredLanguage === 'string' ? preferredLanguage : 'en') as 'en' | 'si' | 'ta'
+    const otpBodies: Record<'en' | 'si' | 'ta', string> = {
+      en: `Your verification code is ${code}. It expires in 1 minute.`,
+      si: `ඔබගේ තහවුරු කේතය ${code}. එය මිනිත්තුවකින් කල් ඉකුත් වේ.`,
+      ta: `உங்கள் சரிபார்ப்பு குறியீடு ${code} ஆகும். இது 1 நிமிடத்தில் காலாவதியாகும்.`,
+    }
+    const body = otpBodies[otpBodies[lang] ? lang : 'en']
 
     // DEV mode takes precedence even if Twilio is configured
     if (OTP_DEV_MODE) {
@@ -88,23 +108,36 @@ router.post("/otp/start", async (req, res) => {
     }
 
     if (!twilioConfigured) {
-      return res.status(500).json({ error: "OTP service not configured" })
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('[OTP-START][ERROR] Twilio not configured', {
+          hasTwilioClient: !!twilioClient,
+          TWILIO_MESSAGING_SERVICE_SID_PRESENT: !!MSG_SERVICE_SID,
+          TWILIO_FROM_NUMBER_PRESENT: !!FROM_NUMBER,
+        })
+      }
+      return res.status(500).json({ error: "OTP service not configured", ...(process.env.NODE_ENV !== 'production' ? { details: 'Missing Twilio credentials', meta: debugMeta } : {}) })
     }
 
     // Prefer Messaging Service SID if available; fallback to from number
     const params: any = { to, body }
-    if (TWILIO_MESSAGING_SERVICE_SID) {
-      params.messagingServiceSid = TWILIO_MESSAGING_SERVICE_SID
-    } else if (TWILIO_FROM_NUMBER) {
-      params.from = TWILIO_FROM_NUMBER
+    if (MSG_SERVICE_SID) {
+      params.messagingServiceSid = MSG_SERVICE_SID
+    } else if (FROM_NUMBER) {
+      params.from = FROM_NUMBER
     }
 
-    await twilioClient!.messages.create(params)
+    // Wrap Twilio call to surface errors
+    try {
+      await twilioClient!.messages.create(params)
+    } catch (twErr: any) {
+      console.error('[OTP-START][TWILIO_ERROR]', twErr?.message, twErr?.code)
+      return res.status(500).json({ error: 'Failed to send OTP via provider', ...(process.env.NODE_ENV !== 'production' ? { providerError: twErr?.message, code: twErr?.code } : {}) })
+    }
 
     res.json({ success: true, message: "OTP sent" })
-  } catch (error) {
-    console.error("OTP start error:", error)
-    res.status(500).json({ error: "Failed to send OTP" })
+  } catch (error: any) {
+    console.error("[OTP-START][UNCAUGHT]", error?.message)
+    return res.status(500).json({ error: "Failed to send OTP", ...(process.env.NODE_ENV !== 'production' ? { uncaught: error?.message, stack: error?.stack } : {}) })
   }
 })
 

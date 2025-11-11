@@ -13,6 +13,7 @@ router.get("/:refNumber", async (req, res) => {
         outlet: true,
         officer: true,
         customer: true,
+        token: { select: { preferredLanguages: true } },
         updates: { orderBy: { createdAt: 'asc' } },
       },
     })
@@ -25,6 +26,10 @@ router.get("/:refNumber", async (req, res) => {
       serviceTypes: sc.serviceTypes,
       createdAt: sc.createdAt,
       completedAt: sc.completedAt,
+      // Derive a single preferred language string from token.preferredLanguages if present
+      preferredLanguage: Array.isArray(sc?.token?.preferredLanguages) && sc.token.preferredLanguages.length > 0
+        ? sc.token.preferredLanguages[0]
+        : null,
       updates: (sc.updates as any[]).map((u: any) => ({
         id: u.id,
         actorRole: u.actorRole,

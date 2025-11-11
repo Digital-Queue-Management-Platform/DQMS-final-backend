@@ -1,7 +1,7 @@
+import 'dotenv/config'
 import express from "express"
 import cors from "cors"
 import cookieParser from "cookie-parser"
-import dotenv from "dotenv"
 import { WebSocketServer } from "ws"
 import { createServer } from "http"
 import { PrismaClient } from "@prisma/client"
@@ -20,8 +20,6 @@ import appointmentRoutes from "./routes/appointment.routes"
 import ipSpeakerRoutes from "./routes/ip-speaker.routes"
 import twilioRoutes from "./routes/twilio.routes"
 import serviceCaseRoutes from "./routes/service-case.routes"
-
-dotenv.config()
 
 export const prisma = new PrismaClient()
 const app = express()
