@@ -5,15 +5,18 @@ import Twilio from "twilio"
 
 const router = Router()
 
-// Reuse OTP JWT for booking verification
-const OTP_JWT_SECRET = process.env.OTP_JWT_SECRET || "otp-dev-secret"
+// Reuse OTP JWT for booking verification (resolved at request time for safety)
+const getOtpJwtSecret = () => process.env.OTP_JWT_SECRET || "otp-dev-secret"
 
-// Twilio configuration (reuse main credentials)
-const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || ""
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || ""
-const TWILIO_FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || ""
-const TWILIO_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || ""
-const twilioClient = (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) ? Twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) : null
+// Twilio configuration (read at request time to avoid early-evaluation issues)
+const twilioConfig = () => {
+  const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || ""
+  const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || ""
+  const TWILIO_FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || ""
+  const TWILIO_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || ""
+  const client = (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) ? Twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) : null
+  return { client, TWILIO_FROM_NUMBER, TWILIO_MESSAGING_SERVICE_SID }
+}
 
 function toE164(mobile: string): string {
   const cleaned = (mobile || "").replace(/\D/g, "")
@@ -22,6 +25,10 @@ function toE164(mobile: string): string {
   if (cleaned.startsWith("94") && cleaned.length === 11) return "+" + cleaned
   if (mobile.startsWith("+")) return mobile
   return "+" + cleaned
+}
+
+function digitsOnly(m: string | undefined | null) {
+  return (m || "").replace(/\D/g, "")
 }
 
 // Book an appointment
@@ -35,11 +42,24 @@ router.post("/book", async (req, res) => {
 
     // Enforce phone verification via OTP (same policy as registration)
     try {
-      const payload = (jwt as any).verify(verifiedMobileToken || "", OTP_JWT_SECRET as jwt.Secret) as any
-      if (payload?.purpose !== "phone_verification" || payload?.mobileNumber !== mobileNumber) {
+      const payload = (jwt as any).verify(verifiedMobileToken || "", getOtpJwtSecret() as jwt.Secret) as any
+      const sameNumber = digitsOnly(payload?.mobileNumber) === digitsOnly(mobileNumber)
+      if (payload?.purpose !== "phone_verification" || !sameNumber) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[APPT][VERIFY][MISMATCH]', {
+            purpose: payload?.purpose,
+            payloadMobile: payload?.mobileNumber,
+            requestMobile: mobileNumber,
+            digitsPayload: digitsOnly(payload?.mobileNumber),
+            digitsRequest: digitsOnly(mobileNumber),
+          })
+        }
         return res.status(403).json({ error: "Phone verification required" })
       }
-    } catch {
+    } catch (e: any) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[APPT][VERIFY][ERROR]', e?.message)
+      }
       return res.status(403).json({ error: "Phone verification required" })
     }
 
@@ -67,8 +87,9 @@ router.post("/book", async (req, res) => {
       // best-effort, ignore failures
     }
 
-    // Best-effort SMS confirmation via Twilio
+    // Best-effort SMS confirmation via Twilio (localized by preferredLanguage)
     try {
+      const { client: twilioClient, TWILIO_FROM_NUMBER, TWILIO_MESSAGING_SERVICE_SID } = twilioConfig()
       if (twilioClient && (TWILIO_MESSAGING_SERVICE_SID || TWILIO_FROM_NUMBER)) {
         const to = toE164(mobileNumber)
         const when = new Date(appointmentAt)
@@ -88,7 +109,16 @@ router.post("/book", async (req, res) => {
         }
         
         const manageUrl = baseUrl ? `${baseUrl}/appointment/my` : '/appointment/my'
-        const body = `Appointment confirmed for ${whenStr} at ${outlet.name}. Services: ${services}. Manage: ${manageUrl}`
+        const lang: 'en'|'si'|'ta' = (preferredLanguage === 'si' || preferredLanguage === 'ta') ? preferredLanguage : 'en'
+        const bodies: Record<'en'|'si'|'ta', string> = {
+          /*en: `Appointment confirmed for ${whenStr} at ${outlet.name}. Services: ${services}. Manage: ${manageUrl}`,
+          si: `${outlet.name} ශාඛාවේදී ${whenStr} ට ඔබගේ වෙන්කරවාගැනීම තහවුරු විය. සේවාවන්: ${services}. කළමනාකරණය: ${manageUrl}`,
+          ta: `${outlet.name} கிளையில் ${whenStr} உங்கள் நேரம் உறுதிப்படுத்தப்பட்டுள்ளது. சேவைகள்: ${services}. மேலாண்மை: ${manageUrl}`,*/
+          en: `Appointment confirmed for ${whenStr} at ${outlet.name}. Services: ${services}`,
+          si: `${outlet.name} ශාඛාවේදී ${whenStr} ට ඔබගේ වෙන්කරවාගැනීම තහවුරු විය. සේවාවන්: ${services}`,
+          ta: `${outlet.name} கிளையில் ${whenStr} உங்கள் நேரம் உறுதிப்படுத்தப்பட்டுள்ளது. சேவைகள்: ${services}`,
+        }
+        const body = bodies[lang]
 
         const params: any = { to, body }
         if (TWILIO_MESSAGING_SERVICE_SID) params.messagingServiceSid = TWILIO_MESSAGING_SERVICE_SID
