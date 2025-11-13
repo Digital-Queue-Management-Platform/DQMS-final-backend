@@ -310,7 +310,7 @@ router.post("/register", async (req, res) => {
 
     // Use a database transaction to prevent race conditions
     const token = await prisma.$transaction(async (tx) => {
-      // Check if customer already has an active token for this outlet
+      /* Check if customer already has an active token for this outlet
       const existingToken = await tx.token.findFirst({
         where: {
           outlet: { id: outletId },
@@ -325,35 +325,19 @@ router.post("/register", async (req, res) => {
 
       if (existingToken) {
         throw new Error(`Customer with mobile number ${mobileNumber} already has an active token (#${existingToken.tokenNumber}) for this outlet`)
-      }
+      }*/
+      // Allow multiple active tokens per mobile number; removed prior active-token restriction
 
-      // Find or create customer within transaction
-      let customer = await tx.customer.findFirst({
-        where: { mobileNumber },
+      // Always create a new customer record even if mobileNumber repeats
+      const customer = await tx.customer.create({
+        data: {
+          name,
+          mobileNumber,
+          sltMobileNumber: sltMobileNumber || undefined,
+          nicNumber: nicNumber || undefined,
+          email: email || undefined,
+        },
       })
-
-      if (!customer) {
-        customer = await tx.customer.create({
-          data: { 
-            name, 
-            mobileNumber,
-            sltMobileNumber: sltMobileNumber || undefined,
-            nicNumber: nicNumber || undefined,
-            email: email || undefined
-          },
-        })
-      } else {
-        // Update existing customer with current registration data
-        customer = await tx.customer.update({
-          where: { id: customer.id },
-          data: {
-            name, // Always update name to current registration
-            sltMobileNumber: sltMobileNumber || customer.sltMobileNumber,
-            nicNumber: nicNumber || customer.nicNumber,
-            email: email || customer.email,
-          },
-        })
-      }
 
       // Get next token number for outlet within the current daily window (resets at 12:00 PM)
       const lastReset = getLastDailyReset()
