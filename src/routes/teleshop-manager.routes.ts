@@ -1056,7 +1056,7 @@ router.get("/alerts", async (req: any, res) => {
     const outletIds = outlets.map(outlet => outlet.id)
 
     const where: any = {
-      type: "TELESHOP_MANAGER_FEEDBACK_ALERT", // Only 3-star feedback alerts for Teleshop Manager
+      type: "moderate_feedback", // Only 3-star feedback alerts for Teleshop Manager (stored as moderate_feedback)
     }
     
     if (isRead !== undefined) {
