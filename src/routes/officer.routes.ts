@@ -911,6 +911,19 @@ router.get("/summary/served/:officerId", async (req, res) => {
       orderBy: { completedAt: "desc" },
     })
 
+    // Load related service case ref numbers for these tokens
+    const tokenIds = tokens.map(t => t.id)
+    const cases = tokenIds.length > 0
+      ? await (prisma as any).serviceCase.findMany({
+          where: { tokenId: { in: tokenIds } },
+          select: { tokenId: true, refNumber: true },
+        })
+      : []
+    const refByToken = new Map<string, string>()
+    for (const c of cases) {
+      if (c?.tokenId && c?.refNumber) refByToken.set(c.tokenId, c.refNumber)
+    }
+
     // Calculate average handling time
     const totalMinutes = tokens.reduce((sum, token) => {
       if (token.startedAt && token.completedAt) {
@@ -922,6 +935,18 @@ router.get("/summary/served/:officerId", async (req, res) => {
 
     const avgHandleMinutes = tokens.length > 0 ? Math.round(totalMinutes / tokens.length * 100) / 100 : 0
 
+    // Also load service case status for each token
+    const serviceCases = tokenIds.length > 0
+      ? await (prisma as any).serviceCase.findMany({
+          where: { tokenId: { in: tokenIds } },
+          select: { tokenId: true, status: true },
+        })
+      : []
+    const statusByToken = new Map<string, string>()
+    for (const c of serviceCases) {
+      if (c?.tokenId && c?.status) statusByToken.set(c.tokenId, c.status)
+    }
+
     res.json({
       total: tokens.length,
       avgHandleMinutes,
@@ -929,6 +954,8 @@ router.get("/summary/served/:officerId", async (req, res) => {
         ...token,
         customerName: token.customer?.name || 'Anonymous',
         serviceNames: Array.isArray(token.serviceTypes) && token.serviceTypes.length > 0 ? token.serviceTypes : ['General Service'],
+        refNumber: refByToken.get(token.id) || null,
+        serviceCaseStatus: statusByToken.get(token.id) || null,
       })),
     })
   } catch (error) {
@@ -1059,6 +1086,125 @@ router.get("/summary/feedback/:officerId", async (req, res) => {
   } catch (error) {
     console.error("Get feedback summary error:", error)
     res.status(500).json({ error: "Failed to get feedback summary" })
+  }
+})
+
+// Add service case update (officer perspective)
+router.post("/service-case/update", async (req, res) => {
+  try {
+    // Get officer from JWT
+    let token = req.cookies?.dq_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+    
+    if (!token) return res.status(401).json({ error: "Not authenticated" })
+
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch (e) {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    const officerId = payload.officerId
+    const { refNumber, note } = req.body || {}
+    
+    if (!refNumber || !note) {
+      return res.status(400).json({ error: 'refNumber and note are required' })
+    }
+
+    const sc: any = await (prisma as any).serviceCase.findUnique({ where: { refNumber } })
+    if (!sc) return res.status(404).json({ error: 'Service case not found' })
+    // Authorization: only the officer who originally handled (serviceCase.officerId) may update
+    if (sc.officerId !== officerId) {
+      return res.status(403).json({ error: 'Not authorized to update this service case' })
+    }
+
+    const upd = await (prisma as any).serviceCaseUpdate.create({
+      data: {
+        caseId: sc.id,
+        actorRole: 'officer',
+        actorId: officerId,
+        status: 'in_progress',
+        note,
+      }
+    })
+
+    await (prisma as any).serviceCase.update({ where: { id: sc.id }, data: { lastUpdatedAt: new Date() } })
+
+    res.json({ success: true, update: upd })
+  } catch (error) {
+    console.error('Officer service case update error:', error)
+    res.status(500).json({ error: 'Failed to add update' })
+  }
+})
+
+// Officer-auth: Get a service case by refNumber only if owned by this officer
+router.get("/service-case/:refNumber", async (req, res) => {
+  try {
+    // Authenticate officer via JWT (cookie or Authorization header)
+    let token = req.cookies?.dq_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+    if (!token) return res.status(401).json({ error: "Not authenticated" })
+
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch (e) {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    const officerId = payload.officerId
+    const { refNumber } = req.params as { refNumber: string }
+    if (!refNumber) return res.status(400).json({ error: 'refNumber is required' })
+
+    const sc: any = await (prisma as any).serviceCase.findUnique({
+      where: { refNumber },
+      include: {
+        outlet: true,
+        officer: true,
+        customer: true,
+        token: { select: { preferredLanguages: true } },
+        updates: { orderBy: { createdAt: 'asc' } },
+      },
+    })
+
+    if (!sc) return res.status(404).json({ error: 'Reference not found' })
+    if (sc.officerId !== officerId) {
+      return res.status(403).json({ error: 'Not authorized to view this service case' })
+    }
+
+    return res.json({
+      refNumber: sc.refNumber,
+      status: sc.status,
+      outlet: { id: sc.outletId, name: sc.outlet.name, location: sc.outlet.location },
+      serviceTypes: sc.serviceTypes,
+      createdAt: sc.createdAt,
+      completedAt: sc.completedAt,
+      preferredLanguage: Array.isArray(sc?.token?.preferredLanguages) && sc.token.preferredLanguages.length > 0
+        ? sc.token.preferredLanguages[0]
+        : null,
+      updates: (sc.updates as any[]).map((u: any) => ({
+        id: u.id,
+        actorRole: u.actorRole,
+        actorId: u.actorId,
+        status: u.status,
+        note: u.note,
+        createdAt: u.createdAt,
+      }))
+    })
+  } catch (e) {
+    console.error('Officer service-case get error:', e)
+    res.status(500).json({ error: 'Failed to fetch reference' })
   }
 })
 
