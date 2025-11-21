@@ -90,6 +90,7 @@ router.post("/book", async (req, res) => {
     // Best-effort SMS confirmation via Twilio (localized by preferredLanguage)
     try {
       const { client: twilioClient, TWILIO_FROM_NUMBER, TWILIO_MESSAGING_SERVICE_SID } = twilioConfig()
+      const DEV_MODE = process.env.OTP_DEV_MODE === 'true' && process.env.OTP_DEV_ECHO === 'true'
       if (twilioClient && (TWILIO_MESSAGING_SERVICE_SID || TWILIO_FROM_NUMBER)) {
         const to = toE164(mobileNumber)
         const when = new Date(appointmentAt)
@@ -123,7 +124,11 @@ router.post("/book", async (req, res) => {
         const params: any = { to, body }
         if (TWILIO_MESSAGING_SERVICE_SID) params.messagingServiceSid = TWILIO_MESSAGING_SERVICE_SID
         else if (TWILIO_FROM_NUMBER) params.from = TWILIO_FROM_NUMBER
-        await twilioClient.messages.create(params)
+        if (DEV_MODE) {
+          console.log('[APPT][SMS][DEV][SKIP_SEND]', { to, body, params })
+        } else {
+          await twilioClient.messages.create(params)
+        }
       } else {
         console.log('[APPT][SMS] Twilio not configured; skipping SMS')
       }

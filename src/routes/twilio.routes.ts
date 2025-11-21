@@ -27,8 +27,14 @@ router.post('/test', async (req, res) => {
       createParams.from = fromNumber
     }
 
+    const DEV_MODE = process.env.OTP_DEV_MODE === 'true' && process.env.OTP_DEV_ECHO === 'true'
+    if (DEV_MODE) {
+      console.log('[TWILIO][DEV][SKIP_SEND]', { to, body: messageBody, createParams })
+      return res.json({ success: true, dev: true, message: 'Twilio send skipped (dev mode)', preview: { to, body: messageBody } })
+    }
+
     const msg = await client.messages.create(createParams)
-    return res.json({ success: true, sid: msg.sid })
+    return res.json({ success: true, sid: msg.sid, dev: false })
   } catch (error: any) {
     console.error('Twilio send error:', error)
     // If Twilio provided structured error info, forward it to the client for troubleshooting
