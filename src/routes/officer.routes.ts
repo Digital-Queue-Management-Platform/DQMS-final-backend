@@ -1143,6 +1143,51 @@ router.post("/service-case/update", async (req, res) => {
   }
 })
 
+// Mark a service case completed (officer perspective)
+router.post("/service-case/complete", async (req, res) => {
+  try {
+    // Authenticate officer
+    let token = req.cookies?.dq_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.substring(7)
+    }
+    if (!token) return res.status(401).json({ error: 'Not authenticated' })
+
+    let payload: any
+    try { payload = (jwt as any).verify(token, JWT_SECRET) } catch { return res.status(401).json({ error: 'Invalid token' }) }
+
+    const officerId = payload.officerId
+    const { refNumber, note } = req.body || {}
+    if (!refNumber) return res.status(400).json({ error: 'refNumber is required' })
+
+    const sc: any = await (prisma as any).serviceCase.findUnique({ where: { refNumber } })
+    if (!sc) return res.status(404).json({ error: 'Service case not found' })
+    if (sc.officerId !== officerId) return res.status(403).json({ error: 'Not authorized to complete this service case' })
+    if (sc.status === 'completed') return res.json({ success: true, case: sc, message: 'Already completed' })
+
+    const updated = await (prisma as any).serviceCase.update({
+      where: { id: sc.id },
+      data: { status: 'completed', completedAt: new Date(), lastUpdatedAt: new Date() }
+    })
+
+    await (prisma as any).serviceCaseUpdate.create({
+      data: {
+        caseId: sc.id,
+        actorRole: 'officer',
+        actorId: officerId,
+        status: 'completed',
+        note: note || 'Marked completed',
+      }
+    })
+
+    return res.json({ success: true, case: updated })
+  } catch (e) {
+    console.error('Officer service-case complete error:', e)
+    res.status(500).json({ error: 'Failed to complete service case' })
+  }
+})
+
 // Officer-auth: Get a service case by refNumber only if owned by this officer
 router.get("/service-case/:refNumber", async (req, res) => {
   try {
