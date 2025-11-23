@@ -19,6 +19,8 @@ model Customer {
   tokens            Token[]
   completedServices CompletedService[]
   serviceCases      ServiceCase[]
+
+  @@index([mobileNumber])
 }
 
 model Token {
@@ -45,6 +47,8 @@ model Token {
 
   @@index([outletId, status])
   @@index([assignedTo])
+  // Composite index to speed frequent queries filtering outlet + status + date range + ordering by tokenNumber
+  @@index([outletId, status, createdAt, tokenNumber])
 }
 
 model TeleshopManager {
