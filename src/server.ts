@@ -5,6 +5,8 @@ import cookieParser from "cookie-parser"
 import { WebSocketServer } from "ws"
 import { createServer } from "http"
 import { PrismaClient } from "@prisma/client"
+import compression from "compression"
+import pino from "pino"
 import { getNextDailyReset, getLastDailyReset } from "./utils/resetWindow"
 
 // Import routes
@@ -22,6 +24,7 @@ import twilioRoutes from "./routes/twilio.routes"
 import serviceCaseRoutes from "./routes/service-case.routes"
 
 export const prisma = new PrismaClient()
+const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 const app = express()
 const server = createServer(app)
 const wss = new WebSocketServer({ server })
@@ -35,17 +38,47 @@ const frontendOrigins = (process.env.FRONTEND_ORIGIN || "http://localhost:3000,h
 app.use(
   cors({
     origin: (origin, callback) => {
-      // allow requests with no origin (mobile apps, curl)
       if (!origin) return callback(null, true)
       if (frontendOrigins.includes(origin)) return callback(null, true)
       return callback(new Error("CORS not allowed"))
     },
     credentials: true,
-  }),
+  })
 )
+app.use(compression({ threshold: Number(process.env.COMPRESS_THRESHOLD || 1024) }))
 app.use(cookieParser())
 app.use(express.json())
 app.use("/uploads", express.static("uploads"))
+
+// Performance instrumentation & aggregation
+const perfLogThreshold = Number(process.env.PERF_LOG_THRESHOLD_MS || 200)
+interface MetricStats { count: number; total: number; max: number; samples: number[] }
+const routeMetrics = new Map<string, MetricStats>()
+function recordMetric(key: string, dur: number) {
+  let stats = routeMetrics.get(key)
+  if (!stats) { stats = { count: 0, total: 0, max: 0, samples: [] }; routeMetrics.set(key, stats) }
+  stats.count++; stats.total += dur; if (dur > stats.max) stats.max = dur
+  if (stats.samples.length < 50) {
+    stats.samples.push(dur)
+  } else {
+    const idx = Math.floor(Math.random() * stats.samples.length)
+    stats.samples[idx] = dur
+  }
+}
+if (process.env.PERF_LOG !== "false") {
+  app.use((req, res, next) => {
+    const start = process.hrtime.bigint()
+    res.once("finish", () => {
+      const durMs = Number(process.hrtime.bigint() - start) / 1e6
+      const keyBase = req.route?.path || req.originalUrl.split('?')[0]
+      recordMetric(`${req.method} ${keyBase}`, durMs)
+      if (durMs >= perfLogThreshold) {
+        logger.warn({ durMs: Number(durMs.toFixed(1)), method: req.method, url: req.originalUrl }, 'slow_request')
+      }
+    })
+    next()
+  })
+}
 
 // WebSocket for real-time updates
 wss.on("connection", (ws) => {
@@ -86,13 +119,26 @@ app.use("/api/service-case", serviceCaseRoutes)
 
 // Health check
 app.get("/api/health", (req, res) => {
+  res.set('Cache-Control', 'no-store')
   res.json({ status: "ok", timestamp: new Date().toISOString() })
+})
+
+app.get('/api/metrics', (req, res) => {
+  const out: any = {}
+  for (const [key, stats] of routeMetrics.entries()) {
+    const avg = stats.total / stats.count
+    const sorted = [...stats.samples].sort((a,b) => a-b)
+    const p95 = sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] : 0
+    out[key] = { count: stats.count, avg: Number(avg.toFixed(2)), max: Number(stats.max.toFixed(2)), p95: Number(p95.toFixed(2)) }
+  }
+  res.set('Cache-Control', 'no-store')
+  res.json({ generatedAt: new Date().toISOString(), routes: out })
 })
 
 const PORT = process.env.PORT || 3001
 
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`)
+  logger.info(`Server running on port ${PORT}`)
 })
 
 // Periodic job: detect long-wait tokens and create alerts
@@ -110,29 +156,26 @@ const checkLongWait = async () => {
       },
       include: { outlet: true, customer: true },
     })
+    if (tokens.length === 0) return
+
+    // Fetch existing alerts for these tokens in one query
+    const tokenIds = tokens.map(t => t.id)
+    const existingAlerts = await prisma.alert.findMany({
+      where: { type: "long_wait", relatedEntity: { in: tokenIds } },
+      select: { relatedEntity: true }
+    })
+    const existingSet = new Set(existingAlerts.map(a => a.relatedEntity))
 
     for (const token of tokens) {
-      // skip if an alert already exists for this token and type
-      const exists = await prisma.alert.findFirst({
-        where: { type: "long_wait", relatedEntity: token.id },
-      })
-      if (exists) continue
-
+      if (existingSet.has(token.id)) continue
       const message = `Token #${token.tokenNumber} has been waiting more than ${LONG_WAIT_MINUTES} minutes at ${token.outlet.name}`
       const alert = await prisma.alert.create({
-        data: {
-          type: "long_wait",
-          severity: "medium",
-          message,
-          relatedEntity: token.id,
-        },
+        data: { type: "long_wait", severity: "medium", message, relatedEntity: token.id },
       })
-
-      // Broadcast LONG_WAIT event
       broadcast({ type: "LONG_WAIT", data: { alert, token } })
     }
   } catch (err) {
-    console.error("Long-wait check error:", err)
+    logger.error({ err }, "Long-wait check error")
   }
 }
 
@@ -234,11 +277,11 @@ async function processAppointments() {
           broadcast({ type: 'NEW_TOKEN', data: { tokenId: result.createdTokenId, outletId: result.outletId } })
         }
       } catch (e) {
-        console.error('Failed to enqueue appointment', appt?.id, e)
+        logger.error({ err: e, appointmentId: appt?.id }, 'Failed to enqueue appointment')
       }
     }
   } catch (err) {
-    console.error('Appointment processing error:', err)
+    logger.error({ err }, 'Appointment processing error')
   }
 }
 
@@ -250,17 +293,15 @@ if (process.env.DISABLE_APPOINTMENT_JOB !== 'true') {
 function scheduleDailyResetTick() {
   const next = getNextDailyReset()
   const ms = Math.max(0, next.getTime() - Date.now())
-  console.log(
-    `Next daily reset at ${next.toLocaleString()} (in ${(ms / 1000 / 60).toFixed(1)} minutes)`
-  )
+  logger.info(`Next daily reset at ${next.toLocaleString()} (in ${(ms / 1000 / 60).toFixed(1)} minutes)`)
   setTimeout(async () => {
     try {
       const ts = new Date()
-      console.log(`Daily reset boundary reached: ${ts.toLocaleString()}`)
+      logger.info(`Daily reset boundary reached: ${ts.toLocaleString()}`)
       // Broadcast a lightweight signal; clients may optionally refresh views
       broadcast({ type: "DAILY_RESET", data: { timestamp: ts.toISOString() } })
     } catch (e) {
-      console.error("Error broadcasting DAILY_RESET:", e)
+      logger.error({ err: e }, "Error broadcasting DAILY_RESET")
     } finally {
       // Schedule the next tick
       scheduleDailyResetTick()

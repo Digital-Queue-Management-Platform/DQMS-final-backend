@@ -108,6 +108,7 @@ router.get("/outlets", async (req, res) => {
       },
     })
 
+    res.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=120')
     res.json(outlets)
   } catch (error) {
     console.error("Outlets fetch error:", error)
@@ -140,6 +141,7 @@ router.get('/regions', async (req, res) => {
         // Exclude managerPassword for safety and compatibility
       }
     })
+    res.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=120')
     res.json(regions)
   } catch (error) {
     console.error('Regions fetch error:', error)
@@ -160,6 +162,7 @@ router.get('/regions', async (req, res) => {
 router.get('/services', async (req, res) => {
   try {
     const services = await prisma.$queryRaw`SELECT * FROM "Service" ORDER BY "createdAt" DESC`
+    res.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=120')
     res.json(services)
   } catch (error) {
     console.error('Services fetch error:', error)
