@@ -50,22 +50,22 @@ router.post("/login", async (req, res) => {
     }
 
     // Create JWT token for manager authentication (no expiration)
-    const tokenOptions: any = { 
+    const tokenOptions: any = {
       managerId: region.managerId,
       managerName: region.managerId, // Include name in token
       mobileNumber: region.managerMobile,
       email: region.managerEmail, // Keep for backward compatibility 
-      regionId: region.id 
+      regionId: region.id
     }
-    
+
     const signOptions: any = {}
     if (JWT_EXPIRES) {
       signOptions.expiresIn = JWT_EXPIRES
     }
-    
+
     const token = (jwt as any).sign(
-      tokenOptions, 
-      JWT_SECRET as jwt.Secret, 
+      tokenOptions,
+      JWT_SECRET as jwt.Secret,
       signOptions
     )
 
@@ -116,7 +116,7 @@ router.get("/me", async (req, res) => {
   try {
     // Check for JWT token in cookie or Authorization header
     let token = req.cookies?.dq_manager_jwt
-    
+
     // If no cookie, check Authorization header
     if (!token) {
       const authHeader = req.headers.authorization
@@ -124,7 +124,7 @@ router.get("/me", async (req, res) => {
         token = authHeader.substring(7)
       }
     }
-    
+
     let managerMobile: string | undefined
     let managerEmail: string | undefined
 
@@ -143,7 +143,7 @@ router.get("/me", async (req, res) => {
       // Fallback: check for mobile or email in query params or body (for backwards compatibility)
       managerMobile = (req.query.mobileNumber as string) || (req.body?.mobileNumber)
       managerEmail = (req.query.email as string) || (req.body?.email)
-      
+
       if (!managerMobile && !managerEmail) {
         return res.status(401).json({ error: "RTOM authentication required. Please login again." })
       }
@@ -151,13 +151,14 @@ router.get("/me", async (req, res) => {
 
     // Find region using the manager mobile or email (fallback)
     const region = await prisma.region.findFirst({
-      where: managerMobile ? 
-        { managerMobile: managerMobile } : 
+      where: managerMobile ?
+        { managerMobile: managerMobile } :
         { managerEmail: managerEmail },
       include: {
         outlets: {
           include: {
             officers: true,
+            teleshopManager: true,
           }
         }
       }
@@ -303,7 +304,7 @@ router.get("/analytics", async (req, res) => {
 
     // Get analytics for the manager's region
     const totalTokens = await prisma.token.count({ where })
-    
+
     const completedTokens = await prisma.token.findMany({
       where,
       select: {
@@ -368,7 +369,7 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
   try {
     const { outletId } = req.params
     const { startDate, endDate } = req.query
-    
+
     // Check for JWT token
     let token = req.cookies?.dq_manager_jwt
     if (!token) {
@@ -377,7 +378,7 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
         token = authHeader.substring(7)
       }
     }
-    
+
     let managerEmail: string | undefined
 
     if (token) {
@@ -390,7 +391,7 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
     } else {
       // Fallback: check for email in query params
       managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
-      
+
       if (!managerEmail) {
         return res.status(401).json({ error: "Manager authentication required" })
       }
@@ -426,7 +427,7 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
 
     // Get analytics for the specific outlet
     const totalTokens = await prisma.token.count({ where })
-    
+
     const completedTokens = await prisma.token.findMany({
       where,
       select: {
@@ -496,7 +497,7 @@ router.get("/officers", async (req, res) => {
         token = authHeader.substring(7)
       }
     }
-    
+
     let managerEmail: string | undefined
 
     if (token) {
@@ -510,7 +511,7 @@ router.get("/officers", async (req, res) => {
     } else {
       // Fallback: check for email in query params or headers
       managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
-      
+
       if (!managerEmail) {
         return res.status(401).json({ error: "Manager authentication required" })
       }
@@ -549,7 +550,7 @@ router.get("/officers", async (req, res) => {
 router.post("/officers", async (req, res) => {
   try {
     const { name, mobileNumber, outletId, counterNumber, isTraining, languages, assignedServices, services } = req.body
-    
+
     // Check for JWT token
     let token = req.cookies?.dq_manager_jwt
     if (!token) {
@@ -558,7 +559,7 @@ router.post("/officers", async (req, res) => {
         token = authHeader.substring(7)
       }
     }
-    
+
     let managerEmail: string | undefined
 
     if (token) {
@@ -571,11 +572,11 @@ router.post("/officers", async (req, res) => {
       }
     } else {
       // Fallback: check for email in various places
-      managerEmail = (req.query.email as string) || 
-                    (req.headers['x-manager-email'] as string) ||
-                    req.body.managerEmail || 
-                    req.body.email
-      
+      managerEmail = (req.query.email as string) ||
+        (req.headers['x-manager-email'] as string) ||
+        req.body.managerEmail ||
+        req.body.email
+
       if (!managerEmail) {
         return res.status(401).json({ error: "Manager authentication required" })
       }
@@ -625,7 +626,7 @@ router.post("/officers", async (req, res) => {
     }
 
     console.log("Creating officer with data:", JSON.stringify(officerData, null, 2))
-    
+
     const officer = await prisma.officer.create({
       data: officerData,
       include: {
@@ -637,7 +638,7 @@ router.post("/officers", async (req, res) => {
   } catch (error: any) {
     console.error("Manager officer creation error:", error)
     console.error("Request body:", req.body)
-    
+
     // Provide more specific error messages
     if (error.code === 'P2002') {
       res.status(400).json({ error: "An officer with this mobile number already exists" })
@@ -654,7 +655,7 @@ router.patch("/officer/:officerId", async (req, res) => {
   try {
     const { officerId } = req.params
     const { name, counterNumber, assignedServices, isTraining, languages, services } = req.body
-    
+
     // Check for JWT token
     let token = req.cookies?.dq_manager_jwt
     if (!token) {
@@ -663,7 +664,7 @@ router.patch("/officer/:officerId", async (req, res) => {
         token = authHeader.substring(7)
       }
     }
-    
+
     let managerEmail: string | undefined
 
     if (token) {
@@ -676,11 +677,11 @@ router.patch("/officer/:officerId", async (req, res) => {
       }
     } else {
       // Fallback: check for email in various places
-      managerEmail = (req.query.email as string) || 
-                    (req.headers['x-manager-email'] as string) ||
-                    req.body.managerEmail || 
-                    req.body.email
-      
+      managerEmail = (req.query.email as string) ||
+        (req.headers['x-manager-email'] as string) ||
+        req.body.managerEmail ||
+        req.body.email
+
       if (!managerEmail) {
         return res.status(401).json({ error: "Manager authentication required" })
       }
@@ -689,12 +690,12 @@ router.patch("/officer/:officerId", async (req, res) => {
     // Find manager's region
     const region = await prisma.region.findFirst({
       where: { managerEmail: managerEmail },
-      include: { 
+      include: {
         outlets: {
           include: {
             officers: true
           }
-        } 
+        }
       }
     })
 
@@ -703,7 +704,7 @@ router.patch("/officer/:officerId", async (req, res) => {
     }
 
     // Verify the officer belongs to this manager's region
-    const officerExists = region.outlets.some(outlet => 
+    const officerExists = region.outlets.some(outlet =>
       outlet.officers.some(officer => officer.id === officerId)
     )
 
@@ -713,17 +714,17 @@ router.patch("/officer/:officerId", async (req, res) => {
 
     // Prepare update data
     const updateData: any = {}
-    
+
     if (name !== undefined) updateData.name = name
     if (counterNumber !== undefined) updateData.counterNumber = counterNumber
     if (isTraining !== undefined) updateData.isTraining = isTraining
-  // Update services and languages to the correct fields
-  if (assignedServices !== undefined) updateData.assignedServices = assignedServices
-  if (services !== undefined && assignedServices === undefined) updateData.assignedServices = services
-  if (languages !== undefined) updateData.languages = languages
+    // Update services and languages to the correct fields
+    if (assignedServices !== undefined) updateData.assignedServices = assignedServices
+    if (services !== undefined && assignedServices === undefined) updateData.assignedServices = services
+    if (languages !== undefined) updateData.languages = languages
 
     console.log("Updating officer with data:", JSON.stringify(updateData, null, 2))
-    
+
     const updatedOfficer = await prisma.officer.update({
       where: { id: officerId },
       data: updateData,
@@ -736,7 +737,7 @@ router.patch("/officer/:officerId", async (req, res) => {
   } catch (error: any) {
     console.error("Manager officer update error:", error)
     console.error("Request body:", req.body)
-    
+
     if (error.code === 'P2002') {
       res.status(400).json({ error: "An officer with this mobile number already exists" })
     } else if (error.code === 'P2025') {
@@ -758,7 +759,7 @@ router.get("/teleshop-managers", async (req, res) => {
         token = authHeader.substring(7)
       }
     }
-    
+
     let managerEmail: string | undefined
 
     if (token) {
@@ -770,7 +771,7 @@ router.get("/teleshop-managers", async (req, res) => {
       }
     } else {
       managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
-      
+
       if (!managerEmail) {
         return res.status(401).json({ error: "Manager authentication required" })
       }
@@ -791,6 +792,7 @@ router.get("/teleshop-managers", async (req, res) => {
         regionId: region.id
       },
       include: {
+        outlet: true,
         officers: {
           include: {
             outlet: true
@@ -820,7 +822,7 @@ router.post("/teleshop-managers", async (req, res) => {
         token = authHeader.substring(7)
       }
     }
-    
+
     let managerEmail: string | undefined
 
     if (token) {
@@ -832,7 +834,7 @@ router.post("/teleshop-managers", async (req, res) => {
       }
     } else {
       managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
-      
+
       if (!managerEmail) {
         return res.status(401).json({ error: "Manager authentication required" })
       }
@@ -847,10 +849,38 @@ router.post("/teleshop-managers", async (req, res) => {
       return res.status(404).json({ error: "Manager not found" })
     }
 
-    const { name, mobileNumber, email } = req.body
+    const { name, mobileNumber, email, outletId } = req.body
 
     if (!name || !mobileNumber || !email) {
       return res.status(400).json({ error: "Name, mobile number, and email are required" })
+    }
+
+    // If outletId is provided, validate it
+    if (outletId) {
+      // Verify outlet belongs to manager's region
+      const outlet = await prisma.outlet.findFirst({
+        where: {
+          id: outletId,
+          regionId: region.id
+        }
+      })
+
+      if (!outlet) {
+        return res.status(400).json({ error: "Outlet not found in your region" })
+      }
+
+      // Check if outlet already has a teleshop manager
+      const existingAssignment = await prisma.teleshopManager.findFirst({
+        where: {
+          outletId: outletId
+        }
+      })
+
+      if (existingAssignment) {
+        return res.status(400).json({
+          error: `This outlet is already assigned to ${existingAssignment.name}. Please choose a different outlet.`
+        })
+      }
     }
 
     // Create teleshop manager
@@ -859,10 +889,12 @@ router.post("/teleshop-managers", async (req, res) => {
         name: name.trim(),
         mobileNumber: mobileNumber.trim(),
         email: email.trim(),
-        regionId: region.id
+        regionId: region.id,
+        outletId: outletId || null
       },
       include: {
         region: true,
+        outlet: true,
         officers: true
       }
     })
@@ -891,7 +923,7 @@ router.post("/teleshop-managers", async (req, res) => {
     res.json({ success: true, teleshopManager })
   } catch (error: any) {
     console.error("Create teleshop manager error:", error)
-    
+
     if (error.code === 'P2002') {
       res.status(400).json({ error: "A teleshop manager with this mobile number already exists" })
     } else {
@@ -911,7 +943,7 @@ router.patch("/teleshop-managers/:teleshopManagerId", async (req, res) => {
         token = authHeader.substring(7)
       }
     }
-    
+
     let managerEmail: string | undefined
 
     if (token) {
@@ -923,7 +955,7 @@ router.patch("/teleshop-managers/:teleshopManagerId", async (req, res) => {
       }
     } else {
       managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
-      
+
       if (!managerEmail) {
         return res.status(401).json({ error: "Manager authentication required" })
       }
@@ -964,6 +996,7 @@ router.patch("/teleshop-managers/:teleshopManagerId", async (req, res) => {
       data: updateData,
       include: {
         region: true,
+        outlet: true,
         officers: {
           include: {
             outlet: true
@@ -975,7 +1008,7 @@ router.patch("/teleshop-managers/:teleshopManagerId", async (req, res) => {
     res.json({ success: true, teleshopManager })
   } catch (error: any) {
     console.error("Update teleshop manager error:", error)
-    
+
     if (error.code === 'P2002') {
       res.status(400).json({ error: "A teleshop manager with this mobile number already exists" })
     } else if (error.code === 'P2025') {
@@ -997,7 +1030,7 @@ router.delete("/teleshop-managers/:teleshopManagerId", async (req, res) => {
         token = authHeader.substring(7)
       }
     }
-    
+
     let managerEmail: string | undefined
 
     if (token) {
@@ -1009,7 +1042,7 @@ router.delete("/teleshop-managers/:teleshopManagerId", async (req, res) => {
       }
     } else {
       managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
-      
+
       if (!managerEmail) {
         return res.status(401).json({ error: "Manager authentication required" })
       }
@@ -1043,8 +1076,8 @@ router.delete("/teleshop-managers/:teleshopManagerId", async (req, res) => {
 
     // Check if teleshop manager has officers
     if (existingTeleshopManager.officers.length > 0) {
-      return res.status(400).json({ 
-        error: `Cannot delete teleshop manager "${existingTeleshopManager.name}" because they have ${existingTeleshopManager.officers.length} officer(s). Please reassign the officers first.` 
+      return res.status(400).json({
+        error: `Cannot delete teleshop manager "${existingTeleshopManager.name}" because they have ${existingTeleshopManager.officers.length} officer(s). Please reassign the officers first.`
       })
     }
 
@@ -1057,6 +1090,123 @@ router.delete("/teleshop-managers/:teleshopManagerId", async (req, res) => {
   } catch (error) {
     console.error("Delete teleshop manager error:", error)
     res.status(500).json({ error: "Failed to delete teleshop manager" })
+  }
+})
+
+// Assign or reassign outlet to teleshop manager
+router.patch("/teleshop-managers/:teleshopManagerId/assign-outlet", async (req, res) => {
+  try {
+    // Check for JWT token
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+
+    let managerEmail: string | undefined
+
+    if (token) {
+      try {
+        const payload = (jwt as any).verify(token, JWT_SECRET)
+        managerEmail = payload.email
+      } catch (e) {
+        return res.status(401).json({ error: "Invalid token" })
+      }
+    } else {
+      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
+
+      if (!managerEmail) {
+        return res.status(401).json({ error: "Manager authentication required" })
+      }
+    }
+
+    // Find manager's region
+    const region = await prisma.region.findFirst({
+      where: { managerEmail: managerEmail }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager not found" })
+    }
+
+    const { teleshopManagerId } = req.params
+    const { outletId } = req.body
+
+    // Verify teleshop manager belongs to this region
+    const existingTeleshopManager = await prisma.teleshopManager.findFirst({
+      where: {
+        id: teleshopManagerId,
+        regionId: region.id
+      }
+    })
+
+    if (!existingTeleshopManager) {
+      return res.status(403).json({ error: "Teleshop manager not found in your region" })
+    }
+
+    // If outletId is provided (not null), validate it
+    if (outletId) {
+      // Verify outlet belongs to manager's region
+      const outlet = await prisma.outlet.findFirst({
+        where: {
+          id: outletId,
+          regionId: region.id
+        }
+      })
+
+      if (!outlet) {
+        return res.status(400).json({ error: "Outlet not found in your region" })
+      }
+
+      // Check if outlet is already assigned to a different teleshop manager
+      const existingAssignment = await prisma.teleshopManager.findFirst({
+        where: {
+          outletId: outletId,
+          id: { not: teleshopManagerId } // Exclude current teleshop manager
+        }
+      })
+
+      if (existingAssignment) {
+        return res.status(400).json({
+          error: `This outlet is already assigned to ${existingAssignment.name}. Please choose a different outlet.`
+        })
+      }
+    }
+
+    // Update teleshop manager with new outlet assignment (or null to unassign)
+    const teleshopManager = await prisma.teleshopManager.update({
+      where: { id: teleshopManagerId },
+      data: { outletId: outletId || null },
+      include: {
+        region: true,
+        outlet: true,
+        officers: {
+          include: {
+            outlet: true
+          }
+        }
+      }
+    })
+
+    res.json({
+      success: true,
+      teleshopManager,
+      message: outletId
+        ? `Outlet assigned successfully to ${teleshopManager.name}`
+        : `Outlet unassigned from ${teleshopManager.name}`
+    })
+  } catch (error: any) {
+    console.error("Assign outlet to teleshop manager error:", error)
+
+    if (error.code === 'P2002') {
+      res.status(400).json({ error: "This outlet is already assigned to another teleshop manager" })
+    } else if (error.code === 'P2025') {
+      res.status(404).json({ error: "Teleshop manager not found" })
+    } else {
+      res.status(500).json({ error: "Failed to assign outlet", details: error.message || "Unknown error" })
+    }
   }
 })
 
@@ -1365,7 +1515,7 @@ router.get("/analytics/breaks/:regionId", async (req, res) => {
     // Calculate date range based on timeframe
     let startDate = new Date()
     let endDate = new Date()
-    
+
     switch (timeframe) {
       case 'today':
         startDate.setHours(0, 0, 0, 0)
@@ -1416,7 +1566,7 @@ router.get("/analytics/breaks/:regionId", async (req, res) => {
           }
           return sum + Math.floor((Date.now() - brk.startedAt.getTime()) / (1000 * 60))
         }, 0)
-        
+
         const activeBreak = breaks.find(brk => !brk.endedAt)
         const avgBreakDuration = totalBreaks > 0 ? Math.round(totalMinutes / totalBreaks) : 0
 
@@ -1437,7 +1587,7 @@ router.get("/analytics/breaks/:regionId", async (req, res) => {
             id: brk.id,
             startedAt: brk.startedAt,
             endedAt: brk.endedAt,
-            durationMinutes: brk.endedAt 
+            durationMinutes: brk.endedAt
               ? Math.floor((brk.endedAt.getTime() - brk.startedAt.getTime()) / (1000 * 60))
               : Math.floor((Date.now() - brk.startedAt.getTime()) / (1000 * 60))
           }))
@@ -1459,7 +1609,7 @@ router.get("/analytics/breaks/:regionId", async (req, res) => {
       officersOnBreak: allOfficers.filter(o => o.activeBreak).length,
       totalBreaksToday: allOfficers.reduce((sum, o) => sum + o.totalBreaks, 0),
       totalBreakMinutes: allOfficers.reduce((sum, o) => sum + o.totalMinutes, 0),
-      avgBreakDuration: allOfficers.length > 0 
+      avgBreakDuration: allOfficers.length > 0
         ? Math.round(allOfficers.reduce((sum, o) => sum + o.avgBreakDuration, 0) / allOfficers.length)
         : 0
     }
@@ -1510,7 +1660,7 @@ router.get("/breaks/officer/:officerId", async (req, res) => {
       id: brk.id,
       startedAt: brk.startedAt,
       endedAt: brk.endedAt,
-      durationMinutes: brk.endedAt 
+      durationMinutes: brk.endedAt
         ? Math.floor((brk.endedAt.getTime() - brk.startedAt.getTime()) / (1000 * 60))
         : Math.floor((Date.now() - brk.startedAt.getTime()) / (1000 * 60)),
       isActive: !brk.endedAt
@@ -1519,7 +1669,7 @@ router.get("/breaks/officer/:officerId", async (req, res) => {
     const stats = {
       totalBreaks: breakData.length,
       totalMinutes: breakData.reduce((sum, brk) => sum + brk.durationMinutes, 0),
-      avgDuration: breakData.length > 0 
+      avgDuration: breakData.length > 0
         ? Math.round(breakData.reduce((sum, brk) => sum + brk.durationMinutes, 0) / breakData.length)
         : 0,
       longestBreak: breakData.length > 0 ? Math.max(...breakData.map(brk => brk.durationMinutes)) : 0,
@@ -1579,8 +1729,8 @@ router.post("/breaks/end/:breakId", async (req, res) => {
       (updatedBreak.endedAt!.getTime() - updatedBreak.startedAt.getTime()) / (1000 * 60)
     )
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: `Break ended by manager${reason ? ': ' + reason : ''}`,
       breakLog: updatedBreak,
       durationMinutes
@@ -1607,7 +1757,7 @@ router.post("/logout", async (req, res) => {
 router.get("/alerts", async (req, res) => {
   try {
     const { isRead, outletId } = req.query
-    
+
     // Authenticate via JWT similar to other manager endpoints
     let token = (req as any).cookies?.dq_manager_jwt
     if (!token) {
@@ -1615,19 +1765,19 @@ router.get("/alerts", async (req, res) => {
       if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.substring(7)
     }
     if (!token) return res.status(401).json({ error: "RTOM authentication required" })
-    
+
     let payload: any
-    try { 
-      payload = (jwt as any).verify(token, JWT_SECRET) 
-    } catch { 
-      return res.status(401).json({ error: "Invalid token" }) 
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch {
+      return res.status(401).json({ error: "Invalid token" })
     }
 
     const managerId = payload?.managerId || payload?.mobileNumber
 
     // Get manager's region to filter alerts by their outlets
     const region = await prisma.region.findFirst({
-      where: { 
+      where: {
         OR: [
           { managerId: managerId },
           { managerMobile: managerId }
@@ -1645,7 +1795,7 @@ router.get("/alerts", async (req, res) => {
     const where: any = {
       type: "high_priority_feedback", // 2-star feedback alerts for RTOM (this is the actual type created)
     }
-    
+
     if (isRead !== undefined) {
       where.isRead = isRead === "true"
     }
@@ -1662,8 +1812,8 @@ router.get("/alerts", async (req, res) => {
       const tokenIds = alerts.map((a) => a.relatedEntity).filter((x): x is string => !!x)
       if (tokenIds.length > 0) {
         const tokens = await prisma.token.findMany({
-          where: { 
-            id: { in: tokenIds }, 
+          where: {
+            id: { in: tokenIds },
             outletId: { in: outletIds }
           },
           include: {
@@ -1671,17 +1821,17 @@ router.get("/alerts", async (req, res) => {
             outlet: { select: { name: true } }
           }
         })
-        
+
         const validTokenIds = new Set(tokens.map((t) => t.id))
         alerts = alerts.filter((a) => a.relatedEntity && validTokenIds.has(a.relatedEntity))
-        
+
         // Enrich alerts with outlet and customer information
         const tokenMap = new Map(tokens.map(t => [t.id, {
           outletId: t.outletId,
           outletName: t.outlet.name,
           customerName: t.customer?.name
         }]))
-        
+
         alerts = alerts.map(alert => ({
           ...alert,
           outletInfo: alert.relatedEntity ? tokenMap.get(alert.relatedEntity) : null
@@ -1693,7 +1843,7 @@ router.get("/alerts", async (req, res) => {
 
     // If specific outletId filter is requested
     if (outletId && alerts.length > 0) {
-      alerts = alerts.filter((alert: any) => 
+      alerts = alerts.filter((alert: any) =>
         alert.outletInfo && alert.outletInfo.outletId === outletId
       )
     }
@@ -1709,7 +1859,7 @@ router.get("/alerts", async (req, res) => {
 router.patch("/alerts/:alertId/read", async (req, res) => {
   try {
     const { alertId } = req.params
-    
+
     // Authenticate via JWT similar to other manager endpoints
     let token = (req as any).cookies?.dq_manager_jwt
     if (!token) {
@@ -1717,12 +1867,12 @@ router.patch("/alerts/:alertId/read", async (req, res) => {
       if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.substring(7)
     }
     if (!token) return res.status(401).json({ error: "RTOM authentication required" })
-    
+
     let payload: any
-    try { 
-      payload = (jwt as any).verify(token, JWT_SECRET) 
-    } catch { 
-      return res.status(401).json({ error: "Invalid token" }) 
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch {
+      return res.status(401).json({ error: "Invalid token" })
     }
 
     const managerId = payload?.managerId || payload?.mobileNumber
@@ -1738,7 +1888,7 @@ router.patch("/alerts/:alertId/read", async (req, res) => {
 
     // Get manager's region to verify ownership
     const region = await prisma.region.findFirst({
-      where: { 
+      where: {
         OR: [
           { managerId: managerId },
           { managerMobile: managerId }

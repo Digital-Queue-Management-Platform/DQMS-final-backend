@@ -57,15 +57,18 @@ model TeleshopManager {
   mobileNumber      String             @unique
   email             String?
   regionId          String
+  outletId          String?            @unique
   isActive          Boolean            @default(true)
   createdAt         DateTime           @default(now())
   lastLoginAt       DateTime?
   region            Region             @relation(fields: [regionId], references: [id])
+  outlet            Outlet?            @relation(fields: [outletId], references: [id])
   officers          Officer[]
   completedServices CompletedService[]
 
   @@index([regionId])
   @@index([mobileNumber])
+  @@index([outletId])
 }
 
 model Officer {
@@ -107,6 +110,7 @@ model Outlet {
   tokens            Token[]
   managerQRTokens   ManagerQRToken[]
   appointments      Appointment[]
+  teleshopManager   TeleshopManager?
 }
 
 model Region {
