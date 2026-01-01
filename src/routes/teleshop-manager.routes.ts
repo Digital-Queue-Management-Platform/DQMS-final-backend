@@ -902,12 +902,33 @@ router.get("/feedback", async (req: any, res) => {
     const limitNum = Math.min(100, Math.max(1, parseInt(limit as string)))
     const skip = (pageNum - 1) * limitNum
 
-    // Build where clause for feedback assigned to teleshop manager
-    const where: any = {
-      rating: 3, // 3-star ratings go to teleshop manager
-      assignedTo: "teleshop_manager",
-      assignedToId: teleshopManager.id
+    // Build base where clause for outlet filtering (used for stats)
+    // Get all feedback from tokens in this teleshop manager's outlet
+    const baseWhere: any = {}
+
+    // Filter by outlet if teleshop manager has a branchId assigned
+    if (teleshopManager.branchId) {
+      // Get all tokens from this outlet
+      const outletTokens = await prisma.token.findMany({
+        where: { outletId: teleshopManager.branchId },
+        select: { id: true }
+      })
+      const tokenIds = outletTokens.map(t => t.id)
+
+      // Filter feedback by these token IDs
+      if (tokenIds.length > 0) {
+        baseWhere.tokenId = { in: tokenIds }
+      } else {
+        // No tokens in this outlet, return empty
+        baseWhere.id = 'no-match' // This will return no results
+      }
+    } else {
+      // No branch assigned, return empty results
+      baseWhere.id = 'no-match' // This will return no results
     }
+
+    // Build filtered where clause (includes user filters)
+    const where: any = { ...baseWhere }
 
     if (resolved === "true") {
       where.isResolved = true
@@ -962,24 +983,24 @@ router.get("/feedback", async (req: any, res) => {
       prisma.feedback.count({ where })
     ])
 
-    // Calculate statistics
+    // Calculate statistics using baseWhere (unfiltered by user selections)
     const stats = {
-      totalFeedback: totalCount,
+      totalFeedback: await prisma.feedback.count({ where: baseWhere }),
       unresolvedFeedback: await prisma.feedback.count({
         where: {
-          ...where,
+          ...baseWhere,
           isResolved: false
         }
       }),
       resolvedFeedback: await prisma.feedback.count({
         where: {
-          ...where,
+          ...baseWhere,
           isResolved: true
         }
       }),
       todayFeedback: await prisma.feedback.count({
         where: {
-          ...where,
+          ...baseWhere,
           createdAt: {
             gte: new Date(new Date().setHours(0, 0, 0, 0))
           }
@@ -1012,18 +1033,27 @@ router.patch("/feedback/:feedbackId/resolve", async (req: any, res) => {
     const { feedbackId } = req.params
     const { resolutionComment } = req.body
 
-    // Verify feedback belongs to this teleshop manager
+    // Verify feedback belongs to this teleshop manager's outlet
     const existingFeedback = await prisma.feedback.findFirst({
       where: {
-        id: feedbackId,
-        assignedTo: "teleshop_manager",
-        assignedToId: teleshopManager.id,
-        rating: 3
+        id: feedbackId
+      },
+      include: {
+        token: {
+          select: {
+            outletId: true
+          }
+        }
       }
     })
 
     if (!existingFeedback) {
-      return res.status(403).json({ error: "Feedback not found or not assigned to you" })
+      return res.status(404).json({ error: "Feedback not found" })
+    }
+
+    // Check if feedback is from teleshop manager's outlet
+    if (!teleshopManager.branchId || existingFeedback.token.outletId !== teleshopManager.branchId) {
+      return res.status(403).json({ error: "Feedback not found or not from your outlet" })
     }
 
     if ((existingFeedback as any).isResolved) {

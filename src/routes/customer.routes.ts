@@ -420,7 +420,7 @@ router.get("/token/:tokenId", async (req, res) => {
       return res.status(404).json({ error: "Token not found" })
     }
 
-    // Calculate position in queue
+    // Calculate `position in queue`
     const position = await prisma.token.count({
       where: {
         outletId: token.outletId,

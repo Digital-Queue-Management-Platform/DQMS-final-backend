@@ -33,13 +33,13 @@ router.post("/login", async (req, res) => {
     })
 
     // Broadcast status change for real-time updates
-    broadcast({ 
-      type: "OFFICER_STATUS_CHANGE", 
-      data: { 
-        officerId: officer.id, 
-        status: "available", 
-        timestamp: new Date().toISOString() 
-      } 
+    broadcast({
+      type: "OFFICER_STATUS_CHANGE",
+      data: {
+        officerId: officer.id,
+        status: "available",
+        timestamp: new Date().toISOString()
+      }
     })
 
     // sign JWT and set httpOnly cookie (no expiration for production)
@@ -48,9 +48,9 @@ router.post("/login", async (req, res) => {
     if (JWT_EXPIRES) {
       signOptions.expiresIn = JWT_EXPIRES
     }
-    
+
     const token = (jwt as any).sign(tokenOptions, JWT_SECRET as jwt.Secret, signOptions)
-    
+
     res.cookie("dq_jwt", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
@@ -120,9 +120,9 @@ router.post("/register", async (req, res) => {
 // Get next token in queue (supports cross-service fallback when enabled)
 router.post("/next-token", async (req, res) => {
   try {
-    const { officerId, allowFallback } = req.body
+    const { officerId, allowFallback, allowUnmatched } = req.body
 
-    console.log(`Next token request - Officer: ${officerId}, AllowFallback: ${allowFallback}`)
+    console.log(`Next token request - Officer: ${officerId}, AllowFallback: ${allowFallback}, AllowUnmatched: ${allowUnmatched}`)
 
     const officer = await prisma.officer.findUnique({
       where: { id: officerId },
@@ -196,16 +196,53 @@ router.post("/next-token", async (req, res) => {
           // If stored as object-map, convert values
           return Object.values(val).filter(v => typeof v === 'string') as string[]
         }
-      } catch {}
+      } catch { }
       return []
     }
 
     const hasAny = (a: string[], b: string[]) => a.some(x => b.includes(x))
 
-    // 1) Try strict match: serviceTypes ∩ assignedServices AND preferredLanguages ∩ officerLanguages
     let nextToken: any = null
-    if (assignedServices.length > 0) {
-      // Get a small batch ordered by earliest and filter in memory for language
+
+    // If allowUnmatched is true, bypass strict matching and get ANY waiting token
+    if (allowUnmatched) {
+      console.log('⚠️ UNMATCHED MODE: Bypassing service/language matching')
+
+      const unmatchedToken = await prisma.token.findFirst({
+        where: {
+          outletId: officer.outletId,
+          status: 'waiting',
+          createdAt: { gte: lastReset },
+        },
+        orderBy: { tokenNumber: 'asc' },
+        include: { customer: true },
+      })
+
+      if (unmatchedToken) {
+        nextToken = unmatchedToken
+        console.log(`✓ Calling UNMATCHED token #${unmatchedToken.tokenNumber} by officer ${officer.name}`)
+      } else {
+        console.log('No waiting tokens available')
+        return res.json({ message: 'No waiting tokens available' })
+      }
+    } else {
+      // STRICT MATCHING: Officers must have both assigned services AND languages
+      // Only tokens matching BOTH service AND language can be assigned
+
+      console.log(`Officer ${officer.name} - Assigned Services:`, assignedServices, 'Languages:', officerLanguages)
+
+      // Validate officer has required assignments
+      if (assignedServices.length === 0) {
+        console.log('Officer has no assigned services')
+        return res.json({ error: 'You have no assigned services. Please contact your manager.' })
+      }
+
+      if (officerLanguages.length === 0) {
+        console.log('Officer has no assigned languages')
+        return res.json({ error: 'You have no assigned languages. Please contact your manager.' })
+      }
+
+      // Get candidate tokens that match officer's assigned services
       const candidateTokens = await prisma.token.findMany({
         where: {
           outletId: officer.outletId,
@@ -214,80 +251,35 @@ router.post("/next-token", async (req, res) => {
           createdAt: { gte: lastReset },
         },
         orderBy: { tokenNumber: 'asc' },
-        take: 25,
+        take: 50, // Increased to find more matches
         include: { customer: true },
       })
 
+      console.log(`Found ${candidateTokens.length} tokens with matching services`)
+
+      // Filter by language match
       for (const t of candidateTokens) {
         const tokenLangs = toLangArray(t.preferredLanguages)
-        if (tokenLangs.length === 0 || officerLanguages.length === 0) {
-          // If either side has no language specified, treat as non-match for strict phase
+        console.log(`Token #${t.tokenNumber} - Services:`, t.serviceTypes, 'Languages:', tokenLangs)
+
+        // If token has no language preference, skip it in strict mode
+        if (tokenLangs.length === 0) {
+          console.log(`Token #${t.tokenNumber} has no language preference - skipping`)
           continue
         }
+
+        // Check if there's a language match
         if (hasAny(tokenLangs, officerLanguages)) {
           nextToken = t
+          console.log(`✓ Matched Token #${t.tokenNumber} - Service + Language match`)
           break
+        } else {
+          console.log(`✗ Token #${t.tokenNumber} language mismatch - Token wants:`, tokenLangs, 'Officer has:', officerLanguages)
         }
       }
-    }
 
-    console.log("Strict match token:", nextToken ? `Token #${nextToken.tokenNumber}` : 'None')
-
-    // 2) If no strict match, check for globally unmatched earliest token
-    if (!nextToken) {
-      // Get the earliest waiting token overall
-      const earliest = await prisma.token.findFirst({
-        where: {
-          outletId: officer.outletId,
-          status: 'waiting',
-          createdAt: { gte: lastReset },
-        },
-        orderBy: { tokenNumber: 'asc' },
-        include: { customer: true },
-      })
-
-      if (!earliest) {
-        console.log('No tokens in queue')
-        return res.json({ message: 'No tokens in queue' })
-      }
-
-      // Determine if ANY officer in this outlet can serve earliest by service+language
-      const outletOfficers = await prisma.officer.findMany({
-        where: { outletId: officer.outletId },
-        select: { id: true, assignedServices: true, languages: true },
-      })
-
-      const tokenLangs = toLangArray(earliest.preferredLanguages)
-      const tokenServices = Array.isArray(earliest.serviceTypes) ? earliest.serviceTypes as string[] : []
-
-      const anyOfficerMatches = outletOfficers.some(o => {
-        // parse services
-        let svc: string[] = []
-        if (o.assignedServices) {
-          try {
-            if (Array.isArray(o.assignedServices)) svc = o.assignedServices as string[]
-            else if (typeof o.assignedServices === 'string') svc = JSON.parse(o.assignedServices)
-            else if (typeof o.assignedServices === 'object') svc = Object.values(o.assignedServices).filter(v => typeof v === 'string') as string[]
-          } catch {}
-        }
-        // parse languages
-        let langs: string[] = []
-        if (o.languages) {
-          try {
-            if (Array.isArray(o.languages)) langs = o.languages as string[]
-            else if (typeof o.languages === 'string') langs = JSON.parse(o.languages)
-            else if (typeof o.languages === 'object') langs = Object.values(o.languages).filter(v => typeof v === 'string') as string[]
-          } catch {}
-        }
-        return hasAny(tokenServices, svc) && hasAny(tokenLangs, langs)
-      })
-
-      if (!anyOfficerMatches) {
-        // Globally unmatched token -> visible to all officers
-        nextToken = earliest
-        console.log('Assigning globally unmatched token:', `Token #${earliest.tokenNumber}`)
-      } else {
-        // Respect service+language constraints; do not allow generic fallback
+      if (!nextToken) {
+        console.log('No tokens match your assigned services and languages')
         return res.json({ message: 'No tokens match your assigned services and languages right now' })
       }
     }
@@ -311,7 +303,7 @@ router.post("/next-token", async (req, res) => {
 
     broadcast({ type: 'TOKEN_CALLED', data: updatedToken })
 
-  const tokenLangs = toLangArray((updatedToken as any).preferredLanguages)
+    const tokenLangs = toLangArray((updatedToken as any).preferredLanguages)
     return res.json({
       success: true,
       token: updatedToken,
@@ -326,6 +318,111 @@ router.post("/next-token", async (req, res) => {
     res.status(500).json({ error: "Failed to get next token" })
   }
 })
+
+// Get unmatched tokens - tokens that NO officer in the outlet can serve
+router.get("/unmatched-tokens/:outletId", async (req, res) => {
+  try {
+    const { outletId } = req.params
+    const lastReset = getLastDailyReset()
+
+    // Helper functions (reuse from next-token)
+    const toLangArray = (val: any): string[] => {
+      try {
+        if (!val) return []
+        if (Array.isArray(val)) return val.filter(v => typeof v === 'string') as string[]
+        if (typeof val === 'string') {
+          const parsed = JSON.parse(val)
+          return Array.isArray(parsed) ? parsed.filter(v => typeof v === 'string') : []
+        }
+        if (typeof val === 'object') {
+          return Object.values(val).filter(v => typeof v === 'string') as string[]
+        }
+      } catch { }
+      return []
+    }
+
+    const parseJsonArray = (val: any): string[] => {
+      try {
+        if (!val) return []
+        if (Array.isArray(val)) return val as string[]
+        if (typeof val === 'string') return JSON.parse(val)
+        if (typeof val === 'object') return Object.values(val).filter(v => typeof v === 'string') as string[]
+      } catch { }
+      return []
+    }
+
+    const hasAny = (a: string[], b: string[]) => a.some(x => b.includes(x))
+
+    // Get all waiting AND skipped tokens (skipped tokens should still be visible for recall)
+    const waitingTokens = await prisma.token.findMany({
+      where: {
+        outletId,
+        status: {
+          in: ['waiting', 'skipped']
+        },
+        createdAt: { gte: lastReset },
+      },
+      orderBy: { tokenNumber: 'asc' },
+      include: { customer: true },
+    })
+
+    // Get all ONLINE/AVAILABLE officers in this outlet with their assignments
+    // Only officers with status 'available' or 'serving' should be considered
+    const officers = await prisma.officer.findMany({
+      where: {
+        outletId,
+        status: {
+          in: ['available', 'serving']
+        }
+      },
+      select: { id: true, assignedServices: true, languages: true, status: true },
+    })
+
+    console.log(`Checking ${waitingTokens.length} tokens against ${officers.length} online officers for unmatched`)
+
+    // Filter tokens that NO officer can serve
+    const unmatchedTokens = waitingTokens.filter(token => {
+      const tokenServices = Array.isArray(token.serviceTypes) ? token.serviceTypes as string[] : []
+      const tokenLangs = toLangArray(token.preferredLanguages)
+
+      // Skip if token has no service types or languages
+      if (tokenServices.length === 0 || tokenLangs.length === 0) {
+        return false
+      }
+
+      // Check if ANY officer can serve this token (service AND language match)
+      const anyMatch = officers.some(officer => {
+        const officerServices = parseJsonArray(officer.assignedServices)
+        const officerLangs = parseJsonArray(officer.languages)
+
+        // Officer must have both services and languages
+        if (officerServices.length === 0 || officerLangs.length === 0) {
+          return false
+        }
+
+        const serviceMatch = hasAny(tokenServices, officerServices)
+        const langMatch = hasAny(tokenLangs, officerLangs)
+
+        return serviceMatch && langMatch
+      })
+
+      // Return true if NO officer matches (unmatched token)
+      const isUnmatched = !anyMatch
+      if (isUnmatched) {
+        console.log(`Token #${token.tokenNumber} is unmatched - Services: ${tokenServices.join(',')}, Languages: ${tokenLangs.join(',')}`)
+      }
+      return isUnmatched
+    })
+
+    console.log(`Found ${unmatchedTokens.length} unmatched tokens`)
+
+    res.json({ unmatchedTokens })
+  } catch (error) {
+    console.error("Unmatched tokens error:", error)
+    res.status(500).json({ error: "Failed to fetch unmatched tokens" })
+  }
+})
+
 
 // Skip current token
 router.post("/skip-token", async (req, res) => {
@@ -436,7 +533,7 @@ router.post("/complete-service", async (req, res) => {
     try {
       let completedRef: string | null = null
       // Generate reference number: YYYY-MM-DD/OutletName/TokenNumber for uniqueness
-      const refDate = new Date().toISOString().slice(0,10)
+      const refDate = new Date().toISOString().slice(0, 10)
       const outletName = (token.outlet?.name || 'Outlet').replace(/\//g, '-')
       const refNumber = `${refDate}/${outletName}/${token.tokenNumber}`
 
@@ -472,12 +569,12 @@ router.post("/complete-service", async (req, res) => {
         const services = Array.isArray((token as any).serviceTypes) ? (token as any).serviceTypes.join(', ') : ''
         const officerName = (token as any)?.officer?.name || 'Officer'
         const outlet = token.outlet?.name || ''
-        
+
         // Build absolute tracking URL using same logic as below
         const trackRef = `/service/status?ref=${encodeURIComponent(serviceCase.refNumber)}`
         const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
         let baseUrl = origins[0] || ''
-        
+
         // Always prioritize Vercel URLs if available
         const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
         if (vercelUrl) {
@@ -486,7 +583,7 @@ router.post("/complete-service", async (req, res) => {
           // In production, prefer any HTTPS URL over localhost
           baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
         }
-        
+
         const trackUrl = baseUrl ? `${baseUrl}${trackRef}` : trackRef
         const msg = `Ref: ${serviceCase.refNumber} | Officer: ${officerName} | Outlet: ${outlet} | Services: ${services}. Track: ${trackUrl}`
         console.log(`[SMS][${token.customer.mobileNumber}] ${msg}`)
@@ -505,7 +602,7 @@ router.post("/complete-service", async (req, res) => {
       // Build absolute URL for SMS so it becomes clickable
       const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
       let baseUrl = origins[0] || ''
-      
+
       // Always prioritize Vercel URLs if available
       const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
       if (vercelUrl) {
@@ -514,7 +611,7 @@ router.post("/complete-service", async (req, res) => {
         // In production, prefer any HTTPS URL over localhost
         baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
       }
-      
+
       const trackUrl = trackRef && baseUrl ? `${baseUrl}${trackRef}` : trackRef
       return res.json({ success: true, token, refNumber, trackRef, trackUrl })
     } catch {
@@ -554,11 +651,11 @@ router.post("/status", async (req, res) => {
       if (lastBreak && lastBreak.endedAt) {
         const timeSinceLastBreak = Date.now() - lastBreak.endedAt.getTime()
         const minTimeRequired = 30 * 60 * 1000 // 30 minutes
-        
+
         if (timeSinceLastBreak < minTimeRequired) {
           const remainingMinutes = Math.ceil((minTimeRequired - timeSinceLastBreak) / (1000 * 60))
-          return res.status(400).json({ 
-            error: `Must wait ${remainingMinutes} more minutes before taking another break` 
+          return res.status(400).json({
+            error: `Must wait ${remainingMinutes} more minutes before taking another break`
           })
         }
       }
@@ -625,13 +722,13 @@ router.post("/status", async (req, res) => {
     })
 
     // Broadcast status change for real-time updates
-    broadcast({ 
-      type: "OFFICER_STATUS_CHANGE", 
-      data: { 
-        officerId: officer.id, 
-        status: officer.status, 
-        timestamp: new Date().toISOString() 
-      } 
+    broadcast({
+      type: "OFFICER_STATUS_CHANGE",
+      data: {
+        officerId: officer.id,
+        status: officer.status,
+        timestamp: new Date().toISOString()
+      }
     })
 
     res.json({ success: true, officer })
@@ -699,13 +796,13 @@ router.post("/break/start", async (req, res) => {
     })
 
     // Broadcast status change for real-time updates
-    broadcast({ 
-      type: "OFFICER_STATUS_CHANGE", 
-      data: { 
-        officerId: officerId, 
-        status: "on_break", 
-        timestamp: new Date().toISOString() 
-      } 
+    broadcast({
+      type: "OFFICER_STATUS_CHANGE",
+      data: {
+        officerId: officerId,
+        status: "on_break",
+        timestamp: new Date().toISOString()
+      }
     })
 
     res.json({ success: true, breakLog })
@@ -745,21 +842,21 @@ router.post("/break/end", async (req, res) => {
     })
 
     // Broadcast status change for real-time updates
-    broadcast({ 
-      type: "OFFICER_STATUS_CHANGE", 
-      data: { 
-        officerId: officerId, 
-        status: "available", 
-        timestamp: new Date().toISOString() 
-      } 
+    broadcast({
+      type: "OFFICER_STATUS_CHANGE",
+      data: {
+        officerId: officerId,
+        status: "available",
+        timestamp: new Date().toISOString()
+      }
     })
 
     const durationMinutes = Math.floor(
       (updatedBreak.endedAt!.getTime() - updatedBreak.startedAt.getTime()) / (1000 * 60)
     )
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       breakLog: updatedBreak,
       durationMinutes
     })
@@ -789,7 +886,7 @@ router.get("/break/active/:officerId", async (req, res) => {
       (Date.now() - activeBreak.startedAt.getTime()) / (1000 * 60)
     )
 
-    res.json({ 
+    res.json({
       activeBreak: {
         id: activeBreak.id,
         startedAt: activeBreak.startedAt.toISOString(),
@@ -851,7 +948,7 @@ router.get("/me", async (req, res) => {
   try {
     // Check for JWT token in cookie or Authorization header
     let token = req.cookies?.dq_jwt
-    
+
     // If no cookie, check Authorization header
     if (!token) {
       const authHeader = req.headers.authorization
@@ -859,7 +956,7 @@ router.get("/me", async (req, res) => {
         token = authHeader.substring(7)
       }
     }
-    
+
     if (!token) return res.status(401).json({ error: "Not authenticated" })
 
     let payload: any
@@ -884,29 +981,53 @@ router.get("/me", async (req, res) => {
 router.get("/summary/served/:officerId", async (req, res) => {
   try {
     const { officerId } = req.params
+    const { from, to } = req.query
 
     const officer = await prisma.officer.findUnique({ where: { id: officerId } })
     if (!officer) {
       return res.status(404).json({ error: "Officer not found" })
     }
 
-    // Get tokens served by this officer today
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    const tomorrow = new Date(today)
-    tomorrow.setDate(tomorrow.getDate() + 1)
+    // Determine date range: use query params if provided, otherwise default to today
+    let startDate: Date
+    let endDate: Date
+
+    if (from && to) {
+      // Use provided date range
+      startDate = new Date(from as string)
+      startDate.setHours(0, 0, 0, 0)
+      endDate = new Date(to as string)
+      endDate.setHours(23, 59, 59, 999)
+    } else if (from) {
+      // Only start date provided - from that date to now
+      startDate = new Date(from as string)
+      startDate.setHours(0, 0, 0, 0)
+      endDate = new Date()
+    } else if (to) {
+      // Only end date provided - from beginning to that date
+      startDate = new Date(0) // epoch
+      endDate = new Date(to as string)
+      endDate.setHours(23, 59, 59, 999)
+    } else {
+      // Default to today
+      startDate = new Date()
+      startDate.setHours(0, 0, 0, 0)
+      endDate = new Date(startDate)
+      endDate.setDate(endDate.getDate() + 1)
+    }
 
     const tokens = await prisma.token.findMany({
       where: {
         assignedTo: officerId,
         status: { in: ["completed", "served"] },
         completedAt: {
-          gte: today,
-          lt: tomorrow,
+          gte: startDate,
+          lte: endDate,
         },
       },
       include: {
         customer: true,
+        officer: true,
       },
       orderBy: { completedAt: "desc" },
     })
@@ -915,9 +1036,9 @@ router.get("/summary/served/:officerId", async (req, res) => {
     const tokenIds = tokens.map(t => t.id)
     const cases = tokenIds.length > 0
       ? await (prisma as any).serviceCase.findMany({
-          where: { tokenId: { in: tokenIds } },
-          select: { tokenId: true, refNumber: true },
-        })
+        where: { tokenId: { in: tokenIds } },
+        select: { tokenId: true, refNumber: true },
+      })
       : []
     const refByToken = new Map<string, string>()
     for (const c of cases) {
@@ -938,9 +1059,9 @@ router.get("/summary/served/:officerId", async (req, res) => {
     // Also load service case status for each token
     const serviceCases = tokenIds.length > 0
       ? await (prisma as any).serviceCase.findMany({
-          where: { tokenId: { in: tokenIds } },
-          select: { tokenId: true, status: true },
-        })
+        where: { tokenId: { in: tokenIds } },
+        select: { tokenId: true, status: true },
+      })
       : []
     const statusByToken = new Map<string, string>()
     for (const c of serviceCases) {
@@ -953,6 +1074,8 @@ router.get("/summary/served/:officerId", async (req, res) => {
       tokens: tokens.map(token => ({
         ...token,
         customerName: token.customer?.name || 'Anonymous',
+        customerMobile: token.customer?.mobileNumber || null,
+        assignedOfficerName: token.officer?.name || null,
         serviceNames: Array.isArray(token.serviceTypes) && token.serviceTypes.length > 0 ? token.serviceTypes : ['General Service'],
         refNumber: refByToken.get(token.id) || null,
         serviceCaseStatus: statusByToken.get(token.id) || null,
@@ -979,7 +1102,7 @@ router.get("/summary/breaks/:officerId", async (req, res) => {
     today.setHours(0, 0, 0, 0)
     const tomorrow = new Date(today)
     tomorrow.setDate(tomorrow.getDate() + 1)
-    
+
     const breaks = await prisma.breakLog.findMany({
       where: {
         officerId,
@@ -995,7 +1118,7 @@ router.get("/summary/breaks/:officerId", async (req, res) => {
     const breakData = breaks.map(brk => {
       const startTime = new Date(brk.startedAt)
       const endTime = brk.endedAt ? new Date(brk.endedAt) : null
-      const durationMinutes = endTime 
+      const durationMinutes = endTime
         ? Math.floor((endTime.getTime() - startTime.getTime()) / (1000 * 60))
         : Math.floor((new Date().getTime() - startTime.getTime()) / (1000 * 60))
 
@@ -1100,7 +1223,7 @@ router.post("/service-case/update", async (req, res) => {
         token = authHeader.substring(7)
       }
     }
-    
+
     if (!token) return res.status(401).json({ error: "Not authenticated" })
 
     let payload: any
@@ -1112,7 +1235,7 @@ router.post("/service-case/update", async (req, res) => {
 
     const officerId = payload.officerId
     const { refNumber, note } = req.body || {}
-    
+
     if (!refNumber || !note) {
       return res.status(400).json({ error: 'refNumber and note are required' })
     }
@@ -1275,13 +1398,13 @@ router.post("/logout", async (req, res) => {
           })
 
           // Broadcast status change for real-time updates
-          broadcast({ 
-            type: "OFFICER_STATUS_CHANGE", 
-            data: { 
-              officerId: payload.officerId, 
-              status: "offline", 
-              timestamp: new Date().toISOString() 
-            } 
+          broadcast({
+            type: "OFFICER_STATUS_CHANGE",
+            data: {
+              officerId: payload.officerId,
+              status: "offline",
+              timestamp: new Date().toISOString()
+            }
           })
         }
       } catch (e) {
