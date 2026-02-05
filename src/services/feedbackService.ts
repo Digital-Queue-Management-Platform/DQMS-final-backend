@@ -17,11 +17,6 @@ export class FeedbackService {
             include: {
               officer: {
                 include: {
-                  teleshopManager: {
-                    include: {
-                      region: true
-                    }
-                  },
                   outlet: {
                     include: {
                       region: true
@@ -51,9 +46,7 @@ export class FeedbackService {
         case 2:
           // 2 star -> RTOM
           assignedTo = "regional_manager"
-          if (feedback.token.officer?.teleshopManager?.regionId) {
-            assignedToId = feedback.token.officer.teleshopManager.regionId
-          } else if (feedback.token.officer?.outlet?.regionId) {
+          if (feedback.token?.officer?.outlet?.regionId) {
             assignedToId = feedback.token.officer.outlet.regionId
           }
           break
@@ -61,8 +54,14 @@ export class FeedbackService {
         case 3:
           // 3 star -> Teleshop Manager
           assignedTo = "teleshop_manager"
-          if (feedback.token.officer?.teleshopManagerId) {
-            assignedToId = feedback.token.officer.teleshopManagerId
+          if (feedback.token?.officer?.outletId) {
+            // Find teleshop manager for this outlet's branch
+            const teleshopManager = await prisma.teleshopManager.findFirst({
+              where: { branchId: feedback.token.officer.outletId }
+            })
+            if (teleshopManager) {
+              assignedToId = teleshopManager.id
+            }
           }
           break
 
@@ -106,11 +105,7 @@ export class FeedbackService {
       const token = await prisma.token.findUnique({
         where: { id: tokenId },
         include: {
-          officer: {
-            include: {
-              teleshopManager: true
-            }
-          },
+          officer: true,
           customer: true,
           outlet: true
         }
@@ -124,12 +119,17 @@ export class FeedbackService {
         throw new Error("Token has no assigned officer")
       }
 
+      // Find teleshop manager for this outlet's branch
+      const teleshopManager = await prisma.teleshopManager.findFirst({
+        where: { branchId: token.officer.outletId }
+      })
+
       const completedService = await (prisma as any).completedService.create({
         data: {
           tokenId,
           serviceId,
           officerId: token.officer.id,
-          teleshopManagerId: token.officer.teleshopManagerId,
+          teleshopManagerId: teleshopManager?.id || null,
           customerId: token.customerId,
           outletId: token.outletId,
           duration,
