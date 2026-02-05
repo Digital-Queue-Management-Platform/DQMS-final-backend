@@ -127,7 +127,7 @@ app.get('/api/metrics', (req, res) => {
   const out: any = {}
   for (const [key, stats] of routeMetrics.entries()) {
     const avg = stats.total / stats.count
-    const sorted = [...stats.samples].sort((a,b) => a-b)
+    const sorted = [...stats.samples].sort((a, b) => a - b)
     const p95 = sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] : 0
     out[key] = { count: stats.count, avg: Number(avg.toFixed(2)), max: Number(stats.max.toFixed(2)), p95: Number(p95.toFixed(2)) }
   }
@@ -199,9 +199,9 @@ async function processAppointments() {
 
     // Fetch due appointments (booked, today, appointmentAt <= ahead)
     const startOfDay = new Date()
-    startOfDay.setHours(0,0,0,0)
+    startOfDay.setHours(0, 0, 0, 0)
     const endOfDay = new Date()
-    endOfDay.setHours(23,59,59,999)
+    endOfDay.setHours(23, 59, 59, 999)
 
     const dueAppointments: any = await prisma.$queryRaw`
       SELECT * FROM "Appointment"
@@ -298,10 +298,22 @@ function scheduleDailyResetTick() {
     try {
       const ts = new Date()
       logger.info(`Daily reset boundary reached: ${ts.toLocaleString()}`)
+
+      // Reset all officer counter assignments
+      await prisma.officer.updateMany({
+        where: {
+          counterNumber: { not: null }
+        },
+        data: {
+          counterNumber: null
+        }
+      })
+      logger.info('All officer counter assignments reset')
+
       // Broadcast a lightweight signal; clients may optionally refresh views
       broadcast({ type: "DAILY_RESET", data: { timestamp: ts.toISOString() } })
     } catch (e) {
-      logger.error({ err: e }, "Error broadcasting DAILY_RESET")
+      logger.error({ err: e }, "Error during daily reset")
     } finally {
       // Schedule the next tick
       scheduleDailyResetTick()

@@ -1,5 +1,5 @@
 import { Router } from "express"
-import { prisma } from "../server"
+import { prisma, broadcast } from "../server"
 import * as jwt from "jsonwebtoken"
 
 const router = Router()
@@ -23,12 +23,7 @@ router.post("/login", async (req, res) => {
         isActive: true
       },
       include: {
-        region: true,
-        officers: {
-          include: {
-            outlet: true
-          }
-        }
+        region: true
       }
     })
 
@@ -43,22 +38,22 @@ router.post("/login", async (req, res) => {
     })
 
     // Create JWT token for teleshop manager authentication
-    const tokenOptions: any = { 
+    const tokenOptions: any = {
       teleshopManagerId: teleshopManager.id,
       name: teleshopManager.name,
       mobileNumber: teleshopManager.mobileNumber,
       regionId: teleshopManager.regionId,
       role: "teleshop_manager"
     }
-    
+
     const signOptions: any = {}
     if (JWT_EXPIRES) {
       signOptions.expiresIn = JWT_EXPIRES
     }
-    
+
     const token = (jwt as any).sign(
-      tokenOptions, 
-      JWT_SECRET as jwt.Secret, 
+      tokenOptions,
+      JWT_SECRET as jwt.Secret,
       signOptions
     )
 
@@ -77,8 +72,7 @@ router.post("/login", async (req, res) => {
         name: teleshopManager.name,
         mobileNumber: teleshopManager.mobileNumber,
         regionId: teleshopManager.regionId,
-        regionName: teleshopManager.region.name,
-        officers: teleshopManager.officers
+        regionName: teleshopManager.region.name
       },
       token,
       message: "Login successful"
@@ -113,7 +107,7 @@ router.post("/logout", async (req, res) => {
 const authenticateTeleshopManager = async (req: any, res: any, next: any) => {
   try {
     let token = req.cookies?.dq_teleshop_manager_jwt
-    
+
     if (!token) {
       const authHeader = req.headers.authorization
       if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -126,16 +120,16 @@ const authenticateTeleshopManager = async (req: any, res: any, next: any) => {
     }
 
     const payload = (jwt as any).verify(token, JWT_SECRET)
-    
+
     if (payload.role !== "teleshop_manager") {
       return res.status(403).json({ error: "Access denied. Teleshop Manager role required." })
     }
 
     // Verify teleshop manager still exists and is active
     const teleshopManager = await prisma.teleshopManager.findUnique({
-      where: { 
+      where: {
         id: payload.teleshopManagerId,
-        isActive: true 
+        isActive: true
       },
       include: { region: true }
     })
@@ -163,19 +157,7 @@ router.get("/me", async (req: any, res) => {
     const profile = await prisma.teleshopManager.findUnique({
       where: { id: teleshopManager.id },
       include: {
-        region: true,
-        officers: {
-          include: {
-            outlet: true,
-            BreakLog: {
-              where: {
-                endedAt: null // Active breaks only
-              },
-              orderBy: { startedAt: 'desc' },
-              take: 1
-            }
-          }
-        }
+        region: true
       }
     })
 
@@ -191,9 +173,14 @@ router.get("/officers", async (req: any, res) => {
   try {
     const teleshopManager = req.teleshopManager
 
+    // Check if teleshop manager has an assigned branch
+    if (!teleshopManager.branchId) {
+      return res.json({ success: true, officers: [], endpoint: "teleshop-manager-officers-v2" })
+    }
+
     const officers = await prisma.officer.findMany({
       where: {
-        teleshopManagerId: teleshopManager.id
+        outletId: teleshopManager.branchId
       },
       include: {
         outlet: true,
@@ -213,7 +200,7 @@ router.get("/officers", async (req: any, res) => {
       })
 
       const activeBreak = officer.BreakLog.find(breakLog => !breakLog.endedAt)
-      
+
       // Calculate total break time (in minutes)
       const totalMinutes = officer.BreakLog.reduce((total, breakLog) => {
         if (breakLog.endedAt) {
@@ -279,8 +266,7 @@ router.post("/officers", async (req: any, res) => {
     const officerData: any = {
       name,
       mobileNumber,
-      outletId,
-      teleshopManagerId: teleshopManager.id
+      outletId
     }
 
     if (counterNumber !== undefined) {
@@ -300,12 +286,11 @@ router.post("/officers", async (req: any, res) => {
     }
 
     console.log("Creating officer with data:", JSON.stringify(officerData, null, 2))
-    
+
     const officer = await prisma.officer.create({
       data: officerData,
       include: {
-        outlet: true,
-        teleshopManager: true
+        outlet: true
       }
     })
 
@@ -313,7 +298,7 @@ router.post("/officers", async (req: any, res) => {
   } catch (error: any) {
     console.error("Teleshop Manager officer creation error:", error)
     console.error("Request body:", req.body)
-    
+
     if (error.code === 'P2002') {
       res.status(400).json({ error: "An officer with this mobile number already exists" })
     } else if (error.code === 'P2003') {
@@ -331,21 +316,25 @@ router.patch("/officers/:officerId", async (req: any, res) => {
     const { officerId } = req.params
     const { name, counterNumber, assignedServices, isTraining, languages } = req.body
 
-    // Verify officer belongs to this teleshop manager
+    // Verify officer belongs to this teleshop manager's outlet
+    if (!teleshopManager.branchId) {
+      return res.status(403).json({ error: "You are not assigned to any branch" })
+    }
+
     const existingOfficer = await prisma.officer.findFirst({
       where: {
         id: officerId,
-        teleshopManagerId: teleshopManager.id
+        outletId: teleshopManager.branchId
       }
     })
 
     if (!existingOfficer) {
-      return res.status(403).json({ error: "Officer not found or not under your management" })
+      return res.status(403).json({ error: "Officer not found or not at your assigned outlet" })
     }
 
     // Prepare update data
     const updateData: any = {}
-    
+
     if (name !== undefined) updateData.name = name
     if (counterNumber !== undefined) updateData.counterNumber = counterNumber
     if (isTraining !== undefined) updateData.isTraining = isTraining
@@ -353,20 +342,19 @@ router.patch("/officers/:officerId", async (req: any, res) => {
     if (languages !== undefined) updateData.languages = languages
 
     console.log("Updating officer with data:", JSON.stringify(updateData, null, 2))
-    
+
     const updatedOfficer = await prisma.officer.update({
       where: { id: officerId },
       data: updateData,
       include: {
-        outlet: true,
-        teleshopManager: true
+        outlet: true
       }
     })
 
     res.json({ success: true, officer: updatedOfficer })
   } catch (error: any) {
     console.error("Teleshop Manager officer update error:", error)
-    
+
     if (error.code === 'P2002') {
       res.status(400).json({ error: "An officer with this mobile number already exists" })
     } else if (error.code === 'P2025') {
@@ -377,22 +365,104 @@ router.patch("/officers/:officerId", async (req: any, res) => {
   }
 })
 
+// Assign officer to counter
+router.patch("/officers/:officerId/assign-counter", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+    const { officerId } = req.params
+    const { counterNumber } = req.body
+
+    // Verify officer belongs to this teleshop manager's outlet
+    if (!teleshopManager.branchId) {
+      return res.status(403).json({ error: "You are not assigned to any branch" })
+    }
+
+    const officer = await prisma.officer.findFirst({
+      where: {
+        id: officerId,
+        outletId: teleshopManager.branchId
+      },
+      include: { outlet: true }
+    })
+
+    if (!officer) {
+      return res.status(403).json({ error: "Officer not found or not at your assigned outlet" })
+    }
+
+    // If assigning a counter (not null), validate it
+    if (counterNumber !== null && counterNumber !== undefined) {
+      const parsed = Number(counterNumber)
+
+      // Validate counter number is valid
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        return res.status(400).json({ error: "Counter number must be a positive integer" })
+      }
+
+      // Check outlet counter capacity
+      if (officer.outlet.counterCount && parsed > officer.outlet.counterCount) {
+        return res.status(400).json({
+          error: `Counter #${parsed} exceeds outlet capacity of ${officer.outlet.counterCount} counters`
+        })
+      }
+
+      // Check if counter is already assigned to another officer
+      const existingAssignment = await prisma.officer.findFirst({
+        where: {
+          outletId: officer.outletId,
+          counterNumber: parsed,
+          id: { not: officerId }
+        }
+      })
+
+      if (existingAssignment) {
+        return res.status(400).json({
+          error: `Counter #${parsed} is already assigned to ${existingAssignment.name}`
+        })
+      }
+    }
+
+    // Update officer counter assignment
+    const updatedOfficer = await prisma.officer.update({
+      where: { id: officerId },
+      data: { counterNumber: counterNumber === null ? null : Number(counterNumber) },
+      include: {
+        outlet: true
+      }
+    })
+
+    // Broadcast update
+    broadcast({
+      type: "OFFICER_UPDATED",
+      data: { officerId, counterNumber: updatedOfficer.counterNumber }
+    })
+
+    res.json({ success: true, officer: updatedOfficer })
+  } catch (error: any) {
+    console.error("Assign counter error:", error)
+    res.status(500).json({ error: "Failed to assign counter" })
+  }
+})
+
 // Delete officer managed by teleshop manager
 router.delete("/officers/:officerId", async (req: any, res) => {
   try {
     const teleshopManager = req.teleshopManager
     const { officerId } = req.params
 
-    // Verify officer belongs to this teleshop manager
+    // Verify officer belongs to this teleshop manager's outlet
+    if (!teleshopManager.branchId) {
+      return res.status(403).json({ error: "You are not assigned to any branch" })
+    }
+
     const existingOfficer = await prisma.officer.findFirst({
       where: {
         id: officerId,
-        teleshopManagerId: teleshopManager.id
+        outletId: teleshopManager.branchId
       }
     })
 
     if (!existingOfficer) {
-      return res.status(404).json({ error: "Officer not found or not under your management" })
+      return res.status(404).json({ error: "Officer not found or not at your assigned outlet" })
     }
 
     // Delete the officer
@@ -403,7 +473,7 @@ router.delete("/officers/:officerId", async (req: any, res) => {
     res.json({ success: true, message: "Officer deleted successfully" })
   } catch (error: any) {
     console.error("Teleshop Manager officer deletion error:", error)
-    
+
     if (error.code === 'P2025') {
       res.status(404).json({ error: "Officer not found" })
     } else {
@@ -421,7 +491,7 @@ router.get("/breaks/analytics", async (req: any, res) => {
     // Calculate date range based on timeframe
     let startDate = new Date()
     let endDate = new Date()
-    
+
     switch (timeframe) {
       case 'today':
         startDate.setHours(0, 0, 0, 0)
@@ -442,9 +512,25 @@ router.get("/breaks/analytics", async (req: any, res) => {
     }
 
     // Get all officers under this teleshop manager with break data
+    if (!teleshopManager.branchId) {
+      return res.json({
+        timeframe,
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+        teleshopStats: {
+          totalOfficers: 0,
+          officersOnBreak: 0,
+          totalBreaksToday: 0,
+          totalBreakMinutes: 0,
+          avgBreakDuration: 0
+        },
+        officers: []
+      })
+    }
+
     const officers = await prisma.officer.findMany({
       where: {
-        teleshopManagerId: teleshopManager.id
+        outletId: teleshopManager.branchId
       },
       include: {
         outlet: true,
@@ -470,7 +556,7 @@ router.get("/breaks/analytics", async (req: any, res) => {
         }
         return sum + Math.floor((Date.now() - brk.startedAt.getTime()) / (1000 * 60))
       }, 0)
-      
+
       const activeBreak = breaks.find(brk => !brk.endedAt)
       const avgBreakDuration = totalBreaks > 0 ? Math.round(totalMinutes / totalBreaks) : 0
 
@@ -497,7 +583,7 @@ router.get("/breaks/analytics", async (req: any, res) => {
           id: brk.id,
           startedAt: brk.startedAt,
           endedAt: brk.endedAt,
-          durationMinutes: brk.endedAt 
+          durationMinutes: brk.endedAt
             ? Math.floor((brk.endedAt.getTime() - brk.startedAt.getTime()) / (1000 * 60))
             : Math.floor((Date.now() - brk.startedAt.getTime()) / (1000 * 60))
         }))
@@ -510,7 +596,7 @@ router.get("/breaks/analytics", async (req: any, res) => {
       officersOnBreak: breakAnalytics.filter(o => o.activeBreak).length,
       totalBreaksToday: breakAnalytics.reduce((sum, o) => sum + o.totalBreaks, 0),
       totalBreakMinutes: breakAnalytics.reduce((sum, o) => sum + o.totalMinutes, 0),
-      avgBreakDuration: breakAnalytics.length > 0 
+      avgBreakDuration: breakAnalytics.length > 0
         ? Math.round(breakAnalytics.reduce((sum, o) => sum + o.avgBreakDuration, 0) / breakAnalytics.length)
         : 0
     }
@@ -535,11 +621,15 @@ router.get("/breaks/officer/:officerId", async (req: any, res) => {
     const { officerId } = req.params
     const { startDate, endDate } = req.query
 
-    // Verify officer belongs to this teleshop manager
+    // Verify officer belongs to this teleshop manager's outlet
+    if (!teleshopManager.branchId) {
+      return res.status(403).json({ error: "You are not assigned to any branch" })
+    }
+
     const officer = await prisma.officer.findFirst({
       where: {
         id: officerId,
-        teleshopManagerId: teleshopManager.id
+        outletId: teleshopManager.branchId
       },
       include: {
         outlet: true
@@ -547,7 +637,7 @@ router.get("/breaks/officer/:officerId", async (req: any, res) => {
     })
 
     if (!officer) {
-      return res.status(403).json({ error: "Officer not found or not under your management" })
+      return res.status(403).json({ error: "Officer not found or not at your assigned outlet" })
     }
 
     const start = startDate ? new Date(startDate as string) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // 7 days ago
@@ -568,7 +658,7 @@ router.get("/breaks/officer/:officerId", async (req: any, res) => {
       id: brk.id,
       startedAt: brk.startedAt,
       endedAt: brk.endedAt,
-      durationMinutes: brk.endedAt 
+      durationMinutes: brk.endedAt
         ? Math.floor((brk.endedAt.getTime() - brk.startedAt.getTime()) / (1000 * 60))
         : Math.floor((Date.now() - brk.startedAt.getTime()) / (1000 * 60)),
       isActive: !brk.endedAt
@@ -577,7 +667,7 @@ router.get("/breaks/officer/:officerId", async (req: any, res) => {
     const stats = {
       totalBreaks: breakData.length,
       totalMinutes: breakData.reduce((sum, brk) => sum + brk.durationMinutes, 0),
-      avgDuration: breakData.length > 0 
+      avgDuration: breakData.length > 0
         ? Math.round(breakData.reduce((sum, brk) => sum + brk.durationMinutes, 0) / breakData.length)
         : 0,
       longestBreak: breakData.length > 0 ? Math.max(...breakData.map(brk => brk.durationMinutes)) : 0,
@@ -619,8 +709,7 @@ router.get("/outlets", async (req: any, res) => {
             id: true,
             name: true,
             status: true,
-            counterNumber: true,
-            teleshopManagerId: true
+            counterNumber: true
           }
         },
         _count: {
@@ -651,13 +740,13 @@ router.get("/outlets", async (req: any, res) => {
 router.get("/completed-services", async (req: any, res) => {
   try {
     const teleshopManager = req.teleshopManager
-    const { 
-      page = "1", 
-      limit = "20", 
-      startDate, 
-      endDate, 
+    const {
+      page = "1",
+      limit = "20",
+      startDate,
+      endDate,
       officerId,
-      outletId 
+      outletId
     } = req.query
 
     const pageNum = Math.max(1, parseInt(page as string))
@@ -665,16 +754,34 @@ router.get("/completed-services", async (req: any, res) => {
     const skip = (pageNum - 1) * limitNum
 
     // Build where clause
-    const where: any = {
-      teleshopManagerId: teleshopManager.id
+    const where: any = {}
+
+    // Filter by teleshop manager's assigned outlet
+    if (teleshopManager.branchId) {
+      where.outletId = teleshopManager.branchId
+    } else {
+      // If no branch assigned, return empty results
+      return res.json({
+        services: [],
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total: 0,
+          totalPages: 0,
+          hasNext: false,
+          hasPrev: false
+        },
+        stats: {
+          totalServices: 0,
+          todayServices: 0,
+          thisWeekServices: 0,
+          avgDuration: 0
+        }
+      })
     }
 
     if (officerId) {
       where.officerId = officerId
-    }
-
-    if (outletId) {
-      where.outletId = outletId
     }
 
     if (startDate || endDate) {
@@ -783,24 +890,45 @@ router.get("/completed-services", async (req: any, res) => {
 router.get("/feedback", async (req: any, res) => {
   try {
     const teleshopManager = req.teleshopManager
-    const { 
-      page = "1", 
-      limit = "20", 
+    const {
+      page = "1",
+      limit = "20",
       resolved = "false",
       startDate,
-      endDate 
+      endDate
     } = req.query
 
     const pageNum = Math.max(1, parseInt(page as string))
     const limitNum = Math.min(100, Math.max(1, parseInt(limit as string)))
     const skip = (pageNum - 1) * limitNum
 
-    // Build where clause for feedback assigned to teleshop manager
-    const where: any = {
-      rating: 3, // 3-star ratings go to teleshop manager
-      assignedTo: "teleshop_manager",
-      assignedToId: teleshopManager.id
+    // Build base where clause for outlet filtering (used for stats)
+    // Get all feedback from tokens in this teleshop manager's outlet
+    const baseWhere: any = {}
+
+    // Filter by outlet if teleshop manager has a branchId assigned
+    if (teleshopManager.branchId) {
+      // Get all tokens from this outlet
+      const outletTokens = await prisma.token.findMany({
+        where: { outletId: teleshopManager.branchId },
+        select: { id: true }
+      })
+      const tokenIds = outletTokens.map(t => t.id)
+
+      // Filter feedback by these token IDs
+      if (tokenIds.length > 0) {
+        baseWhere.tokenId = { in: tokenIds }
+      } else {
+        // No tokens in this outlet, return empty
+        baseWhere.id = 'no-match' // This will return no results
+      }
+    } else {
+      // No branch assigned, return empty results
+      baseWhere.id = 'no-match' // This will return no results
     }
+
+    // Build filtered where clause (includes user filters)
+    const where: any = { ...baseWhere }
 
     if (resolved === "true") {
       where.isResolved = true
@@ -855,24 +983,24 @@ router.get("/feedback", async (req: any, res) => {
       prisma.feedback.count({ where })
     ])
 
-    // Calculate statistics
+    // Calculate statistics using baseWhere (unfiltered by user selections)
     const stats = {
-      totalFeedback: totalCount,
+      totalFeedback: await prisma.feedback.count({ where: baseWhere }),
       unresolvedFeedback: await prisma.feedback.count({
         where: {
-          ...where,
+          ...baseWhere,
           isResolved: false
         }
       }),
       resolvedFeedback: await prisma.feedback.count({
         where: {
-          ...where,
+          ...baseWhere,
           isResolved: true
         }
       }),
       todayFeedback: await prisma.feedback.count({
         where: {
-          ...where,
+          ...baseWhere,
           createdAt: {
             gte: new Date(new Date().setHours(0, 0, 0, 0))
           }
@@ -905,18 +1033,27 @@ router.patch("/feedback/:feedbackId/resolve", async (req: any, res) => {
     const { feedbackId } = req.params
     const { resolutionComment } = req.body
 
-    // Verify feedback belongs to this teleshop manager
+    // Verify feedback belongs to this teleshop manager's outlet
     const existingFeedback = await prisma.feedback.findFirst({
       where: {
-        id: feedbackId,
-        assignedTo: "teleshop_manager",
-        assignedToId: teleshopManager.id,
-        rating: 3
+        id: feedbackId
+      },
+      include: {
+        token: {
+          select: {
+            outletId: true
+          }
+        }
       }
     })
 
     if (!existingFeedback) {
-      return res.status(403).json({ error: "Feedback not found or not assigned to you" })
+      return res.status(404).json({ error: "Feedback not found" })
+    }
+
+    // Check if feedback is from teleshop manager's outlet
+    if (!teleshopManager.branchId || existingFeedback.token.outletId !== teleshopManager.branchId) {
+      return res.status(403).json({ error: "Feedback not found or not from your outlet" })
     }
 
     if ((existingFeedback as any).isResolved) {
@@ -962,10 +1099,10 @@ router.patch("/feedback/:feedbackId/resolve", async (req: any, res) => {
       }
     })
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       feedback: updatedFeedback,
-      message: "Feedback resolved successfully" 
+      message: "Feedback resolved successfully"
     })
   } catch (error) {
     console.error("Resolve feedback error:", error)
@@ -1042,23 +1179,21 @@ router.get("/alerts", async (req: any, res) => {
     const teleshopManager = req.teleshopManager
 
     // Get teleshop manager's outlets to filter alerts
-    const outlets = await prisma.outlet.findMany({
-      where: { 
-        officers: {
-          some: {
-            teleshopManagerId: teleshopManager.id
-          }
-        }
-      },
-      select: { id: true }
-    })
+    const outlets = teleshopManager.branchId
+      ? await prisma.outlet.findMany({
+        where: {
+          id: teleshopManager.branchId
+        },
+        select: { id: true }
+      })
+      : []
 
     const outletIds = outlets.map(outlet => outlet.id)
 
     const where: any = {
       type: "moderate_feedback", // Only 3-star feedback alerts for Teleshop Manager (stored as moderate_feedback)
     }
-    
+
     if (isRead !== undefined) {
       where.isRead = isRead === "true"
     }
@@ -1075,8 +1210,8 @@ router.get("/alerts", async (req: any, res) => {
       const tokenIds = alerts.map((a) => a.relatedEntity).filter((x): x is string => !!x)
       if (tokenIds.length > 0) {
         const tokens = await prisma.token.findMany({
-          where: { 
-            id: { in: tokenIds }, 
+          where: {
+            id: { in: tokenIds },
             outletId: { in: outletIds }
           },
           include: {
@@ -1084,17 +1219,17 @@ router.get("/alerts", async (req: any, res) => {
             outlet: { select: { name: true } }
           }
         })
-        
+
         const validTokenIds = new Set(tokens.map((t) => t.id))
         alerts = alerts.filter((a) => a.relatedEntity && validTokenIds.has(a.relatedEntity))
-        
+
         // Enrich alerts with outlet and customer information
         const tokenMap = new Map(tokens.map(t => [t.id, {
           outletId: t.outletId,
           outletName: t.outlet.name,
           customerName: t.customer?.name
         }]))
-        
+
         alerts = alerts.map(alert => ({
           ...alert,
           outletInfo: alert.relatedEntity ? tokenMap.get(alert.relatedEntity) : null
@@ -1106,7 +1241,7 @@ router.get("/alerts", async (req: any, res) => {
 
     // If specific outletId filter is requested
     if (outletId && alerts.length > 0) {
-      alerts = alerts.filter((alert: any) => 
+      alerts = alerts.filter((alert: any) =>
         alert.outletInfo && alert.outletInfo.outletId === outletId
       )
     }
@@ -1134,16 +1269,14 @@ router.patch("/alerts/:alertId/read", async (req: any, res) => {
     }
 
     // Get teleshop manager's outlets to verify ownership
-    const outlets = await prisma.outlet.findMany({
-      where: { 
-        officers: {
-          some: {
-            teleshopManagerId: teleshopManager.id
-          }
-        }
-      },
-      select: { id: true }
-    })
+    const outlets = teleshopManager.branchId
+      ? await prisma.outlet.findMany({
+        where: {
+          id: teleshopManager.branchId
+        },
+        select: { id: true }
+      })
+      : []
 
     const outletIds = outlets.map(outlet => outlet.id)
 
