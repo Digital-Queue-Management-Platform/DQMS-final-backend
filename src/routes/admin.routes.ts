@@ -643,6 +643,135 @@ router.put("/managers/:regionId", async (req, res) => {
   }
 })
 
+// Get all outlets with kiosk passwords (admin can view all outlets)
+router.get('/outlets', async (req, res) => {
+  try {
+    const { regionId } = req.query
+
+    const where: any = {}
+    if (regionId) {
+      where.regionId = regionId as string
+    }
+
+    const outlets = await prisma.outlet.findMany({
+      where,
+      include: {
+        region: {
+          select: {
+            name: true
+          }
+        },
+        _count: {
+          select: {
+            officers: true
+          }
+        }
+      },
+      orderBy: [
+        { isActive: 'desc' },
+        { name: 'asc' }
+      ]
+    })
+
+    // Return outlets with kiosk password info
+    const outletsWithPasswords = outlets.map(outlet => ({
+      id: outlet.id,
+      name: outlet.name,
+      location: outlet.location,
+      regionName: outlet.region.name,
+      regionId: outlet.regionId,
+      isActive: outlet.isActive,
+      kioskPassword: outlet.kioskPassword, // Admin can see passwords
+      counterCount: outlet.counterCount,
+      officerCount: outlet._count.officers,
+      createdAt: outlet.createdAt
+    }))
+
+    res.json(outletsWithPasswords)
+  } catch (error) {
+    console.error('Failed to fetch outlets', error)
+    res.status(500).json({ error: 'Failed to fetch outlets' })
+  }
+})
+
+// Reset kiosk password for an outlet
+router.post('/outlets/:outletId/reset-kiosk-password', async (req, res) => {
+  try {
+    const { outletId } = req.params
+
+    // Check if outlet exists
+    const outlet = await prisma.outlet.findUnique({
+      where: { id: outletId },
+      select: { 
+        id: true, 
+        name: true,
+        location: true
+      }
+    })
+
+    if (!outlet) {
+      return res.status(404).json({ error: 'Outlet not found' })
+    }
+
+    // Generate new password
+    const newPassword = generateSecurePassword()
+
+    // Update outlet with new password
+    await prisma.outlet.update({
+      where: { id: outletId },
+      data: { kioskPassword: newPassword }
+    })
+
+    res.json({
+      success: true,
+      message: `Kiosk password reset successfully for ${outlet.name}`,
+      outletId: outlet.id,
+      outletName: outlet.name,
+      newPassword: newPassword
+    })
+  } catch (error) {
+    console.error('Failed to reset kiosk password', error)
+    res.status(500).json({ error: 'Failed to reset kiosk password' })
+  }
+})
+
+// View kiosk password for an outlet
+router.get('/outlets/:outletId/kiosk-password', async (req, res) => {
+  try {
+    const { outletId } = req.params
+
+    const outlet = await prisma.outlet.findUnique({
+      where: { id: outletId },
+      select: {
+        id: true,
+        name: true,
+        location: true,
+        kioskPassword: true,
+        region: {
+          select: {
+            name: true
+          }
+        }
+      }
+    })
+
+    if (!outlet) {
+      return res.status(404).json({ error: 'Outlet not found' })
+    }
+
+    res.json({
+      outletId: outlet.id,
+      outletName: outlet.name,
+      location: outlet.location,
+      regionName: outlet.region.name,
+      kioskPassword: outlet.kioskPassword
+    })
+  } catch (error) {
+    console.error('Failed to fetch kiosk password', error)
+    res.status(500).json({ error: 'Failed to fetch kiosk password' })
+  }
+})
+
 export default router
 
 // Get system health status  

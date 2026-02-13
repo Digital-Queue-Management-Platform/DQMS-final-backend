@@ -2,6 +2,7 @@ import { Router } from "express"
 import { prisma } from "../server"
 import * as jwt from "jsonwebtoken"
 import * as bcrypt from "bcrypt"
+import { generateSecurePassword } from "../utils/passwordGenerator"
 
 const router = Router()
 
@@ -1208,13 +1209,17 @@ router.post("/outlets", async (req, res) => {
       return res.status(400).json({ error: "Counter count must be between 1 and 20" })
     }
 
+    // Generate secure password for walk-in kiosk
+    const kioskPassword = generateSecurePassword()
+
     const outlet = await prisma.outlet.create({
       data: {
         name: name.trim(),
         location: location.trim(),
         regionId: decoded.regionId,
         counterCount: counterCount,
-        isActive: true
+        isActive: true,
+        kioskPassword: kioskPassword
       },
       include: {
         officers: true,
@@ -1229,7 +1234,8 @@ router.post("/outlets", async (req, res) => {
     res.status(201).json({
       success: true,
       message: "Outlet created successfully",
-      outlet
+      outlet,
+      kioskPassword: kioskPassword // Return the generated password to the manager
     })
   } catch (error: any) {
     console.error("Create outlet error:", error)
