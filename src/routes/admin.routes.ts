@@ -772,7 +772,202 @@ router.get('/outlets/:outletId/kiosk-password', async (req, res) => {
   }
 })
 
-export default router
+// Get feedback for Admin (1-star ratings - critical feedback)
+router.get("/feedback", async (req, res) => {
+  try {
+    const {
+      page = "1",
+      limit = "20",
+      resolved = "false",
+      startDate,
+      endDate
+    } = req.query
+
+    const pageNum = Math.max(1, parseInt(page as string))
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string)))
+    const skip = (pageNum - 1) * limitNum
+
+    // Build base where clause for stats
+    const baseWhere: any = {
+      rating: 1 // Admin sees 1-star (critical) feedback only
+    }
+
+    // Build filtered where clause (includes user filters)
+    const where: any = { ...baseWhere }
+
+    if (resolved === "true") {
+      where.isResolved = true
+    } else if (resolved === "false") {
+      where.isResolved = false
+    }
+
+    if (startDate || endDate) {
+      where.createdAt = {}
+      if (startDate) where.createdAt.gte = new Date(startDate as string)
+      if (endDate) where.createdAt.lte = new Date(endDate as string)
+    }
+
+    // Get feedback
+    const [feedback, totalCount] = await Promise.all([
+      prisma.feedback.findMany({
+        where,
+        include: {
+          token: {
+            include: {
+              officer: {
+                select: {
+                  id: true,
+                  name: true,
+                  mobileNumber: true,
+                  counterNumber: true
+                }
+              },
+              outlet: {
+                select: {
+                  id: true,
+                  name: true,
+                  location: true
+                }
+              }
+            }
+          },
+          customer: {
+            select: {
+              id: true,
+              name: true,
+              mobileNumber: true
+            }
+          }
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        skip,
+        take: limitNum
+      }),
+      prisma.feedback.count({ where })
+    ])
+
+    // Calculate statistics using baseWhere (unfiltered by user selections)
+    const stats = {
+      totalFeedback: await prisma.feedback.count({ where: baseWhere }),
+      unresolvedFeedback: await prisma.feedback.count({
+        where: {
+          ...baseWhere,
+          isResolved: false
+        }
+      }),
+      resolvedFeedback: await prisma.feedback.count({
+        where: {
+          ...baseWhere,
+          isResolved: true
+        }
+      }),
+      todayFeedback: await prisma.feedback.count({
+        where: {
+          ...baseWhere,
+          createdAt: {
+            gte: new Date(new Date().setHours(0, 0, 0, 0))
+          }
+        }
+      })
+    }
+
+    res.json({
+      feedback,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: totalCount,
+        totalPages: Math.ceil(totalCount / limitNum),
+        hasNext: pageNum * limitNum < totalCount,
+        hasPrev: pageNum > 1
+      },
+      stats
+    })
+  } catch (error) {
+    console.error("Get admin feedback error:", error)
+    res.status(500).json({ error: "Failed to get feedback" })
+  }
+})
+
+// Resolve feedback (mark as resolved with resolution comment) for Admin
+router.patch("/feedback/:feedbackId/resolve", async (req, res) => {
+  try {
+    const { feedbackId } = req.params
+    const { resolutionComment } = req.body
+
+    // Verify feedback exists
+    const existingFeedback = await prisma.feedback.findFirst({
+      where: {
+        id: feedbackId
+      },
+      include: {
+        token: {
+          select: {
+            outletId: true
+          }
+        }
+      }
+    })
+
+    if (!existingFeedback) {
+      return res.status(404).json({ error: "Feedback not found" })
+    }
+
+    if ((existingFeedback as any).isResolved) {
+      return res.status(400).json({ error: "Feedback is already resolved" })
+    }
+
+    // Update feedback as resolved
+    const updatedFeedback = await prisma.feedback.update({
+      where: { id: feedbackId },
+      data: {
+        isResolved: true,
+        resolvedAt: new Date(),
+        resolvedBy: "Admin",
+        resolutionComment: resolutionComment || "Resolved by admin"
+      } as any,
+      include: {
+        token: {
+          include: {
+            officer: {
+              select: {
+                id: true,
+                name: true,
+                mobileNumber: true,
+                counterNumber: true
+              }
+            },
+            outlet: {
+              select: {
+                id: true,
+                name: true,
+                location: true
+              }
+            }
+          }
+        },
+        customer: {
+          select: {
+            id: true,
+            name: true,
+            mobileNumber: true
+          }
+        }
+      }
+    })
+
+    res.json({
+      success: true,
+      feedback: updatedFeedback,
+      message: "Feedback resolved successfully"
+    })
+  } catch (error) {
+    console.error("Resolve admin feedback error:", error)
+    res.status(500).json({ error: "Failed to resolve feedback" })
+  }
+})
 
 // Get system health status  
 router.get("/system-health", async (req, res) => {
@@ -967,3 +1162,5 @@ router.delete('/regions/:regionId', async (req, res) => {
     res.status(500).json({ error: 'Failed to delete region' })
   }
 })
+
+export default router

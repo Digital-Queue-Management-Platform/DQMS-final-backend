@@ -1859,4 +1859,288 @@ router.patch("/alerts/:alertId/read", async (req, res) => {
   }
 })
 
+// Get feedback for RTOM (2-star ratings from their region)
+router.get("/feedback", async (req, res) => {
+  try {
+    const {
+      page = "1",
+      limit = "20",
+      resolved = "false",
+      startDate,
+      endDate
+    } = req.query
+
+    const pageNum = Math.max(1, parseInt(page as string))
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string)))
+    const skip = (pageNum - 1) * limitNum
+
+    // Authenticate via JWT
+    let token = (req as any).cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.substring(7)
+    }
+    if (!token) return res.status(401).json({ error: "RTOM authentication required" })
+
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    const managerId = payload?.managerId || payload?.mobileNumber
+
+    // Get manager's region to filter feedback by their outlets
+    const region = await prisma.region.findFirst({
+      where: {
+        OR: [
+          { managerId: managerId },
+          { managerMobile: managerId }
+        ]
+      },
+      include: { outlets: true }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager region not found" })
+    }
+
+    const outletIds = region.outlets.map(outlet => outlet.id)
+
+    // Get all tokens from manager's outlets
+    const outletTokens = await prisma.token.findMany({
+      where: { outletId: { in: outletIds } },
+      select: { id: true }
+    })
+    const tokenIds = outletTokens.map(t => t.id)
+
+    // Build base where clause for outlet filtering (used for stats)
+    const baseWhere: any = {
+      rating: 2 // RTOM sees 2-star feedback only
+    }
+
+    if (tokenIds.length > 0) {
+      baseWhere.tokenId = { in: tokenIds }
+    } else {
+      // No tokens in this region, return empty
+      baseWhere.id = 'no-match' // This will return no results
+    }
+
+    // Build filtered where clause (includes user filters)
+    const where: any = { ...baseWhere }
+
+    if (resolved === "true") {
+      where.isResolved = true
+    } else if (resolved === "false") {
+      where.isResolved = false
+    }
+
+    if (startDate || endDate) {
+      where.createdAt = {}
+      if (startDate) where.createdAt.gte = new Date(startDate as string)
+      if (endDate) where.createdAt.lte = new Date(endDate as string)
+    }
+
+    // Get feedback
+    const [feedback, totalCount] = await Promise.all([
+      prisma.feedback.findMany({
+        where,
+        include: {
+          token: {
+            include: {
+              officer: {
+                select: {
+                  id: true,
+                  name: true,
+                  mobileNumber: true,
+                  counterNumber: true
+                }
+              },
+              outlet: {
+                select: {
+                  id: true,
+                  name: true,
+                  location: true
+                }
+              }
+            }
+          },
+          customer: {
+            select: {
+              id: true,
+              name: true,
+              mobileNumber: true
+            }
+          }
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        skip,
+        take: limitNum
+      }),
+      prisma.feedback.count({ where })
+    ])
+
+    // Calculate statistics using baseWhere (unfiltered by user selections)
+    const stats = {
+      totalFeedback: await prisma.feedback.count({ where: baseWhere }),
+      unresolvedFeedback: await prisma.feedback.count({
+        where: {
+          ...baseWhere,
+          isResolved: false
+        }
+      }),
+      resolvedFeedback: await prisma.feedback.count({
+        where: {
+          ...baseWhere,
+          isResolved: true
+        }
+      }),
+      todayFeedback: await prisma.feedback.count({
+        where: {
+          ...baseWhere,
+          createdAt: {
+            gte: new Date(new Date().setHours(0, 0, 0, 0))
+          }
+        }
+      })
+    }
+
+    res.json({
+      feedback,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: totalCount,
+        totalPages: Math.ceil(totalCount / limitNum),
+        hasNext: pageNum * limitNum < totalCount,
+        hasPrev: pageNum > 1
+      },
+      stats
+    })
+  } catch (error) {
+    console.error("Get RTOM feedback error:", error)
+    res.status(500).json({ error: "Failed to get feedback" })
+  }
+})
+
+// Resolve feedback (mark as resolved with resolution comment) for RTOM
+router.patch("/feedback/:feedbackId/resolve", async (req, res) => {
+  try {
+    const { feedbackId } = req.params
+    const { resolutionComment } = req.body
+
+    // Authenticate via JWT
+    let token = (req as any).cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.substring(7)
+    }
+    if (!token) return res.status(401).json({ error: "RTOM authentication required" })
+
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    const managerId = payload?.managerId || payload?.mobileNumber
+
+    // Get manager details for resolvedBy field
+    const region = await prisma.region.findFirst({
+      where: {
+        OR: [
+          { managerId: managerId },
+          { managerMobile: managerId }
+        ]
+      },
+      include: { outlets: true }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager region not found" })
+    }
+
+    const outletIds = region.outlets.map(outlet => outlet.id)
+
+    // Verify feedback belongs to this RTOM's region
+    const existingFeedback = await prisma.feedback.findFirst({
+      where: {
+        id: feedbackId
+      },
+      include: {
+        token: {
+          select: {
+            outletId: true
+          }
+        }
+      }
+    })
+
+    if (!existingFeedback) {
+      return res.status(404).json({ error: "Feedback not found" })
+    }
+
+    // Check if feedback is from RTOM's region
+    if (!outletIds.includes(existingFeedback.token.outletId)) {
+      return res.status(403).json({ error: "Feedback not found or not from your region" })
+    }
+
+    if ((existingFeedback as any).isResolved) {
+      return res.status(400).json({ error: "Feedback is already resolved" })
+    }
+
+    // Update feedback as resolved
+    const updatedFeedback = await prisma.feedback.update({
+      where: { id: feedbackId },
+      data: {
+        isResolved: true,
+        resolvedAt: new Date(),
+        resolvedBy: `RTOM - ${region.name}`,
+        resolutionComment: resolutionComment || "Resolved by regional manager"
+      } as any,
+      include: {
+        token: {
+          include: {
+            officer: {
+              select: {
+                id: true,
+                name: true,
+                mobileNumber: true,
+                counterNumber: true
+              }
+            },
+            outlet: {
+              select: {
+                id: true,
+                name: true,
+                location: true
+              }
+            }
+          }
+        },
+        customer: {
+          select: {
+            id: true,
+            name: true,
+            mobileNumber: true
+          }
+        }
+      }
+    })
+
+    res.json({
+      success: true,
+      feedback: updatedFeedback,
+      message: "Feedback resolved successfully"
+    })
+  } catch (error) {
+    console.error("Resolve RTOM feedback error:", error)
+    res.status(500).json({ error: "Failed to resolve feedback" })
+  }
+})
+
 export default router
