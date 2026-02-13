@@ -22,6 +22,7 @@ import appointmentRoutes from "./routes/appointment.routes"
 import ipSpeakerRoutes from "./routes/ip-speaker.routes"
 import twilioRoutes from "./routes/twilio.routes"
 import serviceCaseRoutes from "./routes/service-case.routes"
+import kioskRoutes from "./routes/kiosk.routes"
 
 export const prisma = new PrismaClient()
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
@@ -116,6 +117,7 @@ app.use("/api/ip-speaker", ipSpeakerRoutes)
 app.use("/api/appointment", appointmentRoutes)
 app.use("/api/twilio", twilioRoutes)
 app.use("/api/service-case", serviceCaseRoutes)
+app.use("/api/kiosk", kioskRoutes)
 
 // Health check
 app.get("/api/health", (req, res) => {

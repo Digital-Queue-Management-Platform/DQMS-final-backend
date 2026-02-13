@@ -23,7 +23,14 @@ router.post("/login", async (req, res) => {
         isActive: true
       },
       include: {
-        region: true
+        region: true,
+        branch: {
+          select: {
+            id: true,
+            name: true,
+            location: true
+          }
+        }
       }
     })
 
@@ -72,7 +79,9 @@ router.post("/login", async (req, res) => {
         name: teleshopManager.name,
         mobileNumber: teleshopManager.mobileNumber,
         regionId: teleshopManager.regionId,
-        regionName: teleshopManager.region.name
+        regionName: teleshopManager.region.name,
+        branchId: teleshopManager.branchId,
+        branchName: teleshopManager.branch?.name || null
       },
       token,
       message: "Login successful"
@@ -165,6 +174,70 @@ router.get("/me", async (req: any, res) => {
   } catch (error) {
     console.error("Teleshop Manager profile fetch error:", error)
     res.status(500).json({ error: "Failed to fetch profile" })
+  }
+})
+
+// Get kiosk settings for teleshop manager's outlet
+router.get("/kiosk-settings", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+
+    if (!teleshopManager.branchId) {
+      return res.status(400).json({ error: "You are not assigned to any outlet" })
+    }
+
+    const outlet = await prisma.outlet.findUnique({
+      where: { id: teleshopManager.branchId },
+      select: {
+        id: true,
+        name: true,
+        location: true,
+        kioskPassword: true
+      }
+    })
+
+    if (!outlet) {
+      return res.status(404).json({ error: "Outlet not found" })
+    }
+
+    res.json({ success: true, outlet })
+  } catch (error) {
+    console.error("Get kiosk settings error:", error)
+    res.status(500).json({ error: "Failed to fetch kiosk settings" })
+  }
+})
+
+// Set/Update kiosk password for teleshop manager's outlet
+router.post("/kiosk-settings", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+    const { kioskPassword } = req.body
+
+    if (!teleshopManager.branchId) {
+      return res.status(400).json({ error: "You are not assigned to any outlet" })
+    }
+
+    if (!kioskPassword || kioskPassword.length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters long" })
+    }
+
+    const outlet = await prisma.outlet.update({
+      where: { id: teleshopManager.branchId },
+      data: { kioskPassword }
+    })
+
+    res.json({
+      success: true,
+      message: "Kiosk password updated successfully",
+      outlet: {
+        id: outlet.id,
+        name: outlet.name,
+        kioskPassword: outlet.kioskPassword
+      }
+    })
+  } catch (error) {
+    console.error("Set kiosk password error:", error)
+    res.status(500).json({ error: "Failed to update kiosk password" })
   }
 })
 
