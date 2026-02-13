@@ -2099,7 +2099,7 @@ router.patch("/feedback/:feedbackId/resolve", async (req, res) => {
       data: {
         isResolved: true,
         resolvedAt: new Date(),
-        resolvedBy: `${region.managerName || 'RTOM'} (Regional Manager)`,
+        resolvedBy: `RTOM - ${region.name}`,
         resolutionComment: resolutionComment || "Resolved by regional manager"
       } as any,
       include: {
