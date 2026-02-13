@@ -58,7 +58,7 @@ router.post("/login", async (req, res) => {
           }
         }
       }
-    })
+    }) as any
 
     if (!outlet) {
       return res.status(401).json({ error: "Invalid outlet ID or password" })
@@ -125,7 +125,7 @@ router.get("/services", async (req, res) => {
 })
 
 // Create walk-in token
-router.post("/tokens", async (req, res) => {
+router.post("/tokens", async (req: any, res: any) => {
   try {
     const { outletId } = req.kiosk
     const { name, mobileNumber, serviceTypes, preferredLanguages, nicNumber, email, sltMobileNumber, accountRef } = req.body
@@ -242,7 +242,7 @@ router.post("/tokens", async (req, res) => {
 })
 
 // Get current queue status
-router.get("/queue-status", async (req, res) => {
+router.get("/queue-status", async (req: any, res: any) => {
   try {
     const { outletId } = req.kiosk
 
