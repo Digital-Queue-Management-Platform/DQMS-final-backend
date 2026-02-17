@@ -2143,4 +2143,221 @@ router.patch("/feedback/:feedbackId/resolve", async (req, res) => {
   }
 })
 
+// Get officers by branch (RTOM)
+router.get("/branch/:branchId/officers", async (req, res) => {
+  try {
+    const { branchId } = req.params
+
+    // Check for JWT token
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+
+    let managerEmail: string | undefined
+
+    if (token) {
+      try {
+        const payload = (jwt as any).verify(token, JWT_SECRET)
+        managerEmail = payload.email
+      } catch (e) {
+        return res.status(401).json({ error: "Invalid token" })
+      }
+    } else {
+      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
+
+      if (!managerEmail) {
+        return res.status(401).json({ error: "Manager authentication required" })
+      }
+    }
+
+    // Find manager's region
+    const region = await prisma.region.findFirst({
+      where: { managerEmail: managerEmail },
+      include: { outlets: true }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager not found" })
+    }
+
+    // Verify the branch belongs to this manager's region
+    const branch = region.outlets.find(o => o.id === branchId)
+    if (!branch) {
+      return res.status(403).json({ error: "Branch not found in your region" })
+    }
+
+    // Get officers for this branch
+    const officers = await prisma.officer.findMany({
+      where: {
+        outletId: branchId
+      },
+      include: {
+        outlet: true,
+        BreakLog: {
+          orderBy: { startedAt: 'desc' }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    })
+
+    // Process officers data to include break statistics and current status
+    const processedOfficers = officers.map(officer => {
+      const todaysBreaks = officer.BreakLog.filter(breakLog => {
+        const breakDate = new Date(breakLog.startedAt)
+        const today = new Date()
+        return breakDate.toDateString() === today.toDateString()
+      })
+
+      const activeBreak = officer.BreakLog.find(breakLog => !breakLog.endedAt)
+
+      // Calculate total break time (in minutes)
+      const totalMinutes = officer.BreakLog.reduce((total, breakLog) => {
+        if (breakLog.endedAt) {
+          const duration = new Date(breakLog.endedAt).getTime() - new Date(breakLog.startedAt).getTime()
+          return total + Math.floor(duration / (1000 * 60))
+        }
+        return total
+      }, 0)
+
+      // Determine status
+      let status = officer.status || 'offline'
+      if (activeBreak) {
+        status = 'on_break'
+      }
+
+      return {
+        id: officer.id,
+        name: officer.name,
+        mobileNumber: officer.mobileNumber,
+        counterNumber: officer.counterNumber,
+        status,
+        outlet: officer.outlet,
+        totalBreaks: officer.BreakLog.length,
+        totalMinutes,
+        activeBreak: activeBreak ? {
+          id: activeBreak.id,
+          startTime: activeBreak.startedAt
+        } : null,
+        createdAt: officer.createdAt,
+        assignedServices: officer.assignedServices,
+        languages: officer.languages
+      }
+    })
+
+    res.json({ success: true, officers: processedOfficers })
+  } catch (error) {
+    console.error("Get branch officers error:", error)
+    res.status(500).json({ error: "Failed to fetch officers" })
+  }
+})
+
+// Assign officer to counter (RTOM)
+router.patch("/officers/:officerId/assign-counter", async (req, res) => {
+  try {
+    const { officerId } = req.params
+    const { counterNumber } = req.body
+
+    // Check for JWT token
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+
+    let managerEmail: string | undefined
+
+    if (token) {
+      try {
+        const payload = (jwt as any).verify(token, JWT_SECRET)
+        managerEmail = payload.email
+      } catch (e) {
+        return res.status(401).json({ error: "Invalid token" })
+      }
+    } else {
+      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
+
+      if (!managerEmail) {
+        return res.status(401).json({ error: "Manager authentication required" })
+      }
+    }
+
+    // Find manager's region
+    const region = await prisma.region.findFirst({
+      where: { managerEmail: managerEmail },
+      include: { outlets: true }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager not found" })
+    }
+
+    const outletIds = region.outlets.map(outlet => outlet.id)
+
+    // Verify officer belongs to this manager's region
+    const officer = await prisma.officer.findFirst({
+      where: {
+        id: officerId,
+        outletId: { in: outletIds }
+      },
+      include: { outlet: true }
+    })
+
+    if (!officer) {
+      return res.status(403).json({ error: "Officer not found in your region" })
+    }
+
+    // If assigning a counter (not null), validate it
+    if (counterNumber !== null && counterNumber !== undefined) {
+      const parsed = Number(counterNumber)
+
+      // Validate counter number is valid
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        return res.status(400).json({ error: "Counter number must be a positive integer" })
+      }
+
+      // Check outlet counter capacity
+      if (officer.outlet.counterCount && parsed > officer.outlet.counterCount) {
+        return res.status(400).json({
+          error: `Counter #${parsed} exceeds outlet capacity of ${officer.outlet.counterCount} counters`
+        })
+      }
+
+      // Check if counter is already assigned to another officer
+      const existingAssignment = await prisma.officer.findFirst({
+        where: {
+          outletId: officer.outletId,
+          counterNumber: parsed,
+          id: { not: officerId }
+        }
+      })
+
+      if (existingAssignment) {
+        return res.status(400).json({
+          error: `Counter #${parsed} is already assigned to ${existingAssignment.name}`
+        })
+      }
+    }
+
+    // Update officer counter assignment
+    const updatedOfficer = await prisma.officer.update({
+      where: { id: officerId },
+      data: { counterNumber: counterNumber === null ? null : Number(counterNumber) },
+      include: {
+        outlet: true
+      }
+    })
+
+    res.json({ success: true, officer: updatedOfficer })
+  } catch (error: any) {
+    console.error("Assign counter error:", error)
+    res.status(500).json({ error: "Failed to assign counter" })
+  }
+})
+
 export default router
