@@ -31,6 +31,7 @@ model Token {
   preferredLanguages Json?
   accountRef         String?
   status             String             @default("waiting")
+  isPriority         Boolean            @default(false) // VIP/priority customer flag
   outletId           String
   assignedTo         String?
   counterNumber      Int?

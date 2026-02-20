@@ -501,6 +501,84 @@ router.post("/recall-token", async (req, res) => {
   }
 })
 
+// Set token as VIP/Priority
+router.post("/set-priority", async (req, res) => {
+  try {
+    const { tokenId } = req.body
+
+    if (!tokenId) return res.status(400).json({ error: 'tokenId required' })
+
+    const token = await prisma.token.findUnique({ where: { id: tokenId } })
+    if (!token) return res.status(404).json({ error: 'Token not found' })
+
+    // Update token to mark as priority
+    const updated = await prisma.token.update({
+      where: { id: tokenId },
+      data: {
+        isPriority: !token.isPriority, // Toggle priority status
+      },
+      include: {
+        customer: true,
+        outlet: true,
+        officer: true,
+      },
+    })
+
+    // Broadcast update
+    broadcast({ type: 'TOKEN_PRIORITY_UPDATED', data: updated })
+
+    res.json({ success: true, token: updated })
+  } catch (error) {
+    console.error('Set priority error details:', error)
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    res.status(500).json({ error: 'Failed to set priority', details: errorMessage })
+  }
+})
+
+// Call token to counter (for priority customers or any token)
+router.post("/call-token", async (req, res) => {
+  try {
+    const { officerId, tokenId } = req.body
+
+    if (!officerId || !tokenId) return res.status(400).json({ error: 'officerId and tokenId required' })
+
+    const officer = await prisma.officer.findUnique({ where: { id: officerId } })
+    if (!officer) return res.status(404).json({ error: 'Officer not found' })
+
+    const token = await prisma.token.findUnique({ where: { id: tokenId } })
+    if (!token) return res.status(404).json({ error: 'Token not found' })
+
+    // Call token to counter (works for waiting or any status except completed)
+    if (token.status === 'completed') {
+      return res.status(400).json({ error: 'Cannot call completed token' })
+    }
+
+    const called = await prisma.token.update({
+      where: { id: tokenId },
+      data: {
+        status: 'in_service',
+        assignedTo: officerId,
+        counterNumber: officer.counterNumber,
+        calledAt: new Date(),
+        startedAt: new Date(),
+      },
+      include: { customer: true, officer: true },
+    })
+
+    // set officer to serving
+    await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
+
+    // broadcast update
+    broadcast({ type: 'TOKEN_CALLED', data: called })
+
+    res.json({ success: true, token: called })
+  } catch (error) {
+    console.error('Call token error:', error)
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    res.status(500).json({ error: 'Failed to call token', details: errorMessage })
+  }
+})
+
 // Complete service
 router.post("/complete-service", async (req, res) => {
   try {
