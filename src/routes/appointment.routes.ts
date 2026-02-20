@@ -34,7 +34,7 @@ function digitsOnly(m: string | undefined | null) {
 // Book an appointment
 router.post("/book", async (req, res) => {
   try {
-    const { name, mobileNumber, outletId, serviceTypes, appointmentAt, preferredLanguage, verifiedMobileToken, notes, email, nicNumber } = req.body || {}
+    const { name, mobileNumber, outletId, serviceTypes, appointmentAt, preferredLanguage, verifiedMobileToken, notes, email, nicNumber, sltTelephoneNumber } = req.body || {}
 
     if (!name || !mobileNumber || !outletId || !Array.isArray(serviceTypes) || serviceTypes.length === 0 || !appointmentAt) {
       return res.status(400).json({ error: "Missing required fields" })
@@ -69,13 +69,28 @@ router.post("/book", async (req, res) => {
       return res.status(404).json({ error: "Outlet not found or inactive" })
     }
 
-    // Insert via raw SQL to avoid prisma client regeneration dependency
-    await prisma.$executeRaw`
-      INSERT INTO "Appointment" ("id","name","mobileNumber","outletId","serviceTypes","preferredLanguage","appointmentAt","status","notes","createdAt")
-      VALUES (gen_random_uuid()::text, ${name}, ${mobileNumber}, ${outletId}, ${serviceTypes}, ${preferredLanguage || null}, ${new Date(appointmentAt)}, 'booked', ${notes || null}, now())
-    `
-    const created = await prisma.$queryRaw`SELECT * FROM "Appointment" WHERE "mobileNumber" = ${mobileNumber} AND "outletId" = ${outletId} ORDER BY "createdAt" DESC LIMIT 1` as any[]
-    const appt = created[0]
+    // Validate 24-hour advance booking requirement
+    const appointmentDate = new Date(appointmentAt)
+    const now = new Date()
+    const hoursUntilAppointment = (appointmentDate.getTime() - now.getTime()) / (1000 * 60 * 60)
+    if (hoursUntilAppointment < 24) {
+      return res.status(400).json({ error: "Appointments must be booked at least 24 hours in advance" })
+    }
+
+    // Create appointment using Prisma (handles array types properly)
+    const appt = await prisma.appointment.create({
+      data: {
+        name,
+        mobileNumber,
+        outletId,
+        serviceTypes,
+        preferredLanguage: preferredLanguage || undefined,
+        sltTelephoneNumber: sltTelephoneNumber || undefined,
+        appointmentAt: new Date(appointmentAt),
+        status: 'booked',
+        notes: notes || undefined,
+      },
+    })
 
     // Optionally upsert customer basics for smoother check-in later
     try {

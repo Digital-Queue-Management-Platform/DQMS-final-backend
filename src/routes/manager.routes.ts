@@ -1209,7 +1209,7 @@ router.post("/outlets", async (req, res) => {
       return res.status(400).json({ error: "Counter count must be between 1 and 20" })
     }
 
-    // Generate secure password for walk-in kiosk
+    // Generate secure password for Walk-in Appoinment
     const kioskPassword = generateSecurePassword()
 
     const outlet = await prisma.outlet.create({
