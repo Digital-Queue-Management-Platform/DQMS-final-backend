@@ -100,7 +100,7 @@ model Outlet {
   isActive          Boolean            @default(true)
   createdAt         DateTime           @default(now())
   counterCount      Int?               @default(0)
-  kioskPassword     String?            // Password for walk-in kiosk dashboard
+  kioskPassword     String?            // Password for Walk-in Appoinment dashboard
   officers          Officer[]
   completedServices CompletedService[]
   serviceCases      ServiceCase[]
