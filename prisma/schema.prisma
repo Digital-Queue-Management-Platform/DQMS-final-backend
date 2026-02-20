@@ -231,6 +231,7 @@ model Appointment {
   outletId          String
   serviceTypes      String[]
   preferredLanguage String?  // 'en' | 'si' | 'ta'
+  sltTelephoneNumber String? // For bill payment appointments
   appointmentAt     DateTime
   status            String   @default("booked") // booked | queued | completed | cancelled | no_show
   tokenId           String?
@@ -284,4 +285,21 @@ model ServiceCaseUpdate {
   serviceCase ServiceCase @relation(fields: [caseId], references: [id])
 
   @@index([caseId, createdAt])
+}
+
+// SLT Bill information for bill payment service
+model SltBill {
+  id              String   @id @default(uuid())
+  telephoneNumber String   @unique // SLT telephone number
+  accountName     String   // Account holder name
+  accountAddress  String?  // Billing address
+  currentBill     Float    // Current bill amount
+  dueDate         DateTime // Bill due date
+  status          String   @default("unpaid") // unpaid | paid | overdue
+  lastPaymentDate DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([telephoneNumber])
+  @@index([status, dueDate])
 }
