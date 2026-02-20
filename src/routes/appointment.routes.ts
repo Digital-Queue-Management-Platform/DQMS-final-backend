@@ -69,6 +69,14 @@ router.post("/book", async (req, res) => {
       return res.status(404).json({ error: "Outlet not found or inactive" })
     }
 
+    // Validate 24-hour advance booking requirement
+    const appointmentDate = new Date(appointmentAt)
+    const now = new Date()
+    const hoursUntilAppointment = (appointmentDate.getTime() - now.getTime()) / (1000 * 60 * 60)
+    if (hoursUntilAppointment < 24) {
+      return res.status(400).json({ error: "Appointments must be booked at least 24 hours in advance" })
+    }
+
     // Create appointment using Prisma (handles array types properly)
     const appt = await prisma.appointment.create({
       data: {
