@@ -1,5 +1,5 @@
 import { Router } from "express"
-import { prisma } from "../server"
+import { prisma, broadcast } from "../server"
 import * as jwt from "jsonwebtoken"
 
 const router = Router()
@@ -222,7 +222,10 @@ router.post("/tokens", async (req: any, res: any) => {
       }
     })
 
-    res.status(201).json({
+    // Broadcast new token to officers queue system
+    broadcast({ type: 'NEW_TOKEN', data: token })
+
+    const response = {
       success: true,
       message: "Token created successfully",
       token: {
@@ -234,7 +237,10 @@ router.post("/tokens", async (req: any, res: any) => {
         status: token.status,
         createdAt: token.createdAt
       }
-    })
+    }
+
+    console.log('Sending token response:', response)
+    res.status(201).json(response)
   } catch (error) {
     console.error("Create walk-in token error:", error)
     res.status(500).json({ error: "Failed to create token" })
