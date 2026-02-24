@@ -30,9 +30,9 @@ const authenticateAdmin = (req: any, res: any, next: any) => {
     }
 
     const token = authHeader.substring(7) // Remove 'Bearer ' prefix
-    
+
     const decoded = (jwt as any).verify(token, JWT_SECRET as jwt.Secret)
-    
+
     if (decoded.role !== 'admin') {
       return res.status(403).json({ error: "Access denied. Admin role required." })
     }
@@ -55,29 +55,29 @@ router.post("/login", async (req, res) => {
     }
 
     // Generate JWT token (no expiration for production)
-    const tokenOptions = { 
+    const tokenOptions = {
       email: ADMIN_EMAIL,
       role: "admin",
       type: "admin"
     }
-    
+
     const signOptions: any = {}
     if (JWT_EXPIRES) {
       signOptions.expiresIn = JWT_EXPIRES
     }
-    
+
     const token = (jwt as any).sign(
       tokenOptions,
       JWT_SECRET as jwt.Secret,
       signOptions
     )
 
-    res.json({ 
-      token, 
-      user: { 
-        email: ADMIN_EMAIL, 
-        role: "admin" 
-      } 
+    res.json({
+      token,
+      user: {
+        email: ADMIN_EMAIL,
+        role: "admin"
+      }
     })
   } catch (error) {
     console.error("Admin login error:", error)
@@ -131,24 +131,24 @@ router.get("/analytics", async (req, res) => {
     const avgWaitTime =
       completedTokens.length > 0
         ? completedTokens.reduce((sum, token) => {
-            const wait =
-              token.startedAt && token.createdAt
-                ? (token.startedAt.getTime() - token.createdAt.getTime()) / 1000 / 60
-                : 0
-            return sum + wait
-          }, 0) / completedTokens.length
+          const wait =
+            token.startedAt && token.createdAt
+              ? (token.startedAt.getTime() - token.createdAt.getTime()) / 1000 / 60
+              : 0
+          return sum + wait
+        }, 0) / completedTokens.length
         : 0
 
     // Average service time
     const avgServiceTime =
       completedTokens.length > 0
         ? completedTokens.reduce((sum, token) => {
-            const service =
-              token.completedAt && token.startedAt
-                ? (token.completedAt.getTime() - token.startedAt.getTime()) / 1000 / 60
-                : 0
-            return sum + service
-          }, 0) / completedTokens.length
+          const service =
+            token.completedAt && token.startedAt
+              ? (token.completedAt.getTime() - token.startedAt.getTime()) / 1000 / 60
+              : 0
+          return sum + service
+        }, 0) / completedTokens.length
         : 0
 
     // Feedback stats
@@ -217,11 +217,11 @@ router.get("/analytics", async (req, res) => {
 
       const avgHourWaitTime = hourTokens.length > 0
         ? hourTokens.reduce((sum, token) => {
-            const wait = token.startedAt && token.createdAt
-              ? (token.startedAt.getTime() - token.createdAt.getTime()) / 1000 / 60
-              : 0
-            return sum + wait
-          }, 0) / hourTokens.length
+          const wait = token.startedAt && token.createdAt
+            ? (token.startedAt.getTime() - token.createdAt.getTime()) / 1000 / 60
+            : 0
+          return sum + wait
+        }, 0) / hourTokens.length
         : 0
 
       hourlyWaitingTimes.push({
@@ -244,14 +244,14 @@ router.get("/analytics", async (req, res) => {
       // serviceTypes is an array, so we need to handle it differently
       const serviceTypeArray = Array.isArray(service.serviceTypes) ? service.serviceTypes : [];
       const firstServiceType = serviceTypeArray.length > 0 ? serviceTypeArray[0] : "other";
-      
+
       return {
         name: firstServiceType === "bill_payment" ? "Bill Payments" :
-              firstServiceType === "technical_support" ? "Technical Support" :
-              firstServiceType === "account_services" ? "Account Services" :
+          firstServiceType === "technical_support" ? "Technical Support" :
+            firstServiceType === "account_services" ? "Account Services" :
               firstServiceType === "new_connection" ? "New Connections" :
-              firstServiceType === "device_sim_issues" ? "Device/SIM Issues" :
-              "Other Services",
+                firstServiceType === "device_sim_issues" ? "Device/SIM Issues" :
+                  "Other Services",
         count: service._count
       };
     })
@@ -430,11 +430,11 @@ router.post("/register-region", async (req, res) => {
       mobileNumber: managerMobile,
       message: "Please provide these credentials to the RTOM"
     }
-    
+
     // Send welcome email to the manager
     try {
       const loginUrl = 'https://digital-queue-management-platform.vercel.app/manager/login'
-      
+
       const emailResult = await emailService.sendManagerWelcomeEmail({
         managerName: managerName || 'RTOM',
         managerEmail: managerEmail,
@@ -442,7 +442,7 @@ router.post("/register-region", async (req, res) => {
         regionName: name,
         loginUrl: loginUrl
       })
-      
+
       if (emailResult) {
         credentials = {
           ...credentials,
@@ -464,9 +464,9 @@ router.post("/register-region", async (req, res) => {
         message: "Account created successfully, but email notification failed. Please contact admin for credentials."
       }
     }
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       region: {
         ...region,
         managerPassword: undefined // Don't send password back
@@ -475,7 +475,7 @@ router.post("/register-region", async (req, res) => {
     })
   } catch (error: any) {
     console.error("Region register error:", error)
-    res.status(500).json({ 
+    res.status(500).json({
       error: "Failed to create region",
       details: process.env.NODE_ENV === 'development' ? error?.message : undefined
     })
@@ -540,8 +540,8 @@ router.post("/managers/:regionId/reset-password", async (req, res) => {
     }
 
     // RTOMs use mobile-only login, provide mobile number info
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: "RTOM uses mobile number login. No password required.",
       loginMethod: "mobile",
       mobileNumber: region.managerMobile,
@@ -577,8 +577,8 @@ router.put("/managers/:regionId/password", async (req, res) => {
       }
     })
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: "Manager password updated successfully",
       manager: region
     })
@@ -597,7 +597,7 @@ router.put("/managers/:regionId", async (req, res) => {
     if (managerEmail) {
       // Check if email is already used by another manager
       const existingRegion = await prisma.region.findFirst({
-        where: { 
+        where: {
           managerEmail: managerEmail,
           id: { not: regionId }
         }
@@ -632,8 +632,8 @@ router.put("/managers/:regionId", async (req, res) => {
       }
     })
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: "Manager details updated successfully",
       manager: region
     })
@@ -702,8 +702,8 @@ router.post('/outlets/:outletId/reset-kiosk-password', async (req, res) => {
     // Check if outlet exists
     const outlet = await prisma.outlet.findUnique({
       where: { id: outletId },
-      select: { 
-        id: true, 
+      select: {
+        id: true,
         name: true,
         location: true
       }
@@ -772,28 +772,48 @@ router.get('/outlets/:outletId/kiosk-password', async (req, res) => {
   }
 })
 
-// Get feedback for Admin (1-star ratings - critical feedback)
+// Get feedback for Admin (all ratings with enhanced filters)
 router.get("/feedback", async (req, res) => {
   try {
     const {
       page = "1",
       limit = "20",
-      resolved = "false",
+      resolved = "",
       startDate,
-      endDate
+      endDate,
+      rating,
+      regionId,
+      outletId
     } = req.query
 
     const pageNum = Math.max(1, parseInt(page as string))
     const limitNum = Math.min(100, Math.max(1, parseInt(limit as string)))
     const skip = (pageNum - 1) * limitNum
 
-    // Build base where clause for stats
-    const baseWhere: any = {
-      rating: 1 // Admin sees 1-star (critical) feedback only
-    }
+    // Build base where clause for stats (no hardcoded rating)
+    const baseWhere: any = {}
 
     // Build filtered where clause (includes user filters)
     const where: any = { ...baseWhere }
+
+    // Rating filter
+    if (rating && rating !== "") {
+      const ratingNum = parseInt(rating as string)
+      if (!isNaN(ratingNum) && ratingNum >= 1 && ratingNum <= 5) {
+        where.rating = ratingNum
+        baseWhere.rating = ratingNum
+      }
+    }
+
+    // RTOM (region) filter — filter via token.outlet.regionId
+    if (regionId && regionId !== "") {
+      where.token = { ...where.token, outlet: { ...(where.token?.outlet || {}), regionId: regionId as string } }
+    }
+
+    // Teleshop (branch/outlet) filter — filter via token.outletId
+    if (outletId && outletId !== "") {
+      where.token = { ...where.token, outletId: outletId as string }
+    }
 
     if (resolved === "true") {
       where.isResolved = true
@@ -826,7 +846,13 @@ router.get("/feedback", async (req, res) => {
                 select: {
                   id: true,
                   name: true,
-                  location: true
+                  location: true,
+                  region: {
+                    select: {
+                      id: true,
+                      name: true
+                    }
+                  }
                 }
               }
             }
@@ -976,7 +1002,7 @@ router.get("/system-health", async (req, res) => {
     let appServerHealth = "Healthy"
     let appServerUptime = "99.9%"
     let appServerIcon = "CheckCircle"
-    
+
     try {
       await prisma.$queryRaw`SELECT 1`
     } catch (dbError) {
@@ -989,12 +1015,12 @@ router.get("/system-health", async (req, res) => {
     let dbHealth = "Healthy"
     let dbUptime = "99.7%"
     let dbIcon = "CheckCircle"
-    
+
     try {
       const startTime = Date.now()
       await prisma.token.findFirst({ take: 1 })
       const queryTime = Date.now() - startTime
-      
+
       if (queryTime > 5000) { // If query takes more than 5 seconds
         dbHealth = "Warning"
         dbUptime = "95.0%"
@@ -1010,7 +1036,7 @@ router.get("/system-health", async (req, res) => {
     let smsHealth = "Warning"
     let smsUptime = "95.2%"
     let smsIcon = "AlertTriangle"
-    
+
     // If SMS service is configured and working, this could be updated
     // For now, we'll keep it as warning since SMS isn't fully implemented
 
@@ -1018,7 +1044,7 @@ router.get("/system-health", async (req, res) => {
     let emailHealth = "Healthy"
     let emailUptime = "99.8%"
     let emailIcon = "CheckCircle"
-    
+
     const emailConfigured = process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS
     if (!emailConfigured) {
       emailHealth = "Warning"
@@ -1032,24 +1058,24 @@ router.get("/system-health", async (req, res) => {
         status: appServerHealth,
         uptime: appServerUptime,
         icon: appServerIcon,
-        statusColor: appServerHealth === "Healthy" ? "bg-[#dcfce7] text-[#166534]" : 
-                    appServerHealth === "Warning" ? "bg-[#fef9c3] text-[#854d0e]" : 
-                    "bg-[#fee2e2] text-[#991b1b]",
-        iconColor: appServerHealth === "Healthy" ? "text-[#22c55e]" : 
-                  appServerHealth === "Warning" ? "text-[#eab308]" : 
-                  "text-[#ef4444]"
+        statusColor: appServerHealth === "Healthy" ? "bg-[#dcfce7] text-[#166534]" :
+          appServerHealth === "Warning" ? "bg-[#fef9c3] text-[#854d0e]" :
+            "bg-[#fee2e2] text-[#991b1b]",
+        iconColor: appServerHealth === "Healthy" ? "text-[#22c55e]" :
+          appServerHealth === "Warning" ? "text-[#eab308]" :
+            "text-[#ef4444]"
       },
       {
         name: "Database Connection",
         status: dbHealth,
         uptime: dbUptime,
         icon: dbIcon,
-        statusColor: dbHealth === "Healthy" ? "bg-[#dcfce7] text-[#166534]" : 
-                    dbHealth === "Warning" ? "bg-[#fef9c3] text-[#854d0e]" : 
-                    "bg-[#fee2e2] text-[#991b1b]",
-        iconColor: dbHealth === "Healthy" ? "text-[#22c55e]" : 
-                  dbHealth === "Warning" ? "text-[#eab308]" : 
-                  "text-[#ef4444]"
+        statusColor: dbHealth === "Healthy" ? "bg-[#dcfce7] text-[#166534]" :
+          dbHealth === "Warning" ? "bg-[#fef9c3] text-[#854d0e]" :
+            "bg-[#fee2e2] text-[#991b1b]",
+        iconColor: dbHealth === "Healthy" ? "text-[#22c55e]" :
+          dbHealth === "Warning" ? "text-[#eab308]" :
+            "text-[#ef4444]"
       },
       {
         name: "SMS Gateway",
@@ -1064,10 +1090,10 @@ router.get("/system-health", async (req, res) => {
         status: emailHealth,
         uptime: emailUptime,
         icon: emailIcon,
-        statusColor: emailHealth === "Healthy" ? "bg-[#dcfce7] text-[#166534]" : 
-                    "bg-[#fef9c3] text-[#854d0e]",
-        iconColor: emailHealth === "Healthy" ? "text-[#22c55e]" : 
-                  "text-[#eab308]"
+        statusColor: emailHealth === "Healthy" ? "bg-[#dcfce7] text-[#166534]" :
+          "bg-[#fef9c3] text-[#854d0e]",
+        iconColor: emailHealth === "Healthy" ? "text-[#22c55e]" :
+          "text-[#eab308]"
       }
     ]
 
@@ -1143,8 +1169,8 @@ router.delete('/regions/:regionId', async (req, res) => {
 
     // Check if region has outlets
     if (region.outlets.length > 0) {
-      return res.status(400).json({ 
-        error: `Cannot delete region "${region.name}" because it has ${region.outlets.length} outlet(s). Please delete or reassign the outlets first.` 
+      return res.status(400).json({
+        error: `Cannot delete region "${region.name}" because it has ${region.outlets.length} outlet(s). Please delete or reassign the outlets first.`
       })
     }
 
@@ -1153,9 +1179,9 @@ router.delete('/regions/:regionId', async (req, res) => {
       where: { id: regionId }
     })
 
-    res.json({ 
-      success: true, 
-      message: `Region "${region.name}" deleted successfully` 
+    res.json({
+      success: true,
+      message: `Region "${region.name}" deleted successfully`
     })
   } catch (error) {
     console.error('Failed to delete region', error)
