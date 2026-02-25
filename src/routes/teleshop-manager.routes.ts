@@ -1376,3 +1376,79 @@ router.patch("/alerts/:alertId/read", async (req: any, res) => {
     res.status(500).json({ error: "Failed to mark alert as read" })
   }
 })
+
+// ─────────────────────────────────────────────────────────
+// Closure Notices – Teleshop Manager
+// ─────────────────────────────────────────────────────────
+
+// List closure notices for the TM's branch
+router.get("/closure-notices", async (req: any, res) => {
+  try {
+    const tm = req.teleshopManager
+    if (!tm.branchId) {
+      return res.status(400).json({ error: "You are not assigned to any outlet" })
+    }
+    const notices = await (prisma as any).closureNotice.findMany({
+      where: { outletId: tm.branchId },
+      orderBy: { startsAt: "asc" }
+    })
+    res.json({ success: true, notices })
+  } catch (error) {
+    console.error("Get closure notices error:", error)
+    res.status(500).json({ error: "Failed to fetch closure notices" })
+  }
+})
+
+// Create a closure notice for the TM's branch
+router.post("/closure-notices", async (req: any, res) => {
+  try {
+    const tm = req.teleshopManager
+    if (!tm.branchId) {
+      return res.status(400).json({ error: "You are not assigned to any outlet" })
+    }
+    const { title, message, startsAt, endsAt } = req.body
+    if (!title || !message || !startsAt || !endsAt) {
+      return res.status(400).json({ error: "title, message, startsAt, and endsAt are required" })
+    }
+    if (new Date(startsAt) >= new Date(endsAt)) {
+      return res.status(400).json({ error: "endsAt must be after startsAt" })
+    }
+    const notice = await (prisma as any).closureNotice.create({
+      data: {
+        outletId: tm.branchId,
+        title,
+        message,
+        startsAt: new Date(startsAt),
+        endsAt: new Date(endsAt),
+        createdBy: "teleshop_manager",
+        createdById: tm.id
+      }
+    })
+    res.json({ success: true, notice })
+  } catch (error) {
+    console.error("Create closure notice error:", error)
+    res.status(500).json({ error: "Failed to create closure notice" })
+  }
+})
+
+// Delete a closure notice (must belong to TM's branch)
+router.delete("/closure-notices/:noticeId", async (req: any, res) => {
+  try {
+    const tm = req.teleshopManager
+    const { noticeId } = req.params
+    if (!tm.branchId) {
+      return res.status(400).json({ error: "You are not assigned to any outlet" })
+    }
+    const existing = await (prisma as any).closureNotice.findFirst({
+      where: { id: noticeId, outletId: tm.branchId }
+    })
+    if (!existing) {
+      return res.status(404).json({ error: "Notice not found or not at your outlet" })
+    }
+    await (prisma as any).closureNotice.delete({ where: { id: noticeId } })
+    res.json({ success: true, message: "Closure notice deleted" })
+  } catch (error) {
+    console.error("Delete closure notice error:", error)
+    res.status(500).json({ error: "Failed to delete closure notice" })
+  }
+})

@@ -114,7 +114,7 @@ router.post("/book", async (req, res) => {
         // Build absolute link to 'My Appointments' page
         const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
         let baseUrl = origins[0] || ''
-        
+
         // Always prioritize Vercel URLs if available
         const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
         if (vercelUrl) {
@@ -123,10 +123,10 @@ router.post("/book", async (req, res) => {
           // In production, prefer any HTTPS URL over localhost
           baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
         }
-        
+
         const manageUrl = baseUrl ? `${baseUrl}/appointment/my` : '/appointment/my'
-        const lang: 'en'|'si'|'ta' = (preferredLanguage === 'si' || preferredLanguage === 'ta') ? preferredLanguage : 'en'
-        const bodies: Record<'en'|'si'|'ta', string> = {
+        const lang: 'en' | 'si' | 'ta' = (preferredLanguage === 'si' || preferredLanguage === 'ta') ? preferredLanguage : 'en'
+        const bodies: Record<'en' | 'si' | 'ta', string> = {
           /*en: `Appointment confirmed for ${whenStr} at ${outlet.name}. Services: ${services}. Manage: ${manageUrl}`,
           si: `${outlet.name} ශාඛාවේදී ${whenStr} ට ඔබගේ වෙන්කරවාගැනීම තහවුරු විය. සේවාවන්: ${services}. කළමනාකරණය: ${manageUrl}`,
           ta: `${outlet.name} கிளையில் ${whenStr} உங்கள் நேரம் உறுதிப்படுத்தப்பட்டுள்ளது. சேவைகள்: ${services}. மேலாண்மை: ${manageUrl}`,*/
@@ -184,9 +184,9 @@ router.get("/outlet/:outletId", async (req, res) => {
     let dateEnd: Date | undefined
     if (date) {
       dateStart = new Date(date)
-      dateStart.setHours(0,0,0,0)
+      dateStart.setHours(0, 0, 0, 0)
       dateEnd = new Date(dateStart)
-      dateEnd.setHours(23,59,59,999)
+      dateEnd.setHours(23, 59, 59, 999)
     }
 
     const appts: any = dateStart && dateEnd

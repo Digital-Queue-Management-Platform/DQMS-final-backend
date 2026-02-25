@@ -2360,4 +2360,176 @@ router.patch("/officers/:officerId/assign-counter", async (req, res) => {
   }
 })
 
+// ─────────────────────────────────────────────────────────
+// Closure Notices – RTOM Manager
+// ─────────────────────────────────────────────────────────
+
+// Helper: authenticate manager from JWT cookie or Authorization header
+function getManagerPayload(req: any): any | null {
+  let token = req.cookies?.dq_manager_jwt
+  if (!token) {
+    const authHeader = req.headers.authorization
+    if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.substring(7)
+  }
+  if (!token) return null
+  try {
+    const payload = (jwt as any).verify(token, JWT_SECRET)
+    return payload
+  } catch {
+    return null
+  }
+}
+
+// List closure notices for outlets in RTOM's region (?outletId= optional filter)
+router.get("/closure-notices", async (req, res) => {
+  try {
+    const payload = getManagerPayload(req)
+    if (!payload) return res.status(401).json({ error: "RTOM authentication required" })
+
+    const region = await prisma.region.findFirst({
+      where: payload.mobileNumber ? { managerMobile: payload.mobileNumber } : { managerEmail: payload.email },
+      include: { outlets: true }
+    })
+    if (!region) return res.status(404).json({ error: "Manager not found" })
+
+    const outletIds = region.outlets.map((o: any) => o.id)
+    const { outletId } = req.query
+
+    const where: any = {
+      outletId: outletId ? String(outletId) : { in: outletIds }
+    }
+    if (outletId && !outletIds.includes(String(outletId))) {
+      return res.status(403).json({ error: "Outlet not in your region" })
+    }
+
+    const notices = await (prisma as any).closureNotice.findMany({
+      where,
+      include: { outlet: { select: { id: true, name: true } } },
+      orderBy: { startsAt: "asc" }
+    })
+    res.json({ success: true, notices, outlets: region.outlets })
+  } catch (error) {
+    console.error("RTOM get closure notices error:", error)
+    res.status(500).json({ error: "Failed to fetch closure notices" })
+  }
+})
+
+// Create a closure notice (RTOM can pick any outlet in region)
+router.post("/closure-notices", async (req, res) => {
+  try {
+    const payload = getManagerPayload(req)
+    if (!payload) return res.status(401).json({ error: "RTOM authentication required" })
+
+    const region = await prisma.region.findFirst({
+      where: payload.mobileNumber ? { managerMobile: payload.mobileNumber } : { managerEmail: payload.email },
+      include: { outlets: true }
+    })
+    if (!region) return res.status(404).json({ error: "Manager not found" })
+
+    const { outletId, title, message, startsAt, endsAt } = req.body
+    if (!outletId || !title || !message || !startsAt || !endsAt) {
+      return res.status(400).json({ error: "outletId, title, message, startsAt, and endsAt are required" })
+    }
+    if (!(region.outlets as any[]).some((o: any) => o.id === outletId)) {
+      return res.status(403).json({ error: "Outlet not in your region" })
+    }
+    if (new Date(startsAt) >= new Date(endsAt)) {
+      return res.status(400).json({ error: "endsAt must be after startsAt" })
+    }
+
+    const notice = await (prisma as any).closureNotice.create({
+      data: {
+        outletId,
+        title,
+        message,
+        startsAt: new Date(startsAt),
+        endsAt: new Date(endsAt),
+        createdBy: "rtom_manager",
+        createdById: payload.managerId || payload.mobileNumber || "unknown"
+      }
+    })
+    res.json({ success: true, notice })
+  } catch (error) {
+    console.error("RTOM create closure notice error:", error)
+    res.status(500).json({ error: "Failed to create closure notice" })
+  }
+})
+
+// Delete a closure notice (must belong to outlet in RTOM's region)
+router.delete("/closure-notices/:noticeId", async (req, res) => {
+  try {
+    const payload = getManagerPayload(req)
+    if (!payload) return res.status(401).json({ error: "RTOM authentication required" })
+
+    const region = await prisma.region.findFirst({
+      where: payload.mobileNumber ? { managerMobile: payload.mobileNumber } : { managerEmail: payload.email },
+      include: { outlets: true }
+    })
+    if (!region) return res.status(404).json({ error: "Manager not found" })
+
+    const { noticeId } = req.params
+    const outletIds = (region.outlets as any[]).map((o: any) => o.id)
+    const existing = await (prisma as any).closureNotice.findFirst({
+      where: { id: noticeId, outletId: { in: outletIds } }
+    })
+    if (!existing) return res.status(404).json({ error: "Notice not found or not in your region" })
+
+    await (prisma as any).closureNotice.delete({ where: { id: noticeId } })
+    res.json({ success: true, message: "Closure notice deleted" })
+  } catch (error) {
+    console.error("RTOM delete closure notice error:", error)
+    res.status(500).json({ error: "Failed to delete closure notice" })
+  }
+})
+
+// ─────────────────────────────────────────────────────────
+// Mercantile Holidays – RTOM Manager (global management)
+// ─────────────────────────────────────────────────────────
+
+// List all mercantile holidays
+router.get("/holidays", async (req, res) => {
+  try {
+    const payload = getManagerPayload(req)
+    if (!payload) return res.status(401).json({ error: "RTOM authentication required" })
+    const holidays = await (prisma as any).mercantileHoliday.findMany({ orderBy: { date: "asc" } })
+    res.json({ success: true, holidays })
+  } catch (error) {
+    console.error("Get holidays error:", error)
+    res.status(500).json({ error: "Failed to fetch holidays" })
+  }
+})
+
+// Add a mercantile holiday
+router.post("/holidays", async (req, res) => {
+  try {
+    const payload = getManagerPayload(req)
+    if (!payload) return res.status(401).json({ error: "RTOM authentication required" })
+    const { date, name, isRecurring } = req.body
+    if (!date || !name) return res.status(400).json({ error: "date and name are required" })
+    const holiday = await (prisma as any).mercantileHoliday.create({
+      data: { date: new Date(date), name, isRecurring: !!isRecurring }
+    })
+    res.json({ success: true, holiday })
+  } catch (error) {
+    console.error("Create holiday error:", error)
+    res.status(500).json({ error: "Failed to create holiday" })
+  }
+})
+
+// Delete a mercantile holiday
+router.delete("/holidays/:holidayId", async (req, res) => {
+  try {
+    const payload = getManagerPayload(req)
+    if (!payload) return res.status(401).json({ error: "RTOM authentication required" })
+    const { holidayId } = req.params
+    const existing = await (prisma as any).mercantileHoliday.findUnique({ where: { id: holidayId } })
+    if (!existing) return res.status(404).json({ error: "Holiday not found" })
+    await (prisma as any).mercantileHoliday.delete({ where: { id: holidayId } })
+    res.json({ success: true, message: "Holiday deleted" })
+  } catch (error) {
+    console.error("Delete holiday error:", error)
+    res.status(500).json({ error: "Failed to delete holiday" })
+  }
+})
+
 export default router
