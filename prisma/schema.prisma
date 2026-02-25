@@ -293,6 +293,7 @@ model ServiceCaseUpdate {
 model SltBill {
   id              String   @id @default(uuid())
   telephoneNumber String   @unique // SLT telephone number
+  mobileNumber    String?  // Registered mobile number for the SLT account
   accountName     String   // Account holder name
   accountAddress  String?  // Billing address
   currentBill     Float    // Current bill amount
