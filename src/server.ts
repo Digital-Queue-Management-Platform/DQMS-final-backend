@@ -121,6 +121,88 @@ app.use("/api/service-case", serviceCaseRoutes)
 app.use("/api/kiosk", kioskRoutes)
 app.use("/api/bills", billRoutes)
 
+// Public: Branch closed status check (no auth required)
+// Checks: Saturday ≥ 12:30 PM | mercantile holiday | active closure notice
+app.get("/api/branch-status/:outletId", async (req, res) => {
+  try {
+    const { outletId } = req.params
+    const atParam = req.query.at
+    const now = atParam ? new Date(atParam as string) : new Date()
+    if (isNaN(now.getTime())) {
+      return res.status(400).json({ error: "Invalid 'at' date provided" })
+    }
+
+    // 1. Saturday after 12:30 PM rule (day 6 = Saturday)
+    const dayOfWeek = now.getDay()
+    const hours = now.getHours()
+    const minutes = now.getMinutes()
+    if (dayOfWeek === 6 && (hours > 12 || (hours === 12 && minutes >= 30))) {
+      return res.json({
+        isClosed: true,
+        reason: "Branch closes on Saturdays after 12:30 PM",
+        activeNotice: null
+      })
+    }
+
+    // 2. Mercantile holiday check
+    const todayStart = new Date(now)
+    todayStart.setHours(0, 0, 0, 0)
+    const todayEnd = new Date(now)
+    todayEnd.setHours(23, 59, 59, 999)
+
+    const holidays = await (prisma as any).mercantileHoliday.findMany()
+    for (const holiday of holidays) {
+      const hDate = new Date(holiday.date)
+      if (holiday.isRecurring) {
+        // Match month and day only, any year
+        if (hDate.getMonth() === now.getMonth() && hDate.getDate() === now.getDate()) {
+          return res.json({
+            isClosed: true,
+            reason: `Mercantile Holiday: ${holiday.name}`,
+            activeNotice: null
+          })
+        }
+      } else {
+        // Exact date match
+        if (hDate >= todayStart && hDate <= todayEnd) {
+          return res.json({
+            isClosed: true,
+            reason: `Mercantile Holiday: ${holiday.name}`,
+            activeNotice: null
+          })
+        }
+      }
+    }
+
+    // 3. Active closure notice for this outlet
+    const activeNotice = await (prisma as any).closureNotice.findFirst({
+      where: {
+        outletId,
+        startsAt: { lte: now },
+        endsAt: { gte: now }
+      },
+      orderBy: { createdAt: 'desc' }
+    })
+
+    if (activeNotice) {
+      return res.json({
+        isClosed: true,
+        reason: activeNotice.title,
+        activeNotice: {
+          title: activeNotice.title,
+          message: activeNotice.message
+        }
+      })
+    }
+
+    res.set('Cache-Control', 'no-store')
+    res.json({ isClosed: false, reason: null, activeNotice: null })
+  } catch (err) {
+    logger.error({ err }, "Branch-status check error")
+    res.status(500).json({ error: "Failed to check branch status" })
+  }
+})
+
 // Health check
 app.get("/api/health", (req, res) => {
   res.set('Cache-Control', 'no-store')

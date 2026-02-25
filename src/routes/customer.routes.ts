@@ -387,17 +387,17 @@ router.post("/register", async (req, res) => {
     })
   } catch (error: any) {
     console.error("Registration error:", error)
-    
+
     // Handle specific error cases
     if (error.message && error.message.includes("already has an active token")) {
       return res.status(409).json({ error: error.message })
     }
-    
+
     // Handle database constraint violations
     if (error.code === 'P2002') {
       return res.status(409).json({ error: "A registration with this information already exists" })
     }
-    
+
     res.status(500).json({ error: "Registration failed" })
   }
 })
@@ -497,8 +497,8 @@ router.post("/manager-qr-token", async (req, res) => {
       },
     })
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: "Manager QR token registered"
     })
   } catch (error) {
@@ -512,7 +512,7 @@ router.post("/manager-qr-token", async (req, res) => {
 
     // Do not leak internals in production responses
     const isProd = process.env.NODE_ENV === "production"
-    res.status(500).json({ 
+    res.status(500).json({
       error: "Failed to register manager QR token",
       ...(isProd ? {} : { details: anyErr?.message, code: anyErr?.code, meta: anyErr?.meta })
     })
@@ -540,10 +540,10 @@ router.get("/validate-manager-qr", async (req, res) => {
       }
       managerQRTokens.set(token, tokenData)
     }
-    
+
     // Manager tokens are valid until manually refreshed (no automatic expiry)
-    res.json({ 
-      valid: true, 
+    res.json({
+      valid: true,
       outletId: tokenData.outletId,
       generatedAt: tokenData.generatedAt
     })

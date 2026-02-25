@@ -2143,4 +2143,393 @@ router.patch("/feedback/:feedbackId/resolve", async (req, res) => {
   }
 })
 
+// Get officers by branch (RTOM)
+router.get("/branch/:branchId/officers", async (req, res) => {
+  try {
+    const { branchId } = req.params
+
+    // Check for JWT token
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+
+    let managerEmail: string | undefined
+
+    if (token) {
+      try {
+        const payload = (jwt as any).verify(token, JWT_SECRET)
+        managerEmail = payload.email
+      } catch (e) {
+        return res.status(401).json({ error: "Invalid token" })
+      }
+    } else {
+      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
+
+      if (!managerEmail) {
+        return res.status(401).json({ error: "Manager authentication required" })
+      }
+    }
+
+    // Find manager's region
+    const region = await prisma.region.findFirst({
+      where: { managerEmail: managerEmail },
+      include: { outlets: true }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager not found" })
+    }
+
+    // Verify the branch belongs to this manager's region
+    const branch = region.outlets.find(o => o.id === branchId)
+    if (!branch) {
+      return res.status(403).json({ error: "Branch not found in your region" })
+    }
+
+    // Get officers for this branch
+    const officers = await prisma.officer.findMany({
+      where: {
+        outletId: branchId
+      },
+      include: {
+        outlet: true,
+        BreakLog: {
+          orderBy: { startedAt: 'desc' }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    })
+
+    // Process officers data to include break statistics and current status
+    const processedOfficers = officers.map(officer => {
+      const todaysBreaks = officer.BreakLog.filter(breakLog => {
+        const breakDate = new Date(breakLog.startedAt)
+        const today = new Date()
+        return breakDate.toDateString() === today.toDateString()
+      })
+
+      const activeBreak = officer.BreakLog.find(breakLog => !breakLog.endedAt)
+
+      // Calculate total break time (in minutes)
+      const totalMinutes = officer.BreakLog.reduce((total, breakLog) => {
+        if (breakLog.endedAt) {
+          const duration = new Date(breakLog.endedAt).getTime() - new Date(breakLog.startedAt).getTime()
+          return total + Math.floor(duration / (1000 * 60))
+        }
+        return total
+      }, 0)
+
+      // Determine status
+      let status = officer.status || 'offline'
+      if (activeBreak) {
+        status = 'on_break'
+      }
+
+      return {
+        id: officer.id,
+        name: officer.name,
+        mobileNumber: officer.mobileNumber,
+        counterNumber: officer.counterNumber,
+        status,
+        outlet: officer.outlet,
+        totalBreaks: officer.BreakLog.length,
+        totalMinutes,
+        activeBreak: activeBreak ? {
+          id: activeBreak.id,
+          startTime: activeBreak.startedAt
+        } : null,
+        createdAt: officer.createdAt,
+        assignedServices: officer.assignedServices,
+        languages: officer.languages
+      }
+    })
+
+    res.json({ success: true, officers: processedOfficers })
+  } catch (error) {
+    console.error("Get branch officers error:", error)
+    res.status(500).json({ error: "Failed to fetch officers" })
+  }
+})
+
+// Assign officer to counter (RTOM)
+router.patch("/officers/:officerId/assign-counter", async (req, res) => {
+  try {
+    const { officerId } = req.params
+    const { counterNumber } = req.body
+
+    // Check for JWT token
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+
+    let managerEmail: string | undefined
+
+    if (token) {
+      try {
+        const payload = (jwt as any).verify(token, JWT_SECRET)
+        managerEmail = payload.email
+      } catch (e) {
+        return res.status(401).json({ error: "Invalid token" })
+      }
+    } else {
+      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
+
+      if (!managerEmail) {
+        return res.status(401).json({ error: "Manager authentication required" })
+      }
+    }
+
+    // Find manager's region
+    const region = await prisma.region.findFirst({
+      where: { managerEmail: managerEmail },
+      include: { outlets: true }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Manager not found" })
+    }
+
+    const outletIds = region.outlets.map(outlet => outlet.id)
+
+    // Verify officer belongs to this manager's region
+    const officer = await prisma.officer.findFirst({
+      where: {
+        id: officerId,
+        outletId: { in: outletIds }
+      },
+      include: { outlet: true }
+    })
+
+    if (!officer) {
+      return res.status(403).json({ error: "Officer not found in your region" })
+    }
+
+    // If assigning a counter (not null), validate it
+    if (counterNumber !== null && counterNumber !== undefined) {
+      const parsed = Number(counterNumber)
+
+      // Validate counter number is valid
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        return res.status(400).json({ error: "Counter number must be a positive integer" })
+      }
+
+      // Check outlet counter capacity
+      if (officer.outlet.counterCount && parsed > officer.outlet.counterCount) {
+        return res.status(400).json({
+          error: `Counter #${parsed} exceeds outlet capacity of ${officer.outlet.counterCount} counters`
+        })
+      }
+
+      // Check if counter is already assigned to another officer
+      const existingAssignment = await prisma.officer.findFirst({
+        where: {
+          outletId: officer.outletId,
+          counterNumber: parsed,
+          id: { not: officerId }
+        }
+      })
+
+      if (existingAssignment) {
+        return res.status(400).json({
+          error: `Counter #${parsed} is already assigned to ${existingAssignment.name}`
+        })
+      }
+    }
+
+    // Update officer counter assignment
+    const updatedOfficer = await prisma.officer.update({
+      where: { id: officerId },
+      data: { counterNumber: counterNumber === null ? null : Number(counterNumber) },
+      include: {
+        outlet: true
+      }
+    })
+
+    res.json({ success: true, officer: updatedOfficer })
+  } catch (error: any) {
+    console.error("Assign counter error:", error)
+    res.status(500).json({ error: "Failed to assign counter" })
+  }
+})
+
+// ─────────────────────────────────────────────────────────
+// Closure Notices – RTOM Manager
+// ─────────────────────────────────────────────────────────
+
+// Helper: authenticate manager from JWT cookie or Authorization header
+function getManagerPayload(req: any): any | null {
+  let token = req.cookies?.dq_manager_jwt
+  if (!token) {
+    const authHeader = req.headers.authorization
+    if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.substring(7)
+  }
+  if (!token) return null
+  try {
+    const payload = (jwt as any).verify(token, JWT_SECRET)
+    return payload
+  } catch {
+    return null
+  }
+}
+
+// List closure notices for outlets in RTOM's region (?outletId= optional filter)
+router.get("/closure-notices", async (req, res) => {
+  try {
+    const payload = getManagerPayload(req)
+    if (!payload) return res.status(401).json({ error: "RTOM authentication required" })
+
+    const region = await prisma.region.findFirst({
+      where: payload.mobileNumber ? { managerMobile: payload.mobileNumber } : { managerEmail: payload.email },
+      include: { outlets: true }
+    })
+    if (!region) return res.status(404).json({ error: "Manager not found" })
+
+    const outletIds = region.outlets.map((o: any) => o.id)
+    const { outletId } = req.query
+
+    const where: any = {
+      outletId: outletId ? String(outletId) : { in: outletIds }
+    }
+    if (outletId && !outletIds.includes(String(outletId))) {
+      return res.status(403).json({ error: "Outlet not in your region" })
+    }
+
+    const notices = await (prisma as any).closureNotice.findMany({
+      where,
+      include: { outlet: { select: { id: true, name: true } } },
+      orderBy: { startsAt: "asc" }
+    })
+    res.json({ success: true, notices, outlets: region.outlets })
+  } catch (error) {
+    console.error("RTOM get closure notices error:", error)
+    res.status(500).json({ error: "Failed to fetch closure notices" })
+  }
+})
+
+// Create a closure notice (RTOM can pick any outlet in region)
+router.post("/closure-notices", async (req, res) => {
+  try {
+    const payload = getManagerPayload(req)
+    if (!payload) return res.status(401).json({ error: "RTOM authentication required" })
+
+    const region = await prisma.region.findFirst({
+      where: payload.mobileNumber ? { managerMobile: payload.mobileNumber } : { managerEmail: payload.email },
+      include: { outlets: true }
+    })
+    if (!region) return res.status(404).json({ error: "Manager not found" })
+
+    const { outletId, title, message, startsAt, endsAt } = req.body
+    if (!outletId || !title || !message || !startsAt || !endsAt) {
+      return res.status(400).json({ error: "outletId, title, message, startsAt, and endsAt are required" })
+    }
+    if (!(region.outlets as any[]).some((o: any) => o.id === outletId)) {
+      return res.status(403).json({ error: "Outlet not in your region" })
+    }
+    if (new Date(startsAt) >= new Date(endsAt)) {
+      return res.status(400).json({ error: "endsAt must be after startsAt" })
+    }
+
+    const notice = await (prisma as any).closureNotice.create({
+      data: {
+        outletId,
+        title,
+        message,
+        startsAt: new Date(startsAt),
+        endsAt: new Date(endsAt),
+        createdBy: "rtom_manager",
+        createdById: payload.managerId || payload.mobileNumber || "unknown"
+      }
+    })
+    res.json({ success: true, notice })
+  } catch (error) {
+    console.error("RTOM create closure notice error:", error)
+    res.status(500).json({ error: "Failed to create closure notice" })
+  }
+})
+
+// Delete a closure notice (must belong to outlet in RTOM's region)
+router.delete("/closure-notices/:noticeId", async (req, res) => {
+  try {
+    const payload = getManagerPayload(req)
+    if (!payload) return res.status(401).json({ error: "RTOM authentication required" })
+
+    const region = await prisma.region.findFirst({
+      where: payload.mobileNumber ? { managerMobile: payload.mobileNumber } : { managerEmail: payload.email },
+      include: { outlets: true }
+    })
+    if (!region) return res.status(404).json({ error: "Manager not found" })
+
+    const { noticeId } = req.params
+    const outletIds = (region.outlets as any[]).map((o: any) => o.id)
+    const existing = await (prisma as any).closureNotice.findFirst({
+      where: { id: noticeId, outletId: { in: outletIds } }
+    })
+    if (!existing) return res.status(404).json({ error: "Notice not found or not in your region" })
+
+    await (prisma as any).closureNotice.delete({ where: { id: noticeId } })
+    res.json({ success: true, message: "Closure notice deleted" })
+  } catch (error) {
+    console.error("RTOM delete closure notice error:", error)
+    res.status(500).json({ error: "Failed to delete closure notice" })
+  }
+})
+
+// ─────────────────────────────────────────────────────────
+// Mercantile Holidays – RTOM Manager (global management)
+// ─────────────────────────────────────────────────────────
+
+// List all mercantile holidays
+router.get("/holidays", async (req, res) => {
+  try {
+    const payload = getManagerPayload(req)
+    if (!payload) return res.status(401).json({ error: "RTOM authentication required" })
+    const holidays = await (prisma as any).mercantileHoliday.findMany({ orderBy: { date: "asc" } })
+    res.json({ success: true, holidays })
+  } catch (error) {
+    console.error("Get holidays error:", error)
+    res.status(500).json({ error: "Failed to fetch holidays" })
+  }
+})
+
+// Add a mercantile holiday
+router.post("/holidays", async (req, res) => {
+  try {
+    const payload = getManagerPayload(req)
+    if (!payload) return res.status(401).json({ error: "RTOM authentication required" })
+    const { date, name, isRecurring } = req.body
+    if (!date || !name) return res.status(400).json({ error: "date and name are required" })
+    const holiday = await (prisma as any).mercantileHoliday.create({
+      data: { date: new Date(date), name, isRecurring: !!isRecurring }
+    })
+    res.json({ success: true, holiday })
+  } catch (error) {
+    console.error("Create holiday error:", error)
+    res.status(500).json({ error: "Failed to create holiday" })
+  }
+})
+
+// Delete a mercantile holiday
+router.delete("/holidays/:holidayId", async (req, res) => {
+  try {
+    const payload = getManagerPayload(req)
+    if (!payload) return res.status(401).json({ error: "RTOM authentication required" })
+    const { holidayId } = req.params
+    const existing = await (prisma as any).mercantileHoliday.findUnique({ where: { id: holidayId } })
+    if (!existing) return res.status(404).json({ error: "Holiday not found" })
+    await (prisma as any).mercantileHoliday.delete({ where: { id: holidayId } })
+    res.json({ success: true, message: "Holiday deleted" })
+  } catch (error) {
+    console.error("Delete holiday error:", error)
+    res.status(500).json({ error: "Failed to delete holiday" })
+  }
+})
+
 export default router

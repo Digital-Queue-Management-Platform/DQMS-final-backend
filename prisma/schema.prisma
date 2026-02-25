@@ -109,6 +109,7 @@ model Outlet {
   managerQRTokens   ManagerQRToken[]
   appointments      Appointment[]
   teleshopManagers  TeleshopManager[]
+  closureNotices    ClosureNotice[]
 }
 
 model Region {
@@ -303,4 +304,31 @@ model SltBill {
 
   @@index([telephoneNumber])
   @@index([status, dueDate])
+}
+
+// Closure Notices: custom closure messages created by RTOM or Teleshop Manager
+model ClosureNotice {
+  id          String   @id @default(uuid())
+  outletId    String
+  title       String
+  message     String
+  startsAt    DateTime
+  endsAt      DateTime
+  createdBy   String   // "teleshop_manager" | "rtom_manager"
+  createdById String   // ID of the creator
+  createdAt   DateTime @default(now())
+  outlet      Outlet   @relation(fields: [outletId], references: [id])
+
+  @@index([outletId, endsAt])
+}
+
+// Mercantile Holidays: public holidays on which branches are considered closed
+model MercantileHoliday {
+  id          String   @id @default(uuid())
+  date        DateTime // The holiday date (store as date at midnight UTC)
+  name        String   // e.g., "Sinhalese & Tamil New Year"
+  isRecurring Boolean  @default(false) // true = same month/day every year
+  createdAt   DateTime @default(now())
+
+  @@index([date])
 }

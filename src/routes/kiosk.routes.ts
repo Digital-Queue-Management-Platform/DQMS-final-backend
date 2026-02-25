@@ -17,7 +17,7 @@ const authenticateKiosk = async (req: any, res: any, next: any) => {
 
     const token = authHeader.substring(7)
     const decoded = (jwt as any).verify(token, JWT_SECRET as jwt.Secret)
-    
+
     if (decoded.type !== 'kiosk') {
       return res.status(403).json({ error: "Access denied. Kiosk token required." })
     }
@@ -132,16 +132,16 @@ router.post("/tokens", async (req: any, res: any) => {
 
     // Validate required fields
     if (!name || !mobileNumber || !serviceTypes || !Array.isArray(serviceTypes) || serviceTypes.length === 0) {
-      return res.status(400).json({ 
-        error: "Name, mobile number, and at least one service type are required" 
+      return res.status(400).json({
+        error: "Name, mobile number, and at least one service type are required"
       })
     }
 
     // Validate mobile number format (Sri Lankan format)
     const mobileRegex = /^(?:\+94|0)?[0-9]{9,10}$/
     if (!mobileRegex.test(mobileNumber)) {
-      return res.status(400).json({ 
-        error: "Invalid mobile number format. Please enter a valid Sri Lankan mobile number." 
+      return res.status(400).json({
+        error: "Invalid mobile number format. Please enter a valid Sri Lankan mobile number."
       })
     }
 
@@ -184,7 +184,7 @@ router.post("/tokens", async (req: any, res: any) => {
     // Get next token number for this outlet
     const today = new Date()
     today.setHours(0, 0, 0, 0)
-    
+
     const lastToken = await prisma.token.findFirst({
       where: {
         outletId: outletId,
