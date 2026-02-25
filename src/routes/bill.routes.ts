@@ -23,6 +23,7 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
       select: {
         id: true,
         telephoneNumber: true,
+        mobileNumber: true,
         accountName: true,
         accountAddress: true,
         currentBill: true,
@@ -63,6 +64,7 @@ router.post('/search', async (req: Request, res: Response) => {
       select: {
         id: true,
         telephoneNumber: true,
+        mobileNumber: true,
         accountName: true,
         accountAddress: true,
         currentBill: true,
