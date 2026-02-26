@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "build:prod": "npx prisma migrate deploy && npx prisma generate && tsc",
+    "build:prod": "tsc && npx prisma migrate deploy",
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
@@ -14,6 +14,7 @@
     "prisma:studio": "prisma studio",
     "seed:outlets": "tsx ./scripts/seedOutlets.ts",
     "test:email": "tsx ./scripts/testEmail.ts",
+    "test:slt-billing": "tsx ./scripts/testSltBilling.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
