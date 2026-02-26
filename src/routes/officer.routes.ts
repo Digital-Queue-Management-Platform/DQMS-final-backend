@@ -598,6 +598,7 @@ router.post("/complete-service", async (req, res) => {
       },
     })
 
+
     // Update officer status back to available
     await prisma.officer.update({
       where: { id: officerId },
@@ -607,7 +608,7 @@ router.post("/complete-service", async (req, res) => {
     // Broadcast update
     broadcast({ type: "TOKEN_COMPLETED", data: token })
 
-    // Create ServiceCase (tracking) and initial update, and print SMS to console
+    // Create or update ServiceCase (tracking), set status to completed, and print SMS to console
     try {
       let completedRef: string | null = null
       // Generate reference number: YYYY-MM-DD/OutletName/TokenNumber for uniqueness
@@ -626,7 +627,8 @@ router.post("/complete-service", async (req, res) => {
             officerId,
             customerId: token.customerId,
             serviceTypes: (token as any).serviceTypes || [],
-            status: 'open',
+            status: 'completed',
+            completedAt: new Date(),
           }
         })
 
@@ -635,8 +637,24 @@ router.post("/complete-service", async (req, res) => {
             caseId: serviceCase.id,
             actorRole: 'officer',
             actorId: officerId,
-            status: 'submitted',
-            note: 'Service submitted for further processing',
+            status: 'completed',
+            note: 'Service completed by officer',
+          }
+        })
+      } else {
+        // If already exists, update status and completedAt
+        await (prisma as any).serviceCase.update({
+          where: { id: serviceCase.id },
+          data: { status: 'completed', completedAt: new Date() }
+        })
+
+        await (prisma as any).serviceCaseUpdate.create({
+          data: {
+            caseId: serviceCase.id,
+            actorRole: 'officer',
+            actorId: officerId,
+            status: 'completed',
+            note: 'Service completed by officer',
           }
         })
       }
@@ -669,7 +687,7 @@ router.post("/complete-service", async (req, res) => {
         console.log('SMS print failed:', e)
       }
     } catch (err) {
-      console.error('ServiceCase creation error:', err)
+      console.error('ServiceCase creation/update error:', err)
     }
 
     // Include the generated reference number and absolute tracking URL in response

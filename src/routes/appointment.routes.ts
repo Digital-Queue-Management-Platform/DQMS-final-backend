@@ -199,4 +199,26 @@ router.get("/outlet/:outletId", async (req, res) => {
   }
 })
 
+// Get available services for appointments
+router.get("/services", async (req, res) => {
+  try {
+    const services = await prisma.service.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        code: true,
+        title: true,
+        description: true,
+        isActive: true
+      },
+      orderBy: { title: 'asc' }
+    })
+
+    res.json(services)
+  } catch (error) {
+    console.error("Fetch services error:", error)
+    res.status(500).json({ error: "Failed to fetch services" })
+  }
+})
+
 export default router

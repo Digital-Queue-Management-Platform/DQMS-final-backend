@@ -9,6 +9,7 @@ async function main() {
   const billsData = [
     {
       telephoneNumber: '0112345678',
+      mobileNumber: '0712345678',
       accountName: 'John Silva',
       accountAddress: '123, Galle Road, Colombo 03',
       currentBill: 2500.00,
@@ -17,6 +18,7 @@ async function main() {
     },
     {
       telephoneNumber: '0417654321',
+      mobileNumber: '0776543210',
       accountName: 'Nimal Perera',
       accountAddress: '456, Kandy Road, Kandy',
       currentBill: 3200.50,
@@ -25,6 +27,7 @@ async function main() {
     },
     {
       telephoneNumber: '0815551234',
+      mobileNumber: '0775551234',
       accountName: 'Saman Fernando',
       accountAddress: '789, Main Street, Negombo',
       currentBill: 1850.75,
@@ -33,6 +36,7 @@ async function main() {
     },
     {
       telephoneNumber: '0118887777',
+      mobileNumber: '0718887777',
       accountName: 'Kamala Jayawardena',
       accountAddress: '321, Lake Road, Matara',
       currentBill: 4100.00,
@@ -41,6 +45,7 @@ async function main() {
     },
     {
       telephoneNumber: '0113334444',
+      mobileNumber: '0723334444',
       accountName: 'Ruwan Wickramasinghe',
       accountAddress: '654, Beach Road, Galle',
       currentBill: 2890.25,
@@ -49,6 +54,7 @@ async function main() {
     },
     {
       telephoneNumber: '0116669999',
+      mobileNumber: '0766699999',
       accountName: 'Amara De Silva',
       accountAddress: '987, Temple Road, Anuradhapura',
       currentBill: 1500.00,
@@ -58,6 +64,7 @@ async function main() {
     },
     {
       telephoneNumber: '0114445555',
+      mobileNumber: '0744455555',
       accountName: 'Tharindu Rajapaksha',
       accountAddress: '147, Hill Street, Nuwara Eliya',
       currentBill: 3750.50,
@@ -66,6 +73,7 @@ async function main() {
     },
     {
       telephoneNumber: '0112223333',
+      mobileNumber: '0722233333',
       accountName: 'Dilini Kumari',
       accountAddress: '258, Station Road, Jaffna',
       currentBill: 2100.00,
@@ -74,6 +82,7 @@ async function main() {
     },
     {
       telephoneNumber: '0119998888',
+      mobileNumber: '0719998888',
       accountName: 'Pradeep Mendis',
       accountAddress: '369, Park Avenue, Ratnapura',
       currentBill: 5200.75,
@@ -82,6 +91,7 @@ async function main() {
     },
     {
       telephoneNumber: '0115557777',
+      mobileNumber: '0755577777',
       accountName: 'Sanduni Wijesekara',
       accountAddress: '741, River View, Kurunegala',
       currentBill: 2650.50,
@@ -96,6 +106,7 @@ async function main() {
       where: { telephoneNumber: bill.telephoneNumber },
       update: {
         accountName: bill.accountName,
+        mobileNumber: bill.mobileNumber,
         accountAddress: bill.accountAddress,
         currentBill: bill.currentBill,
         dueDate: bill.dueDate,
