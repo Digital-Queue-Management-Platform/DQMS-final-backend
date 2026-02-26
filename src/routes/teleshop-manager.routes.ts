@@ -296,6 +296,7 @@ router.get("/officers", async (req: any, res) => {
         counterNumber: officer.counterNumber,
         status,
         outlet: officer.outlet,
+        assignedServices: officer.assignedServices || [],
         totalBreaks: officer.BreakLog.length,
         totalMinutes,
         activeBreak: activeBreak ? {
