@@ -25,7 +25,7 @@ async function assignAllServicesToOfficers() {
     const allServiceIds = services.map(s => s.id)
 
     // Combine both codes and IDs (for backward compatibility)
-    const allServices = [...allServiceCodes, ...allServiceIds, 'BILL_PAYMENT']
+    const allServices = [...allServiceCodes, ...allServiceIds]
 
     // Get all officers
     const officers = await prisma.officer.findMany({
