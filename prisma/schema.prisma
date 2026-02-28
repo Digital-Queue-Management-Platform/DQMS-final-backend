@@ -307,6 +307,37 @@ model SltBill {
   @@index([status, dueDate])
 }
 
+// GM: General Manager - island-wide minor admin, oversees all DGMs
+model GM {
+  id           String   @id @default(uuid())
+  name         String
+  mobileNumber String   @unique
+  email        String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  lastLoginAt  DateTime?
+  dgms         DGM[]
+
+  @@index([mobileNumber])
+}
+
+// DGM: Deputy General Manager - oversees specific Regions under a GM
+model DGM {
+  id           String   @id @default(uuid())
+  name         String
+  mobileNumber String   @unique
+  email        String?
+  gmId         String
+  gm           GM       @relation(fields: [gmId], references: [id])
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  lastLoginAt  DateTime?
+  regionIds    String[] // Region IDs this DGM oversees
+
+  @@index([mobileNumber])
+  @@index([gmId])
+}
+
 // Closure Notices: custom closure messages created by RTOM or Teleshop Manager
 model ClosureNotice {
   id          String   @id @default(uuid())

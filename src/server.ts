@@ -22,6 +22,8 @@ import appointmentRoutes from "./routes/appointment.routes"
 import ipSpeakerRoutes from "./routes/ip-speaker.routes"
 import twilioRoutes from "./routes/twilio.routes"
 import serviceCaseRoutes from "./routes/service-case.routes"
+import gmRoutes from "./routes/gm.routes"
+import dgmRoutes from "./routes/dgm.routes"
 import kioskRoutes from "./routes/kiosk.routes"
 import billRoutes from "./routes/bill.routes"
 
@@ -120,6 +122,8 @@ app.use("/api/twilio", twilioRoutes)
 app.use("/api/service-case", serviceCaseRoutes)
 app.use("/api/kiosk", kioskRoutes)
 app.use("/api/bills", billRoutes)
+app.use("/api/gm", gmRoutes)
+app.use("/api/dgm", dgmRoutes)
 
 // Public: Branch closed status check (no auth required)
 // Checks: Saturday ≥ 12:30 PM | mercantile holiday | active closure notice
