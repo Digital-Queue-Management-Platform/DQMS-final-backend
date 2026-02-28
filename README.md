@@ -143,7 +143,7 @@ The API will be available at `http://localhost:3001`
 
 ### Base URL
 - **Development**: `http://localhost:3001/api`
-- **Production**: `https://dqms-final-backend.onrender.com/api`
+- **Production**: `https://dpdlab1.slt.lk:8447/dqms-api/api`
 
 ### Authentication
 Most endpoints require authentication. Include the JWT token in the Authorization header:
