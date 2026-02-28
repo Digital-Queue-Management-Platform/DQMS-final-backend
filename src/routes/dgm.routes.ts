@@ -317,4 +317,200 @@ router.delete("/rtoms/:regionId", async (req, res) => {
     }
 })
 
+// GET /analytics - Analytics for DGMs (region-scoped access)
+router.get("/analytics", async (req, res) => {
+    try {
+        const auth = verifyDGMToken(req)
+        if (!auth) return res.status(401).json({ error: "DGM authentication required" })
+
+        const dgm = await (prisma as any).dGM.findUnique({ where: { id: auth.dgmId } })
+        if (!dgm) return res.status(404).json({ error: "DGM not found" })
+
+        const { startDate, endDate, outletId } = req.query
+        console.log('DGM Analytics request:', { startDate, endDate, outletId })
+
+        // Verify DGM has access to this outlet (must be in their regions)
+        if (outletId) {
+            const outlet = await prisma.outlet.findUnique({ where: { id: outletId as string }, select: { regionId: true } })
+            if (!outlet || !dgm.regionIds.includes(outlet.regionId)) {
+                return res.status(403).json({ error: "Access denied to this outlet" })
+            }
+        }
+
+        const where: any = {
+            status: "completed",
+            completedAt: {
+                gte: startDate ? new Date(startDate as string) : undefined,
+                lte: endDate ? new Date(endDate as string) : undefined,
+            }
+        }
+
+        if (outletId) {
+            where.outletId = outletId
+        }
+
+        console.log('DGM Query where clause:', where)
+
+        // Total completed tokens
+        const totalTokens = await prisma.token.count({
+            where: {
+                ...where,
+                status: "completed",
+            }
+        })
+        console.log('DGM Total tokens found:', totalTokens)
+
+        // Average waiting time
+        const completedTokens = await prisma.token.findMany({
+            where: {
+                ...where,
+                status: "completed",
+                startedAt: { not: undefined },
+                createdAt: { not: undefined },
+            },
+        })
+        console.log('DGM Completed tokens found for avg calculation:', completedTokens.length)
+
+        const avgWaitTime =
+            completedTokens.length > 0
+                ? completedTokens.reduce((sum, token) => {
+                    const wait =
+                        token.startedAt && token.createdAt
+                            ? (token.startedAt.getTime() - token.createdAt.getTime()) / 1000 / 60
+                            : 0
+                    return sum + wait
+                }, 0) / completedTokens.length
+                : 0
+
+        // Average service time
+        const avgServiceTime =
+            completedTokens.length > 0
+                ? completedTokens.reduce((sum, token) => {
+                    const service =
+                        token.completedAt && token.startedAt
+                            ? (token.completedAt.getTime() - token.startedAt.getTime()) / 1000 / 60
+                            : 0
+                    return sum + service
+                }, 0) / completedTokens.length
+                : 0
+
+        // Feedback stats
+        const feedbackStats = await prisma.feedback.groupBy({
+            by: ["rating"],
+            where: {
+                token: {
+                    ...where,
+                    status: "completed"
+                }
+            },
+            _count: true,
+        })
+
+        // Officer performance
+        const officerPerformance = await prisma.token.groupBy({
+            by: ["assignedTo"],
+            where: {
+                ...where,
+                status: "completed",
+                assignedTo: { not: null },
+            },
+            _count: true,
+        })
+
+        const officerDetails = await Promise.all(
+            officerPerformance.map(async (perf) => {
+                const officer = await prisma.officer.findUnique({
+                    where: { id: perf.assignedTo! },
+                    include: { outlet: true },
+                })
+
+                const feedbacks = await prisma.feedback.findMany({
+                    where: {
+                        token: {
+                            assignedTo: perf.assignedTo!,
+                            createdAt: where.createdAt,
+                        },
+                    },
+                })
+
+                const avgRating = feedbacks.length > 0 ? feedbacks.reduce((sum, f) => sum + f.rating, 0) / feedbacks.length : 0
+
+                return {
+                    officer,
+                    tokensHandled: perf._count,
+                    avgRating,
+                    feedbackCount: feedbacks.length,
+                }
+            }),
+        )
+
+        // Generate hourly waiting times (8 AM to 6 PM)
+        const hourlyWaitingTimes = []
+        for (let hour = 8; hour <= 18; hour++) {
+            const hourStart = new Date(startDate ? new Date(startDate as string) : new Date())
+            hourStart.setHours(hour, 0, 0, 0)
+            const hourEnd = new Date(hourStart)
+            hourEnd.setHours(hour, 59, 59, 999)
+
+            const hourTokens = completedTokens.filter(token => {
+                if (!token.startedAt) return false
+                const startedTime = new Date(token.startedAt)
+                return startedTime >= hourStart && startedTime <= hourEnd
+            })
+
+            const avgHourWaitTime = hourTokens.length > 0
+                ? hourTokens.reduce((sum, token) => {
+                    const wait = token.startedAt && token.createdAt
+                        ? (token.startedAt.getTime() - token.createdAt.getTime()) / 1000 / 60
+                        : 0
+                    return sum + wait
+                }, 0) / hourTokens.length
+                : 0
+
+            hourlyWaitingTimes.push({
+                hour: `${hour.toString().padStart(2, '0')}:00`,
+                waitTime: Math.round(avgHourWaitTime * 10) / 10
+            })
+        }
+
+        // Generate service types data
+        const serviceTypes = await prisma.token.groupBy({
+            by: ["serviceTypes"],
+            where: {
+                ...where,
+                status: "completed",
+            },
+            _count: true,
+        })
+
+        const serviceTypesFormatted = serviceTypes.map(service => {
+            const serviceTypeArray = Array.isArray(service.serviceTypes) ? service.serviceTypes : [];
+            const firstServiceType = serviceTypeArray.length > 0 ? serviceTypeArray[0] : "other";
+
+            return {
+                name: firstServiceType === "bill_payment" ? "Bill Payments" :
+                    firstServiceType === "technical_support" ? "Technical Support" :
+                        firstServiceType === "account_services" ? "Account Services" :
+                            firstServiceType === "new_connection" ? "New Connections" :
+                                firstServiceType === "device_sim_issues" ? "Device/SIM Issues" :
+                                    "Other Services",
+                count: service._count
+            };
+        })
+
+        res.json({
+            totalTokens,
+            avgWaitTime: Math.round(avgWaitTime * 10) / 10,
+            avgServiceTime: Math.round(avgServiceTime * 10) / 10,
+            feedbackStats,
+            officerPerformance: officerDetails,
+            hourlyWaitingTimes,
+            serviceTypes: serviceTypesFormatted,
+        })
+    } catch (error) {
+        console.error("DGM Analytics error:", error)
+        res.status(500).json({ error: "Failed to fetch analytics" })
+    }
+})
+
 export default router
