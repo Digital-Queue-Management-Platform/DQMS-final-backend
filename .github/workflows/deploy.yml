@@ -126,20 +126,20 @@ jobs:
             echo "DOCKER_IMAGE=$DOCKER_IMAGE" >> .env
 
             # Log in to registry on VM
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            echo "${{ secrets.GITHUB_TOKEN }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
             # Rolling update using docker compose
-            docker compose pull backend
-            docker compose up -d --remove-orphans
+            sudo docker compose pull backend
+            sudo docker compose up -d --remove-orphans
 
             # Verify deployment health
             echo "Waiting for container to become healthy (up to 60s)..."
             sleep 60
 
             # Test healthcheck script (assumes container is named dqmp-backend)
-            if ! docker ps | grep dqmp-backend | grep -q "healthy"; then
+            if ! sudo docker ps | grep dqmp-backend | grep -q "healthy"; then
                echo "Container failed to reach a healthy state."
-               docker compose logs backend
+               sudo docker compose logs backend
                exit 1
             fi
 
