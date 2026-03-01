@@ -36,13 +36,15 @@ WORKDIR /app
 COPY package*.json ./
 COPY prisma ./prisma/
 
-# Install production dependencies only
-RUN npm ci --only=production && \
-    npx prisma generate && \
+# Install ALL dependencies first (needed for prisma generate in postinstall)
+RUN npm ci && \
     npm cache clean --force
 
 # Copy built application from builder
 COPY --from=builder /app/dist ./dist
+
+# Remove dev dependencies after Prisma client is generated
+RUN npm prune --production
 
 # Create uploads directory
 RUN mkdir -p uploads && chown -R node:node uploads
