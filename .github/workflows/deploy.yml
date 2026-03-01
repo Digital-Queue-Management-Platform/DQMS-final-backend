@@ -149,7 +149,7 @@ jobs:
             # Quick health check (30 seconds max)
             echo "Verifying deployment (30s max)..."
             for i in {1..10}; do
-              if curl -f -s http://localhost:3001/api/health > /dev/null 2>&1; then
+              if curl -f -s http://localhost:3500/api/health > /dev/null 2>&1; then
                 echo "✅ Deployment successful!"
                 sudo docker compose ps
                 exit 0
