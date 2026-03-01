@@ -37,9 +37,9 @@ RUN npm ci --omit=dev --ignore-scripts && \
     npm install prisma@^5.22.0 && \
     npm cache clean --force
 
-# Copy generated Prisma Client from builder stage
+# Copy generated Prisma Client and engines from builder stage
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/@prisma/client ./node_modules/@prisma/client
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
 # Copy built application from builder
 COPY --from=builder /app/dist ./dist
