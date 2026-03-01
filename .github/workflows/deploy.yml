@@ -9,6 +9,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
+  # Docker repository names must be lowercase
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
@@ -71,8 +72,8 @@ jobs:
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.VM_HOST }}
-          port: ${{ secrets.VM_SSH_PORT}}
-          username: deploy
+          port: ${{ secrets.VM_SSH_PORT }}
+          username: ${{ secrets.VM_USERNAME }}
           key: ${{ secrets.VM_SSH_KEY }}
           source: "docker-compose.prod.yml"
           target: "/opt/app"
@@ -84,7 +85,7 @@ jobs:
         with:
           host: ${{ secrets.VM_HOST }}
           port: ${{ secrets.VM_SSH_PORT || 22 }}
-          username: deploy
+          username: ${{ secrets.VM_USERNAME }}
           key: ${{ secrets.VM_SSH_KEY }}
           envs: APP_ENV
           timeout: 300s
@@ -99,8 +100,23 @@ jobs:
             ${APP_ENV}
             EOF
 
+            # Ensure local environment variables (like DOCKER_HOST for podman/rootless docker) are loaded
+            source ~/.bashrc 2>/dev/null || true
+            source ~/.bash_profile 2>/dev/null || true
+
+            # If docker is not accessible, attempt to start it (useful if daemon stopped or VM restarted)
+            if ! docker info >/dev/null 2>&1; then
+               echo "Docker not accessible, attempting sudo systemctl start docker..."
+               sudo systemctl start docker || true
+            fi
+
             # Reconstruct the precise image tag
-            export DOCKER_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${GITHUB_SHA::7}
+            # github.sha is 40 chars, we need the 7-character short SHA
+            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+
+            # Ensure the image name is entirely lowercase (Docker requirement)
+            LOWERCASE_IMAGE_NAME=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+            export DOCKER_IMAGE=${{ env.REGISTRY }}/${LOWERCASE_IMAGE_NAME}:sha-${SHORT_SHA}
             echo "DOCKER_IMAGE=$DOCKER_IMAGE" >> .env
 
             # Log in to registry on VM
