@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  # Backend API
+  backend:
+    # Uses the published GHCR image
+    image: ${DOCKER_IMAGE}
+    container_name: dqmp-backend
+    restart: unless-stopped
+    ports:
+      - "3010:3001"
+    env_file: .env
+    environment:
+      PORT: 3001
+      NODE_ENV: production
+    volumes:
+      - ./uploads:/app/uploads
+    # Uses the healthcheck defined inside the Dockerfile

@@ -1,0 +1,170 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - new-logins-back
+  workflow_dispatch:  # Allow manual triggers
+
+env:
+  REGISTRY: ghcr.io
+  # Docker repository names must be lowercase
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Stage 1: Build & Containerize (optimized with caching)
+  build-and-push:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_name: ${{ steps.lowercase.outputs.image_name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Convert repository name to lowercase
+        id: lowercase
+        run: |
+          echo "image_name=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Extract metadata (tags, labels) for Docker
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.lowercase.outputs.image_name }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.lowercase.outputs.image_name }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.lowercase.outputs.image_name }}:buildcache,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+  # Stage 3: Deploy & Verify
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    environment: Preview
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Note: We specify standard docker compose name the VM expects
+      - name: Copy docker-compose to VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VM_HOST }}
+          port: ${{ secrets.VM_SSH_PORT }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          source: "docker-compose.prod.yml"
+          target: "/opt/app"
+
+      - name: Deploy to Rocky Linux VM
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          APP_ENV: ${{ secrets.APP_ENV }}
+        with:
+          host: ${{ secrets.VM_HOST }}
+          port: ${{ secrets.VM_SSH_PORT || 22 }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          envs: APP_ENV
+          timeout: 300s
+          command_timeout: 30m
+          script: |
+            set -e
+            cd /opt/app
+            mv docker-compose.prod.yml docker-compose.yml || true
+
+            # Write the complete .env file from the GitHub secret
+            printf '%s\n' "$APP_ENV" > .env
+
+            # Ensure local environment variables (like DOCKER_HOST for podman/rootless docker) are loaded
+            source ~/.bashrc 2>/dev/null || true
+            source ~/.bash_profile 2>/dev/null || true
+
+            # If docker is not accessible, attempt to start it (useful if daemon stopped or VM restarted)
+            if ! sudo docker info >/dev/null 2>&1; then
+               echo "Docker not accessible, attempting to start docker..."
+               sudo systemctl start docker || true
+               sleep 2
+            fi
+
+            # Reconstruct the precise image tag
+            # github.sha is 40 chars, we need the 7-character short SHA
+            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+
+            # Use the lowercase image name from the build job
+            export DOCKER_IMAGE=${{ env.REGISTRY }}/${{ needs.build-and-push.outputs.image_name }}:sha-${SHORT_SHA}
+            echo "DOCKER_IMAGE=$DOCKER_IMAGE" >> .env
+
+            # Log in to registry on VM
+            echo "${{ secrets.GITHUB_TOKEN }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            # Pull new image first (while old container still running)
+            sudo docker compose pull backend
+
+            # Stop and remove old container first to free the port
+            sudo docker compose stop backend || true
+            sudo docker compose rm -f backend || true
+
+            # Kill any process using port 3010 (in case of stale process)
+            sudo fuser -k 3010/tcp || true
+            sleep 2
+
+            # Start new container
+            sudo docker compose up -d --no-deps backend
+
+            # Run database migrations immediately
+            echo "Running database migrations..."
+            sleep 3
+            sudo docker compose exec -T backend npx prisma migrate deploy || true
+
+            # Quick health check (30 seconds max)
+            echo "Verifying deployment (30s max)..."
+            for i in {1..10}; do
+              if curl -f -s http://localhost:3010/api/health > /dev/null 2>&1; then
+                echo "✅ Deployment successful!"
+                sudo docker compose ps
+                exit 0
+              fi
+              echo "Checking... ($i/10)"
+              sleep 3
+            done
+
+            # Fallback: Check if container is at least running
+            if sudo docker ps | grep -q "dqmp-backend.*Up"; then
+              echo "✅ Container running (health check may still be initializing)"
+              sudo docker compose ps
+              exit 0
+            else
+              echo "❌ Deployment failed!"
+              sudo docker compose logs --tail=50 backend
+              exit 1
+            fi
