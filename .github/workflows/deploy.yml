@@ -110,9 +110,10 @@ jobs:
             source ~/.bash_profile 2>/dev/null || true
 
             # If docker is not accessible, attempt to start it (useful if daemon stopped or VM restarted)
-            if ! docker info >/dev/null 2>&1; then
-               echo "Docker not accessible, attempting sudo systemctl start docker..."
+            if ! sudo docker info >/dev/null 2>&1; then
+               echo "Docker not accessible, attempting to start docker..."
                sudo systemctl start docker || true
+               sleep 2
             fi
 
             # Reconstruct the precise image tag
@@ -124,25 +125,25 @@ jobs:
             echo "DOCKER_IMAGE=$DOCKER_IMAGE" >> .env
 
             # Log in to registry on VM
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            echo "${{ secrets.GITHUB_TOKEN }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
             # Pull new image first (while old container still running)
-            docker compose pull backend
+            sudo docker compose pull backend
 
             # Rolling restart (minimal downtime)
-            docker compose up -d --no-deps backend
+            sudo docker compose up -d --no-deps backend
 
             # Run database migrations immediately
             echo "Running database migrations..."
             sleep 3
-            docker compose exec -T backend npx prisma migrate deploy || true
+            sudo docker compose exec -T backend npx prisma migrate deploy || true
 
             # Quick health check (30 seconds max)
             echo "Verifying deployment (30s max)..."
             for i in {1..10}; do
               if curl -f -s http://localhost:3001/api/health > /dev/null 2>&1; then
                 echo "✅ Deployment successful!"
-                docker compose ps
+                sudo docker compose ps
                 exit 0
               fi
               echo "Checking... ($i/10)"
@@ -150,12 +151,12 @@ jobs:
             done
 
             # Fallback: Check if container is at least running
-            if docker ps | grep -q "dqmp-backend.*Up"; then
+            if sudo docker ps | grep -q "dqmp-backend.*Up"; then
               echo "✅ Container running (health check may still be initializing)"
-              docker compose ps
+              sudo docker compose ps
               exit 0
             else
               echo "❌ Deployment failed!"
-              docker compose logs --tail=50 backend
+              sudo docker compose logs --tail=50 backend
               exit 1
             fi
