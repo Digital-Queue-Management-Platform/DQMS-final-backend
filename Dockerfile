@@ -1,25 +1,20 @@
 # Multi-stage build for optimized production image
 FROM node:20-alpine AS builder
 
-# Install build dependencies
-RUN apk add --no-cache python3 make g++
-
 WORKDIR /app
 
-# Copy package files
+# Copy package files first (better caching)
 COPY package*.json ./
-COPY tsconfig.json ./
 COPY prisma ./prisma/
 
-# Install dependencies
-RUN npm ci
+# Install dependencies (cached if package.json unchanged)
+RUN npm ci --only=production=false && \
+    npx prisma generate
 
 # Copy source code
+COPY tsconfig.json ./
 COPY src ./src
 COPY scripts ./scripts
-
-# Generate Prisma Client
-RUN npx prisma generate
 
 # Build TypeScript
 RUN npm run build
@@ -27,24 +22,22 @@ RUN npm run build
 # Production stage
 FROM node:20-alpine
 
-# Install production dependencies only
-RUN apk add --no-cache dumb-init
+# Install runtime dependencies
+RUN apk add --no-cache dumb-init curl
 
 WORKDIR /app
 
-# Copy package files
+# Copy package files and prisma schema
 COPY package*.json ./
 COPY prisma ./prisma/
 
-# Install ALL dependencies first (needed for prisma generate in postinstall)
-RUN npm ci && \
+# Install production dependencies only (cached layer)
+RUN npm ci --only=production && \
+    npx prisma generate && \
     npm cache clean --force
 
 # Copy built application from builder
 COPY --from=builder /app/dist ./dist
-
-# Remove dev dependencies after Prisma client is generated
-RUN npm prune --production
 
 # Create uploads directory
 RUN mkdir -p uploads && chown -R node:node uploads
@@ -52,8 +45,8 @@ RUN mkdir -p uploads && chown -R node:node uploads
 # Use non-root user
 USER node
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+# Faster health check with shorter intervals
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "require('http').get('http://localhost:' + (process.env.PORT || 3001) + '/api/health', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"
 
 # Expose port
