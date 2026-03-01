@@ -1,24 +1,6 @@
 version: "3.8"
 
 services:
-  # PostgreSQL Database
-  postgres:
-    image: postgres:15-alpine
-    container_name: dqmp-postgres
-    restart: unless-stopped
-    env_file: .env
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dqmp}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - dqmp-network
-
   # Backend API
   backend:
     # Uses the published GHCR image
@@ -26,26 +8,11 @@ services:
     container_name: dqmp-backend
     restart: unless-stopped
     ports:
-      - "${PORT:-3001}:3001"
+      - "3500:3001"
     env_file: .env
     environment:
-      # Inject DATABASE_URL derived from postgres credentials
-      DATABASE_URL: postgresql://${POSTGRES_USER:-dqmp}:${POSTGRES_PASSWORD:-dqmp_password}@postgres:5432/${POSTGRES_DB:-dqmp}?schema=public
-      PORT: ${PORT:-3001}
+      PORT: 3001
       NODE_ENV: production
-    depends_on:
-      postgres:
-        condition: service_healthy
     volumes:
       - ./uploads:/app/uploads
     # Uses the healthcheck defined inside the Dockerfile
-    networks:
-      - dqmp-network
-
-volumes:
-  postgres_data:
-    driver: local
-
-networks:
-  dqmp-network:
-    driver: bridge
