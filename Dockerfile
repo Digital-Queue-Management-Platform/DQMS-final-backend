@@ -22,8 +22,8 @@ RUN npm run build
 # Production stage
 FROM node:20-alpine
 
-# Install runtime dependencies
-RUN apk add --no-cache dumb-init curl
+# Install runtime dependencies including OpenSSL for Prisma
+RUN apk add --no-cache dumb-init curl openssl openssl-dev libc6-compat
 
 WORKDIR /app
 
