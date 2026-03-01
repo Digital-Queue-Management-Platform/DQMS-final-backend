@@ -103,9 +103,7 @@ jobs:
             mv docker-compose.prod.yml docker-compose.yml || true
 
             # Write the complete .env file from the GitHub secret
-            cat << 'EOF' > .env
-            ${APP_ENV}
-            EOF
+            printf '%s\n' "$APP_ENV" > .env
 
             # Ensure local environment variables (like DOCKER_HOST for podman/rootless docker) are loaded
             source ~/.bashrc 2>/dev/null || true
