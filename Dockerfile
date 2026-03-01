@@ -37,15 +37,15 @@ RUN npm ci --omit=dev --ignore-scripts && \
     npm install prisma@^5.22.0 && \
     npm cache clean --force
 
-# Copy generated Prisma Client and engines from builder stage
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+# Copy Prisma schema and generate client (this ensures engines are properly set up)
+RUN npx prisma generate
 
 # Copy built application from builder
 COPY --from=builder /app/dist ./dist
 
-# Create uploads directory
-RUN mkdir -p uploads && chown -R node:node uploads
+# Create uploads directory and set ownership for node user
+RUN mkdir -p uploads && \
+    chown -R node:node /app
 
 # Use non-root user
 USER node
