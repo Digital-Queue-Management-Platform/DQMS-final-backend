@@ -134,8 +134,8 @@ jobs:
             sudo docker compose stop backend || true
             sudo docker compose rm -f backend || true
 
-            # Kill any process using port 3500 (in case of stale process)
-            sudo fuser -k 3500/tcp || true
+            # Kill any process using port 3010 (in case of stale process)
+            sudo fuser -k 3010/tcp || true
             sleep 2
 
             # Start new container
@@ -149,7 +149,7 @@ jobs:
             # Quick health check (30 seconds max)
             echo "Verifying deployment (30s max)..."
             for i in {1..10}; do
-              if curl -f -s http://localhost:3500/api/health > /dev/null 2>&1; then
+              if curl -f -s http://localhost:3010/api/health > /dev/null 2>&1; then
                 echo "✅ Deployment successful!"
                 sudo docker compose ps
                 exit 0
