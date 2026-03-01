@@ -11,18 +11,21 @@ A robust RESTful API backend for the Digital Queue Management System, designed f
 ## Features
 
 ### Authentication & Authorization
+
 - **Multi-role authentication** (Admin, Manager, Officer)
 - **JWT token-based** security with role-based access control
 - **Secure password hashing** using bcrypt
 - **Session management** with token expiration
 
 ### User Management
+
 - **Customer registration** with mobile verification
 - **Officer management** with performance tracking
 - **Admin dashboard** with comprehensive system oversight
 - **Manager hierarchy** for regional control
 
 ### Queue Management
+
 - **Real-time token generation** with automatic numbering
 - **Dynamic queue status** tracking (waiting, in-service, completed)
 - **Service type categorization** with customizable services
@@ -30,17 +33,20 @@ A robust RESTful API backend for the Digital Queue Management System, designed f
 - **Officer assignment** and workload distribution
 
 ### Real-time Communication
+
 - **WebSocket integration** for live updates
 - **Event-driven architecture** for instant notifications
 - **Real-time dashboard** updates for all stakeholders
 
 ### Analytics & Reporting
+
 - **Performance metrics** for officers and branches
 - **Customer satisfaction** tracking with feedback system
 - **Wait time analysis** and optimization insights
 - **Service efficiency** reporting
 
 ### Notification System
+
 - **Email notifications** for important events
 - **Alert management** for negative feedback
 - **Automated reporting** to managers
@@ -48,6 +54,7 @@ A robust RESTful API backend for the Digital Queue Management System, designed f
 ## Architecture
 
 ### Database Schema
+
 ```
 ├── Customer (Customer registration & profiles)
 ├── Token (Queue tokens & service requests)
@@ -62,6 +69,7 @@ A robust RESTful API backend for the Digital Queue Management System, designed f
 ```
 
 ### API Structure
+
 ```
 src/
 ├── server.ts              # Main application entry point
@@ -83,11 +91,13 @@ src/
 ## Getting Started
 
 ### Prerequisites
+
 - **Node.js 18.x** or higher
 - **PostgreSQL 15.x** or higher
 - **npm** or **yarn** package manager
 
 ### 1. Clone & Install
+
 ```bash
 git clone https://github.com/Digital-Queue-Management-Platform/DQMS-final-backend.git
 cd DQMS-final-backend
@@ -95,7 +105,9 @@ npm install
 ```
 
 ### 2. Environment Configuration
+
 Create a `.env` file in the root directory:
+
 ```env
 # Database Connection
 DATABASE_URL="postgresql://username:password@localhost:5432/dqms"
@@ -121,6 +133,7 @@ LONG_WAIT_MINUTES=10
 ```
 
 ### 3. Database Setup
+
 ```bash
 # Generate Prisma client
 npm run prisma:generate
@@ -133,6 +146,7 @@ npm run seed:outlets
 ```
 
 ### 4. Start Development Server
+
 ```bash
 npm run dev
 ```
@@ -142,11 +156,14 @@ The API will be available at `http://localhost:3001`
 ## API Documentation
 
 ### Base URL
+
 - **Development**: `http://localhost:3001/api`
 - **Production**: `https://dpdlab1.slt.lk:8447/dqms-api/api`
 
 ### Authentication
+
 Most endpoints require authentication. Include the JWT token in the Authorization header:
+
 ```
 Authorization: Bearer <your-jwt-token>
 ```
@@ -154,6 +171,7 @@ Authorization: Bearer <your-jwt-token>
 ### Core Endpoints
 
 #### Customer Management
+
 ```http
 POST   /api/customer/register              # Register new customer & get token
 POST   /api/customer/register/:outletId    # Register for specific outlet
@@ -163,6 +181,7 @@ POST   /api/customer/sms/verify            # Verify SMS code
 ```
 
 #### Officer Operations
+
 ```http
 POST   /api/officer/login                  # Officer authentication
 POST   /api/officer/logout                 # Officer logout
@@ -179,6 +198,7 @@ GET    /api/officer/summary/:officerId     # Get daily summary
 ```
 
 #### Queue Management
+
 ```http
 GET    /api/queue/outlet/:outletId         # Get queue status for outlet
 GET    /api/queue/outlets                  # Get all active outlets
@@ -193,6 +213,7 @@ DELETE /api/queue/outlets/:id              # Deactivate outlet
 ```
 
 #### Admin Dashboard
+
 ```http
 GET    /api/admin/analytics                # Get system analytics
 GET    /api/admin/dashboard/realtime       # Real-time dashboard data
@@ -206,6 +227,7 @@ GET    /api/admin/regions                  # Get regions with statistics
 ```
 
 #### Manager Operations
+
 ```http
 POST   /api/manager/login                  # Manager authentication
 GET    /api/manager/branches               # Get managed branches
@@ -217,6 +239,7 @@ POST   /api/manager/qr-codes/generate      # Generate new QR codes
 ```
 
 #### Feedback System
+
 ```http
 POST   /api/feedback/submit                # Submit customer feedback
 GET    /api/feedback/outlet/:outletId      # Get outlet feedback
@@ -224,6 +247,7 @@ GET    /api/feedback/officer/:officerId    # Get officer feedback
 ```
 
 #### Document Management
+
 ```http
 POST   /api/document/upload                # Upload documents
 GET    /api/document/:relatedEntity        # Get entity documents
@@ -233,27 +257,28 @@ DELETE /api/document/:documentId           # Delete document
 ### WebSocket Events
 
 Connect to the WebSocket server for real-time updates:
+
 ```javascript
-const ws = new WebSocket('ws://localhost:3001');
+const ws = new WebSocket("ws://localhost:3001");
 
 // Listen for events
-ws.on('NEW_TOKEN', (data) => {
+ws.on("NEW_TOKEN", (data) => {
   // New customer registered
 });
 
-ws.on('TOKEN_CALLED', (data) => {
+ws.on("TOKEN_CALLED", (data) => {
   // Token called to counter
 });
 
-ws.on('TOKEN_COMPLETED', (data) => {
+ws.on("TOKEN_COMPLETED", (data) => {
   // Service completed
 });
 
-ws.on('OFFICER_STATUS_CHANGED', (data) => {
+ws.on("OFFICER_STATUS_CHANGED", (data) => {
   // Officer status updated
 });
 
-ws.on('NEGATIVE_FEEDBACK', (data) => {
+ws.on("NEGATIVE_FEEDBACK", (data) => {
   // Negative feedback received
 });
 ```
@@ -261,6 +286,7 @@ ws.on('NEGATIVE_FEEDBACK', (data) => {
 ## Development
 
 ### Available Scripts
+
 ```bash
 npm run dev              # Start development server with hot reload
 npm run build            # Build for production
@@ -274,6 +300,7 @@ npm run test:email       # Test email configuration
 ```
 
 ### Database Management
+
 ```bash
 # View database in browser
 npm run prisma:studio
@@ -289,6 +316,7 @@ npm run prisma:migrate:prod
 ```
 
 ### Utility Scripts
+
 ```bash
 # Test email functionality
 npm run test:email
@@ -306,63 +334,64 @@ tsx scripts/checkManagers.ts
 tsx scripts/debugState.ts
 ```
 
-## Production Deployment
+## Deployment
 
-### Environment Setup
-1. **Database**: Set up PostgreSQL database (recommended: Neon, Supabase, or Railway)
-2. **Environment Variables**: Configure production `.env` file
-3. **SMTP**: Set up email service (Gmail, SendGrid, etc.)
-4. **Domain**: Configure CORS for frontend domain
+This project uses a fully automated CI/CD pipeline via GitHub Actions to deploy to a Rocky Linux 9 virtual machine.
 
-### Deployment Platforms
+### CI/CD Pipeline Overview
 
-#### Render.com
-```bash
-# Build command
-npm run build:prod
+The `.github/workflows/deploy.yml` pipeline runs automatically on pushes to the `main` branch. It performs the following stages:
 
-# Start command
-npm start
-```
+1. **Lint & Verify**: Checks out the code and prepares the environment. (Tests are currently skipped as no testing framework is integrated).
+2. **Build & Containerize**: Builds an optimized production Docker image and pushes it to the GitHub Container Registry (GHCR) using both `latest` and a short commit SHA tag.
+3. **Deploy & Verify**: Connects to the Rocky Linux VM via SSH, transfers `docker-compose.prod.yml`, populates the `.env` file via GitHub Secrets, pulls the new image by its exact SHA, and performs a rolling restart. Finally, it uses Docker's built-in healthchecks to verify successful deployment.
 
-#### Railway
-```bash
-# Deploy with Railway CLI
-railway login
-railway link
-railway up
-```
+### Required Secrets
 
-#### Docker
-```dockerfile
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY . .
-RUN npm run build
-EXPOSE 3001
-CMD ["npm", "start"]
-```
+The pipeline requires the following secrets to be configured in GitHub at **Settings > Secrets and variables > Actions**:
 
-### Database Migration in Production
-```bash
-# Run migrations
-npm run prisma:migrate:prod
+- `VM_HOST`: The IP address or domain of the Rocky Linux 9 VM.
+- `VM_SSH_PORT`: Custom SSH port for the VM (Optional, defaults to 22).
+- `VM_SSH_KEY`: The private SSH key for the `deploy` user.
+- `APP_ENV`: The complete contents of your `.env` file containing all production configurations (Database, JWT, SMTP, Twilio, etc.).
 
-# Generate client
-npm run prisma:generate
-```
+### Initializing the VM (First Time Setup)
+
+To prepare a fresh Rocky Linux 9 VM for deployment:
+
+1. Locate the `scripts/setup-vm.sh` script.
+2. Transfer it to your VM and run it as `root` (or with sudo), passing your CI/CD system's SSH public key as an argument:
+   ```bash
+   sudo ./setup-vm.sh "ssh-ed25519 AAAAC3NzaC... ci-cd-key"
+   ```
+   This idempotent script installs Docker, creates the `deploy` user, opens firewall port 3001, and establishes the `/opt/app` directory.
+
+### Triggering a Deployment
+
+Deployments are triggered automatically whenever code is pushed or merged into the `main` branch. You can track progress in the **Actions** tab of the GitHub repository.
+
+### Rollback Strategy
+
+If a deployment fails or introduces a bug, you can efficiently roll back by reverting the commit on the `main` branch:
+
+1. Run `git revert <commit-hash>`.
+2. Push the reverted commit to `main`.
+3. The CI/CD pipeline will automatically build and deploy the reverted, stable state.
+
+Alternatively, you can manually SSH into the VM, edit the `DOCKER_IMAGE` variable in `/opt/app/.env` to a previously working SHA tag, and run `docker compose up -d`.
 
 ## Monitoring & Logging
 
 ### Health Check
+
 ```http
 GET /api/health
 ```
 
 ### Error Handling
+
 The API uses consistent error response format:
+
 ```json
 {
   "error": "Error message",
@@ -372,6 +401,7 @@ The API uses consistent error response format:
 ```
 
 ### Performance Monitoring
+
 - Database query optimization with Prisma
 - Connection pooling for PostgreSQL
 - Request logging and error tracking
@@ -380,6 +410,7 @@ The API uses consistent error response format:
 ## Testing
 
 ### Manual Testing Scripts
+
 ```bash
 # Test all endpoints
 tsx scripts/testSummaryEndpoints.ts
@@ -395,6 +426,7 @@ tsx scripts/createTestAlerts.ts
 ```
 
 ### Database Testing
+
 ```bash
 # Check system state
 tsx scripts/debugState.ts
@@ -422,6 +454,7 @@ tsx scripts/deleteAll.ts
 5. **Open** a Pull Request
 
 ### Development Guidelines
+
 - Follow **TypeScript** best practices
 - Use **Prisma** for all database operations
 - Implement **proper error handling**

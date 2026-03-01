@@ -1,0 +1,134 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - new-logins-back
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Stage 1: Lint & Verify Tests
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # No test suite exists, skipping with a warning
+      - name: Run Tests (Skipped)
+        run: |
+          echo "::warning title=Missing Tests::No automated testing framework (Jest, Mocha) was found in the repository. Skipping test phase."
+
+  # Stage 2: Build & Containerize
+  build-and-push:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/new-logins-back'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Extract metadata (tags, labels) for Docker
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # Stage 3: Deploy & Verify
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/new-logins-back'
+    environment: Preview
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Note: We specify standard docker compose name the VM expects
+      - name: Copy docker-compose to VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VM_HOST }}
+          port: ${{ secrets.VM_SSH_PORT}}
+          username: deploy
+          key: ${{ secrets.VM_SSH_KEY }}
+          source: "docker-compose.prod.yml"
+          target: "/opt/app"
+
+      - name: Deploy to Rocky Linux VM
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          APP_ENV: ${{ secrets.APP_ENV }}
+        with:
+          host: ${{ secrets.VM_HOST }}
+          port: ${{ secrets.VM_SSH_PORT || 22 }}
+          username: deploy
+          key: ${{ secrets.VM_SSH_KEY }}
+          envs: APP_ENV
+          script: |
+            cd /opt/app
+            mv docker-compose.prod.yml docker-compose.yml
+
+            # Write the complete .env file from the GitHub secret
+            cat << EOF > .env
+            ${APP_ENV}
+            EOF
+
+            # Reconstruct the precise image tag
+            export DOCKER_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${GITHUB_SHA::7}
+            echo "DOCKER_IMAGE=$DOCKER_IMAGE" >> .env
+
+            # Log in to registry on VM
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            # Rolling update using docker compose
+            docker compose pull backend
+            docker compose up -d --remove-orphans
+
+            # Verify deployment health
+            echo "Waiting for container to become healthy (up to 60s)..."
+            sleep 60
+
+            # Test healthcheck script (assumes container is named dqmp-backend)
+            if ! docker ps | grep dqmp-backend | grep -q "healthy"; then
+               echo "Container failed to reach a healthy state."
+               docker compose logs backend
+               exit 1
+            fi
+
+            echo "Deployment successful and healthy!"
