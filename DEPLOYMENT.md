@@ -1,70 +1,69 @@
-# CI/CD and Docker Deployment Guide
+# Automated CI/CD Deployment Guide
 
-This guide covers the complete CI/CD pipeline and Docker deployment setup for the DQMP Backend.
+This project uses **GitHub Actions CI/CD** for fully automated deployment. No manual Docker commands needed!
 
-## Table of Contents
+## 🚀 How Deployment Works
 
-1. [Docker Setup](#docker-setup)
-2. [Local Development with Docker](#local-development-with-docker)
-3. [CI/CD Pipeline](#cicd-pipeline)
-4. [Deployment Options](#deployment-options)
-5. [Environment Configuration](#environment-configuration)
-6. [Troubleshooting](#troubleshooting)
+Deployment is **fully automated** via GitHub Actions:
 
----
+1. **Push code to `main` or `new-logins-back` branch**
+2. GitHub Actions automatically:
+   - ✅ Builds Docker image with Alpine Linux + Prisma
+   - ✅ Pushes to GitHub Container Registry (GHCR)
+   - ✅ SSH into Rocky Linux VM
+   - ✅ Pulls latest image
+   - ✅ Stops old container & starts new one
+   - ✅ Runs database migrations
+   - ✅ Performs health checks
+   - ✅ Rolls back if health check fails
 
-## Docker Setup
+**Total deployment time:** ~6-7 minutes
 
-### Prerequisites
+## 📋 Prerequisites
 
-- Docker Engine 20.10+ and Docker Compose 2.0+
-- Git
-- GitHub account (for CI/CD)
+### 1. GitHub Secrets Configuration
 
-### Files Overview
+Configure these in: **Repository Settings → Secrets and variables → Actions**
 
-- `Dockerfile` - Multi-stage production-ready Docker image
-- `.dockerignore` - Files excluded from Docker build context
-- `docker-compose.yml` - Local development orchestration
-- `.github/workflows/backend-cicd.yml` - Main CI/CD pipeline
-- `.github/workflows/deploy-render.yml` - Render deployment workflow
+#### VM Connection Secrets
+```
+VM_HOST          = 192.168.x.x (your Rocky Linux VM IP)
+VM_SSH_PORT      = 22 (or your custom SSH port)
+VM_USERNAME      = your-vm-username
+VM_SSH_KEY       = (paste your private SSH key)
+```
 
----
+#### Application Environment Secret
+```
+APP_ENV = (paste complete .env file content below)
+```
 
-## Local Development with Docker
-
-### 1. Environment Setup
-
-Create a `.env` file in the `backend` directory:
-
+**APP_ENV Content:**
 ```env
-# Database
-DATABASE_URL=postgresql://dqmp:dqmp_password@postgres:5432/dqmp?schema=public
-POSTGRES_USER=dqmp
-POSTGRES_PASSWORD=dqmp_password
-POSTGRES_DB=dqmp
+# Database (External - Neon/Hosted PostgreSQL)
+DATABASE_URL=postgresql://user:password@host.region.neon.tech:5432/database?sslmode=require
 
 # Application
 NODE_ENV=production
 PORT=3001
-JWT_SECRET=your-super-secret-jwt-key-change-this
+JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
 
-# Frontend CORS
-FRONTEND_ORIGIN=http://localhost:3000,http://localhost:5173
+# Frontend Origin (comma-separated for CORS)
+FRONTEND_ORIGIN=https://yourdomain.com,http://localhost:3000
 
-# Email Configuration
+# Email Configuration (Gmail example)
 EMAIL_HOST=smtp.gmail.com
 EMAIL_PORT=587
 EMAIL_USER=your-email@gmail.com
-EMAIL_PASSWORD=your-app-password
-EMAIL_FROM=noreply@dqmp.com
+EMAIL_PASSWORD=your-gmail-app-password
+EMAIL_FROM=DQMP Notifications <noreply@yourdomain.com>
 
-# Twilio (Optional)
-TWILIO_ACCOUNT_SID=your-twilio-sid
-TWILIO_AUTH_TOKEN=your-twilio-token
-TWILIO_PHONE_NUMBER=your-twilio-phone
+# Twilio SMS (Optional)
+TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxx
+TWILIO_AUTH_TOKEN=your-auth-token
+TWILIO_PHONE_NUMBER=+1234567890
 
-# Performance
+# Performance & Logging
 LOG_LEVEL=info
 PERF_LOG=true
 PERF_LOG_THRESHOLD_MS=200
@@ -72,447 +71,277 @@ COMPRESS_THRESHOLD=1024
 LONG_WAIT_MINUTES=10
 ```
 
-### 2. Build and Run
+### 2. Rocky Linux VM Setup
+
+Your VM must have:
+- ✅ Docker & Docker Compose installed
+- ✅ SSH access enabled
+- ✅ Port 3500 open (for backend API)
+- ✅ `/opt/app` directory created with proper permissions
+- ✅ User has sudo privileges for Docker commands
+
+**One-time VM setup:**
+```bash
+# Create deployment directory
+sudo mkdir -p /opt/app
+sudo chown $USER:$USER /opt/app
+
+# Ensure Docker is running
+sudo systemctl enable docker
+sudo systemctl start docker
+```
+
+## 🔄 Deployment Workflow
+
+### Automatic Deployment (Recommended)
 
 ```bash
-# Navigate to backend directory
-cd backend
+# 1. Make your changes
+git add .
+git commit -m "feat: your feature description"
 
-# Build and start all services
-docker compose up -d
+# 2. Push to trigger deployment
+git push origin new-logins-back
+
+# 3. Monitor GitHub Actions
+# Visit: https://github.com/Digital-Queue-Management-Platform/DQMS-final-backend/actions
+```
+
+### Manual Trigger (From GitHub UI)
+
+1. Go to **Actions** tab
+2. Select **CI/CD Pipeline** workflow
+3. Click **Run workflow** button
+4. Choose branch and click **Run workflow**
+
+## 📊 Monitoring Deployment
+
+### View Logs in GitHub Actions
+
+1. Go to [Actions](https://github.com/Digital-Queue-Management-Platform/DQMS-final-backend/actions)
+2. Click on the latest workflow run
+3. View **build-and-push** and **deploy** job logs
+
+### SSH into VM to Check Status
+
+```bash
+# SSH into your VM
+ssh -p 22 username@your-vm-ip
+
+# Check container status
+cd /opt/app
+sudo docker compose ps
 
 # View logs
-docker compose logs -f backend
+sudo docker compose logs -f backend
 
-# Stop services
-docker compose down
-
-# Rebuild after code changes
-docker compose up -d --build
+# Check health endpoint
+curl http://localhost:3001/api/health
 ```
 
-### 3. Database Management
+## 🏗️ Architecture
+
+### CI/CD Pipeline Stages
+
+```
+┌─────────────────────────────────────────────────────┐
+│  GitHub Push (main/new-logins-back)                 │
+└────────────────┬────────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────────────────┐
+│  BUILD-AND-PUSH JOB                                 │
+│  1. Checkout code                                   │
+│  2. Build Docker image (Alpine + Prisma)            │
+│  3. Push to ghcr.io with tags:                      │
+│     - latest                                        │
+│     - sha-7chars                                    │
+└────────────────┬────────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────────────────┐
+│  DEPLOY JOB                                         │
+│  1. Copy docker-compose.prod.yml to VM              │
+│  2. SSH into VM                                     │
+│  3. Create .env from secrets                        │
+│  4. Pull new image                                  │
+│  5. Stop & remove old container                     │
+│  6. Kill stale processes on port 3500               │
+│  7. Start new container                             │
+│  8. Run Prisma migrations                           │
+│  9. Health check (30s timeout)                      │
+│  10. Success or Rollback                            │
+└─────────────────────────────────────────────────────┘
+```
+
+### Production Stack
+
+```
+┌─────────────────────────────────────────────┐
+│  Rocky Linux 9 VM (192.168.x.x)             │
+│  ┌─────────────────────────────────────┐   │
+│  │  Docker Container (dqmp-backend)    │   │
+│  │  ├─ Node.js 20 (Alpine Linux)       │   │
+│  │  ├─ Prisma ORM                      │   │
+│  │  ├─ Express API                     │   │
+│  │  └─ Port 3001 (internal)            │   │
+│  │      → Port 3500 (external)         │   │
+│  └─────────────────────────────────────┘   │
+└─────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────┐
+│  External PostgreSQL Database               │
+│  (Neon / Hosted)                            │
+└─────────────────────────────────────────────┘
+```
+
+## 🐛 Troubleshooting
+
+### Deployment Failed
+
+**Check GitHub Actions logs:**
+```
+1. Go to Actions tab
+2. Click failed workflow run
+3. Expand "Deploy to Rocky Linux VM" step
+4. Look for error messages
+```
+
+**Common Issues:**
+
+#### Port 3500 Already in Use
+```bash
+# SSH into VM
+sudo fuser -k 3500/tcp
+sudo docker compose restart backend
+```
+
+#### Database Connection Failed
+```bash
+# Check DATABASE_URL in APP_ENV secret
+# Ensure Neon database is accessible
+# Verify firewall allows outbound connections
+```
+
+#### Prisma Migration Failed
+```bash
+# SSH into VM
+cd /opt/app
+sudo docker compose exec backend npx prisma migrate deploy
+sudo docker compose logs backend
+```
+
+#### Container Keeps Restarting
+```bash
+# View container logs
+sudo docker compose logs -f backend
+
+# Check if migrations ran
+sudo docker compose exec backend npx prisma migrate status
+
+# Restart container
+sudo docker compose restart backend
+```
+
+### Health Check Never Passes
 
 ```bash
-# Run migrations
-docker compose exec backend npx prisma migrate deploy
+# SSH into VM
+cd /opt/app
 
-# Open Prisma Studio
-docker compose exec backend npx prisma studio
+# Check if container is running
+sudo docker compose ps
 
-# Seed database (if you have seed scripts)
-docker compose exec backend npm run seed:outlets
-```
+# Check logs for errors
+sudo docker compose logs --tail=100 backend
 
-### 4. Access Services
-
-- Backend API: http://localhost:3001
-- Health Check: http://localhost:3001/api/health
-- Metrics: http://localhost:3001/api/metrics
-- PostgreSQL: localhost:5432
-
----
-
-## CI/CD Pipeline
-
-### Workflow Triggers
-
-The CI/CD pipeline automatically runs when:
-
-1. **Push to `main` branch** → Build, Test, Deploy to Production
-2. **Push to `develop` branch** → Build, Test, Deploy to Staging
-3. **Pull Request** → Build and Test only
-4. **Manual Trigger** → Via GitHub Actions UI
-
-### Pipeline Stages
-
-#### Stage 1: Build and Test
-- Checkout code
-- Setup Node.js 20
-- Install dependencies
-- Generate Prisma client
-- Build TypeScript
-- Validate build output
-
-#### Stage 2: Build Docker Image
-- Build multi-stage Docker image
-- Push to GitHub Container Registry (ghcr.io)
-- Tag with branch name, SHA, and `latest`
-- Cache layers for faster builds
-
-#### Stage 3: Deploy
-- **Production (main branch)**:
-  - Deploy via SSH to production server
-  - Pull latest Docker image
-  - Run database migrations
-  - Restart containers
-  - Verify health check
-
-- **Staging (develop branch)**:
-  - Deploy to staging environment
-  - Similar steps as production
-
-### Required GitHub Secrets
-
-Navigate to **Settings → Secrets and variables → Actions** and add:
-
-#### For SSH Deployment
-
-```
-DEPLOY_HOST           - Production server IP/hostname
-DEPLOY_USER           - SSH username
-DEPLOY_SSH_KEY        - SSH private key
-DEPLOY_PORT           - SSH port (default: 22)
-DEPLOY_PATH           - Deployment directory (default: /opt/dqmp/backend)
-PRODUCTION_URL        - Production URL for health checks
-
-STAGING_HOST          - Staging server IP/hostname
-STAGING_USER          - SSH username
-STAGING_SSH_KEY       - SSH private key
-STAGING_PORT          - SSH port (default: 22)
-STAGING_DEPLOY_PATH   - Staging deployment directory
-STAGING_URL           - Staging URL for health checks
-```
-
-#### For Render Deployment
-
-```
-RENDER_DEPLOY_HOOK_URL - Render deploy hook URL
-RENDER_APP_URL         - Render app URL
-```
-
----
-
-## Deployment Options
-
-### Option 1: Self-Hosted Server (VPS/Cloud VM)
-
-#### Initial Server Setup
-
-```bash
-# 1. SSH into your server
-ssh user@your-server-ip
-
-# 2. Install Docker and Docker Compose
-curl -fsSL https://get.docker.com -o get-docker.sh
-sudo sh get-docker.sh
-sudo usermod -aG docker $USER
-
-# 3. Install Docker Compose
-sudo apt update
-sudo apt install docker-compose-plugin
-
-# 4. Create deployment directory
-sudo mkdir -p /opt/dqmp/backend
-sudo chown $USER:$USER /opt/dqmp/backend
-cd /opt/dqmp/backend
-
-# 5. Create .env file with production values
-nano .env
-
-# 6. Create docker-compose.yml (copy from repository)
-nano docker-compose.yml
-
-# 7. Login to GitHub Container Registry
-echo $GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
-
-# 8. Pull and start
-docker compose pull
-docker compose up -d
-
-# 9. Check status
-docker compose ps
-docker compose logs -f backend
-```
-
-#### Setup GitHub Deploy Key
-
-```bash
-# On your local machine
-ssh-keygen -t ed25519 -C "github-deploy-key" -f ~/.ssh/github_deploy_key
-
-# Add public key to server's authorized_keys
-ssh-copy-id -i ~/.ssh/github_deploy_key.pub user@your-server-ip
-
-# Add private key to GitHub Secrets as DEPLOY_SSH_KEY
-cat ~/.ssh/github_deploy_key
-```
-
-### Option 2: Render.com
-
-1. **Connect Repository**
-   - Go to Render Dashboard
-   - New → Web Service
-   - Connect your GitHub repository
-   - Select `backend` as root directory
-
-2. **Configure Service**
-   ```yaml
-   Name: dqmp-backend
-   Environment: Docker
-   Branch: main
-   Dockerfile Path: ./Dockerfile
-   ```
-
-3. **Add Environment Variables**
-   - Copy from `.env.example`
-   - Set `DATABASE_URL` from Render PostgreSQL
-
-4. **Get Deploy Hook**
-   - Settings → Deploy Hook
-   - Copy URL to `RENDER_DEPLOY_HOOK_URL` GitHub secret
-
-5. **Enable Auto-Deploy**
-   - Settings → Auto-Deploy: Yes
-
-### Option 3: Railway.app
-
-```bash
-# Install Railway CLI
-npm i -g @railway/cli
-
-# Login
-railway login
-
-# Initialize project
-cd backend
-railway init
-
-# Link to PostgreSQL
-railway add --database postgresql
-
-# Set environment variables
-railway variables set NODE_ENV=production
-railway variables set JWT_SECRET=your-secret
-
-# Deploy
-railway up
-```
-
-### Option 4: DigitalOcean App Platform
-
-1. Create new app from GitHub
-2. Select repository and `backend` directory
-3. Choose Dockerfile build
-4. Add PostgreSQL database
-5. Configure environment variables
-6. Deploy
-
-### Option 5: AWS ECS/Fargate
-
-```bash
-# Install AWS CLI and ECS CLI
-# Configure AWS credentials
-# Create ECR repository
-aws ecr create-repository --repository-name dqmp-backend
-
-# Tag and push image
-docker tag dqmp-backend:latest <account-id>.dkr.ecr.<region>.amazonaws.com/dqmp-backend:latest
-docker push <account-id>.dkr.ecr.<region>.amazonaws.com/dqmp-backend:latest
-
-# Use ECS task definitions and services
-```
-
----
-
-## Environment Configuration
-
-### Production Environment Variables
-
-```env
-# Required
-DATABASE_URL=postgresql://user:password@host:5432/database
-JWT_SECRET=<strong-random-secret-minimum-32-chars>
-FRONTEND_ORIGIN=https://your-frontend-domain.com
-
-# Email (Required for notifications)
-EMAIL_HOST=smtp.yourprovider.com
-EMAIL_PORT=587
-EMAIL_USER=your-email@domain.com
-EMAIL_PASSWORD=your-app-password
-EMAIL_FROM=noreply@domain.com
-
-# Optional
-NODE_ENV=production
-PORT=3001
-LOG_LEVEL=warn
-PERF_LOG=true
-PERF_LOG_THRESHOLD_MS=500
-LONG_WAIT_MINUTES=15
-
-# Twilio (Optional)
-TWILIO_ACCOUNT_SID=
-TWILIO_AUTH_TOKEN=
-TWILIO_PHONE_NUMBER=
-```
-
-### Security Best Practices
-
-1. **Never commit `.env` files** - Use `.env.example` as template
-2. **Use strong JWT secrets** - Minimum 32 random characters
-3. **Rotate secrets regularly** - Every 90 days
-4. **Use managed databases** - RDS, Neon, Supabase, etc.
-5. **Enable SSL/TLS** - For database and API connections
-6. **Limit CORS origins** - Only allow trusted domains
-7. **Use secret management** - AWS Secrets Manager, HashiCorp Vault
-
----
-
-## Troubleshooting
-
-### Build Failures
-
-```bash
-# Check build logs
-docker compose logs backend
-
-# Rebuild without cache
-docker compose build --no-cache backend
-
-# Check Prisma generation
-docker compose exec backend npx prisma generate
-```
-
-### Database Connection Issues
-
-```bash
-# Check PostgreSQL status
-docker compose ps postgres
-
-# Test connection
-docker compose exec postgres psql -U dqmp -d dqmp
-
-# View database logs
-docker compose logs postgres
-
-# Reset database (⚠️ destroys data)
-docker compose down -v
-docker compose up -d
-```
-
-### Migration Failures
-
-```bash
-# Check migration status
-docker compose exec backend npx prisma migrate status
-
-# Force reset (development only)
-docker compose exec backend npx prisma migrate reset
-
-# Deploy migrations
-docker compose exec backend npx prisma migrate deploy
-```
-
-### Container Issues
-
-```bash
-# Restart services
-docker compose restart backend
-
-# View resource usage
-docker stats
-
-# Check container health
-docker inspect dqmp-backend | grep -A 10 Health
-
-# Access container shell
-docker compose exec backend sh
-```
-
-### GitHub Actions Failures
-
-1. **Check workflow logs** - Actions tab → Failed workflow
-2. **Verify secrets** - Settings → Secrets → Check all required secrets
-3. **SSH connection issues** - Test SSH key authentication manually
-4. **Image pull failures** - Verify GitHub Container Registry permissions
-
-### Performance Issues
-
-```bash
-# Check metrics endpoint
-curl http://localhost:3001/api/metrics
-
-# Monitor container resources
-docker stats dqmp-backend
-
-# Analyze logs
-docker compose logs backend | grep "slow_request"
-
-# Database query performance
-docker compose exec backend npx prisma studio
-```
-
----
-
-## Monitoring and Maintenance
-
-### Health Checks
-
-```bash
-# Local health check
+# Test health endpoint manually
 curl http://localhost:3001/api/health
 
-# Production health check
-curl https://your-domain.com/api/health
-
-# Expected response
-{"status":"ok","timestamp":"2026-02-28T12:00:00.000Z"}
+# Restart if needed
+sudo docker compose down
+sudo docker compose up -d
 ```
 
-### Log Management
+## 📦 Container Management
 
+### View Running Containers
+```bash
+sudo docker compose ps
+```
+
+### View Logs
 ```bash
 # Follow logs
-docker compose logs -f backend
+sudo docker compose logs -f backend
 
 # Last 100 lines
-docker compose logs --tail=100 backend
-
-# Save logs to file
-docker compose logs backend > backend-logs.txt
+sudo docker compose logs --tail=100 backend
 ```
 
-### Backup Database
-
+### Restart Container
 ```bash
-# Create backup
-docker compose exec postgres pg_dump -U dqmp dqmp > backup-$(date +%Y%m%d).sql
-
-# Restore backup
-docker compose exec -T postgres psql -U dqmp dqmp < backup-20260228.sql
+sudo docker compose restart backend
 ```
 
-### Update Deployment
-
+### Stop & Remove
 ```bash
-# Pull latest changes
-cd /opt/dqmp/backend
-git pull origin main
-
-# Pull latest image
-docker compose pull backend
-
-# Restart with zero downtime
-docker compose up -d --no-deps --build backend
+sudo docker compose down
 ```
 
----
+### Access Container Shell
+```bash
+sudo docker compose exec backend sh
+```
 
-## Additional Resources
+### Run Migrations Manually
+```bash
+sudo docker compose exec backend npx prisma migrate deploy
+```
 
-- [Docker Documentation](https://docs.docker.com/)
+## 🔐 Security Notes
+
+- ✅ Container runs as non-root `node` user
+- ✅ Secrets stored in GitHub Actions (encrypted)
+- ✅ SSH key-based authentication only
+- ✅ Database connections use SSL
+- ✅ No credentials in code or logs
+
+## 📝 Deployment Checklist
+
+Before deploying to production:
+
+- [ ] Update `APP_ENV` secret with production values
+- [ ] Set strong `JWT_SECRET`
+- [ ] Configure production `DATABASE_URL`
+- [ ] Set correct `FRONTEND_ORIGIN`
+- [ ] Configure email SMTP settings
+- [ ] Test database connection
+- [ ] Verify VM SSH access
+- [ ] Check port 3500 is open
+- [ ] Review GitHub Actions logs
+- [ ] Test health endpoint after deployment
+
+## 🆘 Support
+
+If deployment fails after multiple attempts:
+
+1. Check GitHub Actions logs
+2. SSH into VM and check Docker logs
+3. Verify all GitHub secrets are correct
+4. Ensure database is accessible
+5. Check VM disk space: `df -h`
+6. Check Docker status: `sudo systemctl status docker`
+
+## 📚 Additional Resources
+
 - [GitHub Actions Documentation](https://docs.github.com/en/actions)
-- [Prisma Documentation](https://www.prisma.io/docs)
-- [PostgreSQL Documentation](https://www.postgresql.org/docs/)
+- [Docker Compose Documentation](https://docs.docker.com/compose/)
+- [Prisma Deployment Guide](https://www.prisma.io/docs/guides/deployment)
+- [Alpine Linux Packages](https://pkgs.alpinelinux.org/)
 
 ---
 
-## Support
-
-For issues or questions:
-1. Check this documentation
-2. Review GitHub Actions logs
-3. Check Docker container logs
-4. Contact DevOps team
-
-**Last Updated:** February 28, 2026
+**Last Updated:** March 1, 2026  
+**Deployment Method:** Automated CI/CD via GitHub Actions  
+**Manual Deployment:** ❌ Not supported (use GitHub Actions only)
