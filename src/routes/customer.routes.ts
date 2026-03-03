@@ -339,6 +339,9 @@ router.post("/register", async (req, res) => {
         },
       })
 
+      // Use an exclusive lock on the Outlet record to serialize concurrent token generation
+      await tx.$executeRaw`SELECT id FROM "Outlet" WHERE id = ${outletId} FOR UPDATE`
+
       // Get next token number for outlet within the current daily window (resets at 12:00 PM)
       const lastReset = getLastDailyReset()
       const lastToken = await tx.token.findFirst({

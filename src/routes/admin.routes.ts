@@ -246,12 +246,7 @@ router.get("/analytics", async (req, res) => {
       const firstServiceType = serviceTypeArray.length > 0 ? serviceTypeArray[0] : "other";
 
       return {
-        name: firstServiceType === "bill_payment" ? "Bill Payments" :
-          firstServiceType === "technical_support" ? "Technical Support" :
-            firstServiceType === "account_services" ? "Account Services" :
-              firstServiceType === "new_connection" ? "New Connections" :
-                firstServiceType === "device_sim_issues" ? "Device/SIM Issues" :
-                  "Other Services",
+        name: firstServiceType,
         count: service._count
       };
     })
