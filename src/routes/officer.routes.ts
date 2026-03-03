@@ -1428,7 +1428,7 @@ router.get("/service-case/*", async (req, res) => {
     }
 
     const officerId = payload.officerId
-    const refNumber = (req.params as any)[0]
+    const refNumber = decodeURIComponent((req.params as any)[0])
     if (!refNumber) return res.status(400).json({ error: 'refNumber is required' })
 
     const sc: any = await (prisma as any).serviceCase.findUnique({
