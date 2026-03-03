@@ -4,9 +4,9 @@ import { prisma } from "../server"
 const router = Router()
 
 // Public: Get case by reference number (for customers)
-router.get("/:refNumber", async (req, res) => {
+router.get("/*", async (req, res) => {
   try {
-    const { refNumber } = req.params
+    const refNumber = (req.params as any)[0]
     const sc: any = await (prisma as any).serviceCase.findUnique({
       where: { refNumber },
       include: {

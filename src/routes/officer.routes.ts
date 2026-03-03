@@ -1408,7 +1408,7 @@ router.post("/service-case/complete", async (req, res) => {
 })
 
 // Officer-auth: Get a service case by refNumber only if owned by this officer
-router.get("/service-case/:refNumber", async (req, res) => {
+router.get("/service-case/*", async (req, res) => {
   try {
     // Authenticate officer via JWT (cookie or Authorization header)
     let token = req.cookies?.dq_jwt
@@ -1428,7 +1428,7 @@ router.get("/service-case/:refNumber", async (req, res) => {
     }
 
     const officerId = payload.officerId
-    const { refNumber } = req.params as { refNumber: string }
+    const refNumber = (req.params as any)[0]
     if (!refNumber) return res.status(400).json({ error: 'refNumber is required' })
 
     const sc: any = await (prisma as any).serviceCase.findUnique({
