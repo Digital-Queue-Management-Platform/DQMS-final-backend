@@ -6,7 +6,7 @@ const router = Router()
 // Public: Get case by reference number (for customers)
 router.get("/*", async (req, res) => {
   try {
-    const refNumber = (req.params as any)[0]
+    const refNumber = decodeURIComponent((req.params as any)[0])
     const sc: any = await (prisma as any).serviceCase.findUnique({
       where: { refNumber },
       include: {
