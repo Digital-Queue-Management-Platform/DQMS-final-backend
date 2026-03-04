@@ -143,12 +143,42 @@ class SLTSmsService {
   /**
    * Send OTP SMS
    */
-  async sendOTP(mobileNumber: string, otpCode: string, language: 'en' | 'si' | 'ta' = 'en'): Promise<SMSResponse> {
-    const otpMessages = {
-      en: `Your DQMS verification code is ${otpCode}. It expires in 5 minutes.`,
-      si: `ඔබගේ DQMS සත්‍යාපන කේතය ${otpCode}. මිනිත්තු 5කින් කල් ඉකුත් වේ.`,
-      ta: `உங்கள் DQMS சரிபார்ப்பு குறியீடு ${otpCode}. இது 5 நிமிடங்களில் காலாவதியாகிறது.`
+  async sendOTP(
+    mobileNumber: string, 
+    otpCode: string, 
+    userType?: string,
+    userName?: string,
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SMSResponse> {
+    // Map user types to readable role names
+    const roleNames: Record<string, { en: string; si: string; ta: string }> = {
+      officer: { en: 'Officer', si: 'නිලධාරී', ta: 'அதிகாரி' },
+      teleshop_manager: { en: 'Teleshop Manager', si: 'ටෙලිෂොප් කළමනාකරු', ta: 'டெலிஷாப் மேலாளர்' },
+      rtom: { en: 'Regional Manager', si: 'කලාප කළමනාකරු', ta: 'பிராந்திய மேலாளர்' },
+      gm: { en: 'General Manager', si: 'සාමාන්‍ය කළමනාකරු', ta: 'பொது மேலாளர்' },
+      dgm: { en: 'Deputy General Manager', si: 'නියෝජ්‍ය සාමාන්‍ය කළමනාකරු', ta: 'துணை பொது மேலாளர்' }
     }
+
+    const role = userType && roleNames[userType] ? roleNames[userType] : null
+    
+    // Extract first name only for personalization
+    const firstName = userName ? userName.split(' ')[0] : null
+    const greeting = firstName ? `Dear ${firstName},` : ''
+
+    // Keep messages concise and professional
+    const otpMessages = {
+      en: role 
+        ? `SLT DQMS: ${greeting} Your ${role.en} login code is ${otpCode}. Valid for 5 minutes. Do not share this code. -SLT Mobitel`
+        : `SLT DQMS: ${greeting} Your login code is ${otpCode}. Valid for 5 minutes. Do not share this code. -SLT Mobitel`,
+      si: role
+        ? `SLT DQMS: ${firstName ? `${firstName},` : ''} ඔබගේ ${role.si} කේතය ${otpCode}. මිනිත්තු 5. කේතය බෙදා නොගන්න. -SLT Mobitel`
+        : `SLT DQMS: ${firstName ? `${firstName},` : ''} ඔබගේ කේතය ${otpCode}. මිනිත්තු 5. -SLT Mobitel`,
+      ta: role
+        ? `SLT DQMS: ${firstName ? `${firstName},` : ''} உங்கள் ${role.ta} குறியீடு ${otpCode}. 5 நிமிடம். பகிர வேண்டாம். -SLT Mobitel`
+        : `SLT DQMS: ${firstName ? `${firstName},` : ''} உங்கள் குறியீடு ${otpCode}. 5 நிமிடம். -SLT Mobitel`
+    }
+
+    console.log(`[SLT SMS DEBUG] Sending OTP to ${mobileNumber}, userName: "${userName}", firstName: "${firstName}", userType: "${userType}", message: "${otpMessages[language]}" (${otpMessages[language].length} chars)`)
 
     return this.sendSMS({
       to: mobileNumber,

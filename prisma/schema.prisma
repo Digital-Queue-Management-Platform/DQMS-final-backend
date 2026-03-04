@@ -365,3 +365,18 @@ model MercantileHoliday {
 
   @@index([date])
 }
+
+// OTP: One-Time Password for user authentication
+model OTP {
+  id              String   @id @default(uuid())
+  mobileNumber    String   // Mobile number to which OTP was sent
+  otpCode         String   // 4-digit OTP code
+  userType        String   // "officer" | "teleshop_manager" | "rtom" | "gm" | "dgm"
+  expiresAt       DateTime // OTP expiration time (5 minutes from creation)
+  verified        Boolean  @default(false) // Whether OTP has been verified
+  attempts        Int      @default(0) // Number of verification attempts
+  createdAt       DateTime @default(now())
+
+  @@index([mobileNumber, userType, verified])
+  @@index([expiresAt])
+}

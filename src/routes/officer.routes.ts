@@ -2,6 +2,7 @@ import { Router } from "express"
 import { prisma, broadcast } from "../server"
 import { getLastDailyReset } from "../utils/resetWindow"
 import * as jwt from "jsonwebtoken"
+import otpService from "../services/otpService"
 
 const router = Router()
 
@@ -9,11 +10,60 @@ const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 // No expiration for production system - officers need continuous access during shifts
 const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
 
-// Officer login with OTP (simplified - just mobile number for now)
-router.post("/login", async (req, res) => {
+// Request OTP for officer login
+router.post("/request-otp", async (req, res) => {
   try {
     const { mobileNumber } = req.body
 
+    if (!mobileNumber) {
+      return res.status(400).json({ error: "Mobile number is required" })
+    }
+
+    // Check if officer exists
+    const officer = await prisma.officer.findUnique({
+      where: { mobileNumber },
+      select: { id: true, name: true }
+    })
+
+    if (!officer) {
+      return res.status(404).json({ error: "Officer not found with this mobile number" })
+    }
+
+    // Generate and send OTP
+    const result = await otpService.generateOTP(mobileNumber, 'officer', officer.name)
+
+    if (!result.success) {
+      return res.status(500).json({ error: result.message })
+    }
+
+    res.json({ 
+      success: true, 
+      message: result.message,
+      officerName: officer.name
+    })
+  } catch (error) {
+    console.error("Request OTP error:", error)
+    res.status(500).json({ error: "Failed to send OTP" })
+  }
+})
+
+// Officer login with OTP verification
+router.post("/login", async (req, res) => {
+  try {
+    const { mobileNumber, otpCode } = req.body
+
+    if (!mobileNumber || !otpCode) {
+      return res.status(400).json({ error: "Mobile number and OTP code are required" })
+    }
+
+    // Verify OTP
+    const verifyResult = await otpService.verifyOTP(mobileNumber, otpCode, 'officer')
+
+    if (!verifyResult.success) {
+      return res.status(401).json({ error: verifyResult.message })
+    }
+
+    // Get officer details
     const officer = await prisma.officer.findUnique({
       where: { mobileNumber },
       include: { outlet: true },
