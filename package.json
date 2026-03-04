@@ -15,6 +15,8 @@
     "seed:outlets": "tsx ./scripts/seedOutlets.ts",
     "test:email": "tsx ./scripts/testEmail.ts",
     "test:slt-billing": "tsx ./scripts/testSltBilling.ts",
+    "test:slt-sms": "tsx ./scripts/testSltSms.ts",
+    "test:otp-fallback": "tsx ./scripts/testOtpFallback.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

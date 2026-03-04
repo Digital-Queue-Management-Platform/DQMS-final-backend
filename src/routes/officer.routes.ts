@@ -2,6 +2,8 @@ import { Router } from "express"
 import { prisma, broadcast } from "../server"
 import { getLastDailyReset } from "../utils/resetWindow"
 import * as jwt from "jsonwebtoken"
+import otpService from "../services/otpService"
+import sltSmsService from "../services/sltSmsService"
 
 const router = Router()
 
@@ -9,11 +11,60 @@ const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 // No expiration for production system - officers need continuous access during shifts
 const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
 
-// Officer login with OTP (simplified - just mobile number for now)
-router.post("/login", async (req, res) => {
+// Request OTP for officer login
+router.post("/request-otp", async (req, res) => {
   try {
     const { mobileNumber } = req.body
 
+    if (!mobileNumber) {
+      return res.status(400).json({ error: "Mobile number is required" })
+    }
+
+    // Check if officer exists
+    const officer = await prisma.officer.findUnique({
+      where: { mobileNumber },
+      select: { id: true, name: true }
+    })
+
+    if (!officer) {
+      return res.status(404).json({ error: "Officer not found with this mobile number" })
+    }
+
+    // Generate and send OTP
+    const result = await otpService.generateOTP(mobileNumber, 'officer', officer.name)
+
+    if (!result.success) {
+      return res.status(500).json({ error: result.message })
+    }
+
+    res.json({ 
+      success: true, 
+      message: result.message,
+      officerName: officer.name
+    })
+  } catch (error) {
+    console.error("Request OTP error:", error)
+    res.status(500).json({ error: "Failed to send OTP" })
+  }
+})
+
+// Officer login with OTP verification
+router.post("/login", async (req, res) => {
+  try {
+    const { mobileNumber, otpCode } = req.body
+
+    if (!mobileNumber || !otpCode) {
+      return res.status(400).json({ error: "Mobile number and OTP code are required" })
+    }
+
+    // Verify OTP
+    const verifyResult = await otpService.verifyOTP(mobileNumber, otpCode, 'officer')
+
+    if (!verifyResult.success) {
+      return res.status(401).json({ error: verifyResult.message })
+    }
+
+    // Get officer details
     const officer = await prisma.officer.findUnique({
       where: { mobileNumber },
       include: { outlet: true },
@@ -296,10 +347,45 @@ router.post("/next-token", async (req, res) => {
         calledAt: new Date(),
         startedAt: new Date(),
       },
-      include: { customer: true, officer: true },
+      include: { customer: true, officer: true, outlet: true },
     })
 
     await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
+
+    // Send SMS notification to customer
+    try {
+      const firstName = updatedToken.customer.name.split(' ')[0]
+      
+      // Build recovery URL for customer lookup
+      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+      let baseUrl = origins[0] || ''
+
+      // Always prioritize Vercel URLs if available
+      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+      if (vercelUrl) {
+        baseUrl = vercelUrl
+      } else if (process.env.NODE_ENV === 'production') {
+        // In production, prefer any HTTPS URL over localhost
+        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
+      }
+
+      const shortId = updatedToken.id.substring(0, 8)
+      const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+
+      console.log(`[NEXT-TOKEN] About to send SMS to ${updatedToken.customer.mobileNumber} for token #${updatedToken.tokenNumber}`)
+
+      await sltSmsService.sendCustomerCalled(updatedToken.customer.mobileNumber, {
+        firstName,
+        tokenNumber: updatedToken.tokenNumber,
+        counterNumber: officer.counterNumber || 0,
+        outletName: updatedToken.outlet?.name || 'SLT Office',
+        recoveryUrl
+      })
+      console.log(`✓ Next-token SMS sent to customer ${updatedToken.customer.mobileNumber} for token #${updatedToken.tokenNumber}`)
+    } catch (smsError) {
+      console.error('Next-token SMS sending failed:', smsError)
+      // Continue execution even if SMS fails
+    }
 
     broadcast({ type: 'TOKEN_CALLED', data: updatedToken })
 
@@ -445,8 +531,38 @@ router.post("/skip-token", async (req, res) => {
         assignedTo: null,
         counterNumber: null,
       },
-      include: { customer: true },
+      include: { customer: true, outlet: true },
     })
+
+    // Send SMS notification to customer about skip
+    try {
+      const firstName = skipped.customer.name.split(' ')[0]
+      
+      // Build recovery URL
+      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+      let baseUrl = origins[0] || ''
+
+      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+      if (vercelUrl) {
+        baseUrl = vercelUrl
+      } else if (process.env.NODE_ENV === 'production') {
+        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
+      }
+
+      const shortId = skipped.id.substring(0, 8)
+      const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+
+      await sltSmsService.sendCustomerSkipped(skipped.customer.mobileNumber, {
+        firstName,
+        tokenNumber: skipped.tokenNumber,
+        outletName: skipped.outlet?.name || 'SLT Office',
+        recoveryUrl
+      })
+      console.log(`✓ Skip SMS sent to customer ${skipped.customer.mobileNumber} for token #${skipped.tokenNumber}`)
+    } catch (smsError) {
+      console.error('Skip SMS sending failed:', smsError)
+      // Continue execution even if SMS fails
+    }
 
     // set officer back to available
     await prisma.officer.update({ where: { id: officerId }, data: { status: 'available' } })
@@ -485,8 +601,38 @@ router.post("/recall-token", async (req, res) => {
         calledAt: new Date(),
         startedAt: new Date(),
       },
-      include: { customer: true, officer: true },
+      include: { customer: true, officer: true, outlet: true },
     })
+
+    // Send SMS notification to customer about recall  
+    try {
+      const firstName = recalled.customer.name.split(' ')[0]
+      
+      // Build recovery URL
+      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+      let baseUrl = origins[0] || ''
+
+      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+      if (vercelUrl) {
+        baseUrl = vercelUrl
+      } else if (process.env.NODE_ENV === 'production') {
+        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
+      }
+
+      const shortId = recalled.id.substring(0, 8)
+      const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+
+      await sltSmsService.sendCustomerRecalled(recalled.customer.mobileNumber, {
+        firstName,
+        tokenNumber: recalled.tokenNumber,
+        outletName: recalled.outlet?.name || 'SLT Office',
+        recoveryUrl
+      })
+      console.log(`✓ Recall SMS sent to customer ${recalled.customer.mobileNumber} for token #${recalled.tokenNumber}`)
+    } catch (smsError) {
+      console.error('Recall SMS sending failed:', smsError)
+      // Continue execution even if SMS fails
+    }
 
     // set officer to serving
     await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
@@ -545,7 +691,10 @@ router.post("/call-token", async (req, res) => {
     const officer = await prisma.officer.findUnique({ where: { id: officerId } })
     if (!officer) return res.status(404).json({ error: 'Officer not found' })
 
-    const token = await prisma.token.findUnique({ where: { id: tokenId } })
+    const token = await prisma.token.findUnique({ 
+      where: { id: tokenId },
+      include: { customer: true, outlet: true }
+    })
     if (!token) return res.status(404).json({ error: 'Token not found' })
 
     // Call token to counter (works for waiting or any status except completed)
@@ -562,13 +711,48 @@ router.post("/call-token", async (req, res) => {
         calledAt: new Date(),
         startedAt: new Date(),
       },
-      include: { customer: true, officer: true },
+      include: { customer: true, officer: true, outlet: true },
     })
 
-    // set officer to serving
+    // Set officer to serving
     await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
 
-    // broadcast update
+    // Send SMS notification to customer
+    try {
+      const firstName = called.customer.name.split(' ')[0]
+      
+      // Build recovery URL for customer lookup
+      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+      let baseUrl = origins[0] || ''
+
+      // Always prioritize Vercel URLs if available
+      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+      if (vercelUrl) {
+        baseUrl = vercelUrl
+      } else if (process.env.NODE_ENV === 'production') {
+        // In production, prefer any HTTPS URL over localhost
+        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
+      }
+
+      const shortId = called.id.substring(0, 8)
+      const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+
+      console.log(`[CALL-TOKEN] About to send SMS to ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
+
+      await sltSmsService.sendCustomerCalled(called.customer.mobileNumber, {
+        firstName,
+        tokenNumber: called.tokenNumber,
+        counterNumber: officer.counterNumber || 0,
+        outletName: called.outlet?.name || 'SLT Office',
+        recoveryUrl
+      })
+      console.log(`✓ Call-to-counter SMS sent to customer ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
+    } catch (smsError) {
+      console.error('Call-to-counter SMS sending failed:', smsError)
+      // Continue execution even if SMS fails
+    }
+
+    // Broadcast update
     broadcast({ type: 'TOKEN_CALLED', data: called })
 
     res.json({ success: true, token: called })
@@ -660,7 +844,41 @@ router.post("/complete-service", async (req, res) => {
       }
       completedRef = serviceCase.refNumber
 
-      // "SMS" via console output with full tracking URL
+      // Send SMS notification to customer with service completion and feedback link
+      try {
+        const firstName = token.customer.name.split(' ')[0]
+        const services = Array.isArray((token as any).serviceTypes) ? (token as any).serviceTypes.join(', ') : 'Service'
+        
+        // Build base URL
+        const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+        let baseUrl = origins[0] || ''
+
+        // Always prioritize Vercel URLs if available
+        const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+        if (vercelUrl) {
+          baseUrl = vercelUrl
+        } else if (process.env.NODE_ENV === 'production') {
+          // In production, prefer any HTTPS URL over localhost
+          baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
+        }
+        
+        // Build feedback URL - use first 8 chars of reference number for shorter URL
+        const shortRef = serviceCase.refNumber.split('/').pop()?.substring(0, 8) || 'ref'
+        const feedbackUrl = baseUrl ? `${baseUrl}/f?r=${shortRef}` : `/f?r=${shortRef}`
+
+        await sltSmsService.sendServiceCompletion(token.customer.mobileNumber, {
+          firstName,
+          refNumber: serviceCase.refNumber,
+          services,
+          feedbackUrl
+        })
+        console.log(`✓ Service completion SMS sent to ${token.customer.mobileNumber}`)
+      } catch (smsError) {
+        console.error('SMS sending failed:', smsError)
+        // Continue execution even if SMS fails
+      }
+
+      // "SMS" via console output with full tracking URL (for debug/legacy)
       try {
         const services = Array.isArray((token as any).serviceTypes) ? (token as any).serviceTypes.join(', ') : ''
         const officerName = (token as any)?.officer?.name || 'Officer'

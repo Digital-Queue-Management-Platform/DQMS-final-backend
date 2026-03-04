@@ -1,0 +1,234 @@
+import Twilio from 'twilio'
+import sltSmsService from '../services/sltSmsService'
+
+export type SMSProvider = 'twilio' | 'slt' | 'both'
+
+interface SendSMSOptions {
+  to: string
+  body: string
+  language?: 'en' | 'si' | 'ta'
+}
+
+interface SendSMSResult {
+  success: boolean
+  provider?: string
+  error?: string
+  messageId?: string
+}
+
+/**
+ * Unified SMS helper that supports multiple SMS providers
+ * Can use Twilio, SLT SMS, or both (with fallback)
+ */
+class UnifiedSmsHelper {
+  /**
+   * Get the configured SMS provider from environment
+   */
+  getProvider(): SMSProvider {
+    const provider = (process.env.SMS_PROVIDER || 'twilio').toLowerCase()
+    if (provider === 'slt' || provider === 'both') {
+      return provider as SMSProvider
+    }
+    return 'twilio'
+  }
+
+  /**
+   * Check if Twilio is configured
+   */
+  isTwilioConfigured(): boolean {
+    const ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || ""
+    const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || ""
+    const FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || ""
+    const MSG_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || ""
+    
+    return !!(ACCOUNT_SID && AUTH_TOKEN && (MSG_SERVICE_SID || FROM_NUMBER))
+  }
+
+  /**
+   * Check if SLT SMS is configured
+   */
+  isSltConfigured(): boolean {
+    return sltSmsService.isConfigured()
+  }
+
+  /**
+   * Send SMS using configured provider(s)
+   */
+  async sendSMS(options: SendSMSOptions): Promise<SendSMSResult> {
+    const { to, body, language = 'en' } = options
+    const provider = this.getProvider()
+
+    // Development mode check
+    const OTP_DEV_MODE = process.env.OTP_DEV_MODE === "true"
+    if (OTP_DEV_MODE) {
+      console.log(`[SMS][DEV] Message to ${to}: ${body}`)
+      return { success: true, provider: 'dev' }
+    }
+
+    // Try SLT SMS first if configured
+    if (provider === 'slt' || provider === 'both') {
+      if (this.isSltConfigured()) {
+        try {
+          const result = await sltSmsService.sendSMS({ to, message: body })
+          if (result.success) {
+            console.log(`[SMS] Sent via SLT SMS to ${to}`)
+            return { success: true, provider: 'slt', messageId: result.messageId }
+          } else {
+            console.warn(`[SMS] SLT SMS failed: ${result.error}`)
+            // If 'slt' only, return the error
+            if (provider === 'slt') {
+              return { success: false, provider: 'slt', error: result.error }
+            }
+            // If 'both', continue to try Twilio as fallback
+          }
+        } catch (error: any) {
+          console.error('[SMS] SLT SMS error:', error.message)
+          if (provider === 'slt') {
+            return { success: false, provider: 'slt', error: error.message }
+          }
+          // Continue to Twilio fallback for 'both'
+        }
+      }
+    }
+
+    // Try Twilio as primary or fallback
+    if (provider === 'twilio' || provider === 'both') {
+      if (this.isTwilioConfigured()) {
+        try {
+          const ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID!
+          const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN!
+          const FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || ""
+          const MSG_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || ""
+
+          const twilioClient = Twilio(ACCOUNT_SID, AUTH_TOKEN)
+
+          // Normalize phone number to E.164 format
+          let normalizedTo = to
+          if (!to.startsWith('+')) {
+            if (to.startsWith('94')) {
+              normalizedTo = '+' + to
+            } else if (to.startsWith('0')) {
+              normalizedTo = '+94' + to.substring(1)
+            } else if (to.length === 9) {
+              normalizedTo = '+94' + to
+            }
+          }
+
+          const params: any = { to: normalizedTo, body }
+          if (MSG_SERVICE_SID) {
+            params.messagingServiceSid = MSG_SERVICE_SID
+          } else if (FROM_NUMBER) {
+            params.from = FROM_NUMBER
+          }
+
+          const message = await twilioClient.messages.create(params)
+          console.log(`[SMS] Sent via Twilio to ${normalizedTo}`)
+          return { success: true, provider: 'twilio', messageId: message.sid }
+        } catch (error: any) {
+          console.error('[SMS] Twilio error:', error.message)
+          return { success: false, provider: 'twilio', error: error.message }
+        }
+      }
+    }
+
+    // No provider configured
+    return { 
+      success: false, 
+      error: 'No SMS provider configured. Please configure SLT_SMS or TWILIO credentials.' 
+    }
+  }
+
+  /**
+   * Send OTP SMS
+   */
+  async sendOTP(mobileNumber: string, otpCode: string, language: 'en' | 'si' | 'ta' = 'en'): Promise<SendSMSResult> {
+    const otpMessages = {
+      en: `Your DQMS verification code is ${otpCode}. It expires in 5 minutes.`,
+      si: `ඔබගේ DQMS සත්‍යාපන කේතය ${otpCode}. මිනිත්තු 5කින් කල් ඉකුත් වේ.`,
+      ta: `உங்கள் DQMS சரிபார்ப்பு குறியீடு ${otpCode}. இது 5 நிமிடங்களில் காலாவதியாகிறது.`
+    }
+
+    return this.sendSMS({
+      to: mobileNumber,
+      body: otpMessages[language],
+      language
+    })
+  }
+
+  /**
+   * Send appointment confirmation SMS
+   */
+  async sendAppointmentConfirmation(
+    mobileNumber: string,
+    details: {
+      name: string
+      outletName: string
+      dateTime: string
+      services: string
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SendSMSResult> {
+    const messages = {
+      en: `Dear ${details.name}, your appointment at ${details.outletName} is confirmed for ${details.dateTime}. Services: ${details.services}. -DQMS`,
+      si: `${details.name}, ${details.outletName} හි ඔබගේ හමුව ${details.dateTime} සඳහා තහවුරු කර ඇත. සේවාවන්: ${details.services}. -DQMS`,
+      ta: `${details.name}, ${details.outletName} இல் உங்கள் சந்திப்பு ${details.dateTime} அன்று உறுதிப்படுத்தப்பட்டது. சேவைகள்: ${details.services}. -DQMS`
+    }
+
+    return this.sendSMS({
+      to: mobileNumber,
+      body: messages[language],
+      language
+    })
+  }
+
+  /**
+   * Send token notification
+   */
+  async sendTokenNotification(
+    mobileNumber: string,
+    tokenNumber: number,
+    counterNumber: number,
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SendSMSResult> {
+    const messages = {
+      en: `Token #${tokenNumber}: Please proceed to Counter ${counterNumber}. -DQMS`,
+      si: `ටෝකන් #${tokenNumber}: කරුණාකර කවුන්ටර් ${counterNumber} වෙත යන්න. -DQMS`,
+      ta: `டோக்கன் #${tokenNumber}: கவுண்டர் ${counterNumber} க்கு செல்லவும். -DQMS`
+    }
+
+    return this.sendSMS({
+      to: mobileNumber,
+      body: messages[language],
+      language
+    })
+  }
+
+  /**
+   * Send registration confirmation
+   */
+  async sendRegistrationConfirmation(
+    mobileNumber: string,
+    details: {
+      name: string
+      tokenNumber: number
+      outletName: string
+      estimatedWait: number
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SendSMSResult> {
+    const messages = {
+      en: `Welcome ${details.name}! Your token #${details.tokenNumber} at ${details.outletName}. Est. wait: ${details.estimatedWait} min. -DQMS`,
+      si: `සාදරයෙන් පිළිගනිමු ${details.name}! ඔබගේ ටෝකන් #${details.tokenNumber} - ${details.outletName}. ඇස්තමේන්තු් පොරොත්තුව: ${details.estimatedWait} මිනි. -DQMS`,
+      ta: `வரவேற்கிறோம் ${details.name}! உங்கள் டோக்கன் #${details.tokenNumber} - ${details.outletName}. மதிப்பீட்டு காத்திருப்பு: ${details.estimatedWait} நிமி. -DQMS`
+    }
+
+    return this.sendSMS({
+      to: mobileNumber,
+      body: messages[language],
+      language
+    })
+  }
+}
+
+// Export singleton instance
+export default new UnifiedSmsHelper()

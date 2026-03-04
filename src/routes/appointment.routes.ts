@@ -2,6 +2,7 @@ import { Router } from "express"
 import { prisma } from "../server"
 import * as jwt from "jsonwebtoken"
 import Twilio from "twilio"
+import smsHelper from "../utils/smsHelper"
 
 const router = Router()
 
@@ -102,50 +103,25 @@ router.post("/book", async (req, res) => {
       // best-effort, ignore failures
     }
 
-    // Best-effort SMS confirmation via Twilio (localized by preferredLanguage)
+    // Best-effort SMS confirmation via unified SMS helper (localized by preferredLanguage)
     try {
-      const { client: twilioClient, TWILIO_FROM_NUMBER, TWILIO_MESSAGING_SERVICE_SID } = twilioConfig()
-      const DEV_MODE = process.env.OTP_DEV_MODE === 'true' && process.env.OTP_DEV_ECHO === 'true'
-      if (twilioClient && (TWILIO_MESSAGING_SERVICE_SID || TWILIO_FROM_NUMBER)) {
-        const to = toE164(mobileNumber)
-        const when = new Date(appointmentAt)
-        const whenStr = when.toLocaleString()
-        const services = Array.isArray(serviceTypes) ? serviceTypes.join(', ') : ''
-        // Build absolute link to 'My Appointments' page
-        const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-        let baseUrl = origins[0] || ''
-
-        // Always prioritize Vercel URLs if available
-        const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-        if (vercelUrl) {
-          baseUrl = vercelUrl
-        } else if (process.env.NODE_ENV === 'production') {
-          // In production, prefer any HTTPS URL over localhost
-          baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-        }
-
-        const manageUrl = baseUrl ? `${baseUrl}/appointment/my` : '/appointment/my'
-        const lang: 'en' | 'si' | 'ta' = (preferredLanguage === 'si' || preferredLanguage === 'ta') ? preferredLanguage : 'en'
-        const bodies: Record<'en' | 'si' | 'ta', string> = {
-          /*en: `Appointment confirmed for ${whenStr} at ${outlet.name}. Services: ${services}. Manage: ${manageUrl}`,
-          si: `${outlet.name} ශාඛාවේදී ${whenStr} ට ඔබගේ වෙන්කරවාගැනීම තහවුරු විය. සේවාවන්: ${services}. කළමනාකරණය: ${manageUrl}`,
-          ta: `${outlet.name} கிளையில் ${whenStr} உங்கள் நேரம் உறுதிப்படுத்தப்பட்டுள்ளது. சேவைகள்: ${services}. மேலாண்மை: ${manageUrl}`,*/
-          en: `Appointment confirmed for ${whenStr} at ${outlet.name}. Services: ${services}`,
-          si: `${outlet.name} ශාඛාවේදී ${whenStr} ට ඔබගේ වෙන්කරවාගැනීම තහවුරු විය. සේවාවන්: ${services}`,
-          ta: `${outlet.name} கிளையில் ${whenStr} உங்கள் நேரம் உறுதிப்படுத்தப்பட்டுள்ளது. சேவைகள்: ${services}`,
-        }
-        const body = bodies[lang]
-
-        const params: any = { to, body }
-        if (TWILIO_MESSAGING_SERVICE_SID) params.messagingServiceSid = TWILIO_MESSAGING_SERVICE_SID
-        else if (TWILIO_FROM_NUMBER) params.from = TWILIO_FROM_NUMBER
-        if (DEV_MODE) {
-          console.log('[APPT][SMS][DEV][SKIP_SEND]', { to, body, params })
-        } else {
-          await twilioClient.messages.create(params)
-        }
+      const when = new Date(appointmentAt)
+      const whenStr = when.toLocaleString()
+      const services = Array.isArray(serviceTypes) ? serviceTypes.join(', ') : ''
+      
+      const lang: 'en' | 'si' | 'ta' = (preferredLanguage === 'si' || preferredLanguage === 'ta') ? preferredLanguage : 'en'
+      
+      const result = await smsHelper.sendAppointmentConfirmation(mobileNumber, {
+        name,
+        outletName: outlet.name,
+        dateTime: whenStr,
+        services
+      }, lang)
+      
+      if (result.success) {
+        console.log(`[APPT][SMS] Sent confirmation via ${result.provider}`)
       } else {
-        console.log('[APPT][SMS] Twilio not configured; skipping SMS')
+        console.warn('[APPT][SMS] Failed:', result.error)
       }
     } catch (e) {
       console.error('Appointment SMS send failed:', e)

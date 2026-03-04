@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { fetchBillFromSltApi, normalizeSltBillData } from '../services/sltBillingService';
+import smsHelper from '../utils/smsHelper';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -250,39 +251,20 @@ router.post('/send-notification', async (req: Request, res: Response) => {
     const formattedAmount = parseFloat(billAmount).toFixed(2);
     const dueDateFormatted = dueDate ? new Date(dueDate).toLocaleDateString() : 'N/A';
 
-    // Try to send SMS notification (graceful failure if SMS service not configured)
+    // Try to send SMS notification using unified SMS helper
     try {
-      const Twilio = require('twilio');
-      const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
-      const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
-      const TWILIO_FROM_NUMBER = process.env.TWILIO_FROM_NUMBER;
-
-      if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_FROM_NUMBER) {
-        const client = Twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
-        
-        // Normalize mobile number to E.164 format
-        let normalizedMobile = mobileNumber.replace(/\D/g, '');
-        if (normalizedMobile.startsWith('0')) {
-          normalizedMobile = '94' + normalizedMobile.substring(1);
-        } else if (!normalizedMobile.startsWith('94')) {
-          normalizedMobile = '94' + normalizedMobile;
-        }
-        const e164Mobile = '+' + normalizedMobile;
-
-        const message = `Dear ${accountName},\n\nYour SLT bill details:\nAmount Due: Rs. ${formattedAmount}\nDue Date: ${dueDateFormatted}\nSLT Account: ${sltNumber}\n\nThank you!`;
-
-        await client.messages.create({
-          body: message,
-          from: TWILIO_FROM_NUMBER,
-          to: e164Mobile
-        });
-        
-        console.log(`SMS sent successfully to ${e164Mobile}`);
+      const result = await smsHelper.sendSMS({
+        to: mobileNumber,
+        body: `Dear ${accountName},\n\nYour SLT bill details:\nAmount Due: Rs. ${formattedAmount}\nDue Date: ${dueDateFormatted}\nSLT Account: ${sltNumber}\n\nThank you!`
+      });
+      
+      if (result.success) {
+        console.log(`[BILL][SMS] Sent bill notification via ${result.provider} to ${mobileNumber}`);
       } else {
-        console.log('Twilio credentials not configured, skipping SMS');
+        console.warn('[BILL][SMS] Failed to send notification:', result.error);
       }
     } catch (smsErr: any) {
-      console.log(`SMS notification failed (non-critical):`, smsErr.message);
+      console.log(`[BILL][SMS] Notification failed (non-critical):`, smsErr.message);
       // Don't fail the request if SMS fails
     }
 

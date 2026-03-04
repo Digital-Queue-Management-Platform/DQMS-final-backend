@@ -1,6 +1,7 @@
 import { Router } from "express"
 import { prisma } from "../server"
 import * as jwt from "jsonwebtoken"
+import otpService from "../services/otpService"
 
 const router = Router()
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
@@ -19,11 +20,36 @@ function verifyGMToken(req: any): { gmId: string } | null {
     } catch { return null }
 }
 
-// GM Login
-router.post("/login", async (req, res) => {
+// Request OTP for GM login
+router.post("/request-otp", async (req, res) => {
     try {
         const { mobileNumber } = req.body
         if (!mobileNumber) return res.status(400).json({ error: "Mobile number is required" })
+
+        const gm = await (prisma as any).gM.findFirst({ 
+            where: { mobileNumber, isActive: true },
+            select: { id: true, name: true }
+        })
+        if (!gm) return res.status(404).json({ error: "GM not found with this mobile number" })
+
+        const result = await otpService.generateOTP(mobileNumber, 'gm', gm.name)
+        if (!result.success) return res.status(500).json({ error: result.message })
+
+        res.json({ success: true, message: result.message, gmName: gm.name })
+    } catch (err) {
+        console.error("Request OTP error:", err)
+        res.status(500).json({ error: "Failed to send OTP" })
+    }
+})
+
+// GM Login with OTP
+router.post("/login", async (req, res) => {
+    try {
+        const { mobileNumber, otpCode } = req.body
+        if (!mobileNumber || !otpCode) return res.status(400).json({ error: "Mobile number and OTP code are required" })
+
+        const verifyResult = await otpService.verifyOTP(mobileNumber, otpCode, 'gm')
+        if (!verifyResult.success) return res.status(401).json({ error: verifyResult.message })
 
         const gm = await (prisma as any).gM.findFirst({ where: { mobileNumber, isActive: true } })
         if (!gm) return res.status(401).json({ error: "GM not found with this mobile number" })

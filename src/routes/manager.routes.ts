@@ -3,6 +3,7 @@ import { prisma } from "../server"
 import * as jwt from "jsonwebtoken"
 import * as bcrypt from "bcrypt"
 import { generateSecurePassword } from "../utils/passwordGenerator"
+import otpService from "../services/otpService"
 
 const router = Router()
 
@@ -10,13 +11,58 @@ const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 // No expiration for production system - managers need continuous access
 const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
 
-// RTOM login - authenticate using mobile number only
-router.post("/login", async (req, res) => {
+// Request OTP for RTOM login
+router.post("/request-otp", async (req, res) => {
   try {
     const { mobileNumber } = req.body
 
     if (!mobileNumber) {
       return res.status(400).json({ error: "Mobile number is required" })
+    }
+
+    // Check if RTOM exists
+    const region = await prisma.region.findFirst({
+      where: { managerMobile: mobileNumber },
+      select: { managerId: true, name: true }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "RTOM not found with this mobile number" })
+    }
+
+    // Generate and send OTP (managerId is used as the manager's name)
+    const result = await otpService.generateOTP(mobileNumber, 'rtom', region.managerId ?? undefined)
+
+    if (!result.success) {
+      return res.status(500).json({ error: result.message })
+    }
+
+    res.json({ 
+      success: true, 
+      message: result.message,
+      managerName: region.managerId,
+      regionName: region.name
+    })
+  } catch (error) {
+    console.error("Request OTP error:", error)
+    res.status(500).json({ error: "Failed to send OTP" })
+  }
+})
+
+// RTOM login - authenticate using mobile number and OTP
+router.post("/login", async (req, res) => {
+  try {
+    const { mobileNumber, otpCode } = req.body
+
+    if (!mobileNumber || !otpCode) {
+      return res.status(400).json({ error: "Mobile number and OTP code are required" })
+    }
+
+    // Verify OTP
+    const verifyResult = await otpService.verifyOTP(mobileNumber, otpCode, 'rtom')
+
+    if (!verifyResult.success) {
+      return res.status(401).json({ error: verifyResult.message })
     }
 
     // Find manager by mobile number in the Region model
