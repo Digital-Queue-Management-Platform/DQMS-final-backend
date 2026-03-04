@@ -347,10 +347,45 @@ router.post("/next-token", async (req, res) => {
         calledAt: new Date(),
         startedAt: new Date(),
       },
-      include: { customer: true, officer: true },
+      include: { customer: true, officer: true, outlet: true },
     })
 
     await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
+
+    // Send SMS notification to customer
+    try {
+      const firstName = updatedToken.customer.name.split(' ')[0]
+      
+      // Build recovery URL for customer lookup
+      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+      let baseUrl = origins[0] || ''
+
+      // Always prioritize Vercel URLs if available
+      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+      if (vercelUrl) {
+        baseUrl = vercelUrl
+      } else if (process.env.NODE_ENV === 'production') {
+        // In production, prefer any HTTPS URL over localhost
+        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
+      }
+
+      const shortId = updatedToken.id.substring(0, 8)
+      const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+
+      console.log(`[NEXT-TOKEN] About to send SMS to ${updatedToken.customer.mobileNumber} for token #${updatedToken.tokenNumber}`)
+
+      await sltSmsService.sendCustomerCalled(updatedToken.customer.mobileNumber, {
+        firstName,
+        tokenNumber: updatedToken.tokenNumber,
+        counterNumber: officer.counterNumber || 0,
+        outletName: updatedToken.outlet?.name || 'SLT Office',
+        recoveryUrl
+      })
+      console.log(`✓ Next-token SMS sent to customer ${updatedToken.customer.mobileNumber} for token #${updatedToken.tokenNumber}`)
+    } catch (smsError) {
+      console.error('Next-token SMS sending failed:', smsError)
+      // Continue execution even if SMS fails
+    }
 
     broadcast({ type: 'TOKEN_CALLED', data: updatedToken })
 
