@@ -4,6 +4,7 @@ import { getLastDailyReset } from "../utils/resetWindow"
 import * as jwt from "jsonwebtoken"
 import Twilio from "twilio"
 import smsHelper from "../utils/smsHelper"
+import sltSmsService from "../services/sltSmsService"
 
 const router = Router()
 
@@ -45,7 +46,117 @@ function toE164(mobile: string): string {
   return mobile.startsWith("+") ? mobile : "+" + cleaned
 }
 
-// Start OTP: send code to mobile
+// Enhanced OTP for customer registration with recovery URL
+router.post("/registration/otp/start", async (req, res) => {
+  try {
+    const { mobileNumber, customerName, outletId, preferredLanguage } = req.body || {}
+    if (!mobileNumber) return res.status(400).json({ error: "mobileNumber is required" })
+    
+    const OTP_DEV_MODE = process.env.OTP_DEV_MODE === "true"
+    const OTP_DEV_ECHO = process.env.OTP_DEV_ECHO === "true"
+
+    // Get outlet name for personalized message
+    let outletName = 'SLT Office'
+    if (outletId) {
+      try {
+        const outlet = await prisma.outlet.findUnique({ where: { id: outletId } })
+        if (outlet) {
+          outletName = outlet.name
+        }
+      } catch (err) {
+        console.log('Could not fetch outlet name:', err)
+      }
+    }
+
+    const key = mobileNumber
+    const existing = otpStore.get(key)
+    if (existing && now() - existing.lastSentAt < RESEND_WINDOW) {
+      const wait = Math.ceil((RESEND_WINDOW - (now() - existing.lastSentAt)) / 1000)
+      return res.status(429).json({ error: `Please wait ${wait}s before requesting another OTP` })
+    }
+
+    const code = genOtp()
+    const record: OtpRecord = {
+      code,
+      expiresAt: now() + FIVE_MIN,
+      attempts: 0,
+      lastSentAt: now(),
+    }
+    otpStore.set(key, record)
+
+    // Localize OTP message by language; fallback to English
+    const lang = (typeof preferredLanguage === 'string' ? preferredLanguage : 'en') as 'en' | 'si' | 'ta'
+
+    // DEV mode takes precedence
+    if (OTP_DEV_MODE) {
+      console.log(`[OTP-DEV] Registration OTP for ${mobileNumber}: ${code}`)
+      return res.json({ success: true, message: "OTP sent (dev mode)", ...(OTP_DEV_ECHO ? { devCode: code } : {}) })
+    }
+
+    // Build recovery URL
+    const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+    let baseUrl = origins[0] || ''
+
+    // Always prioritize Vercel URLs if available
+    const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+    if (vercelUrl) {
+      baseUrl = vercelUrl
+    } else if (process.env.NODE_ENV === 'production') {
+      // In production, prefer any HTTPS URL over localhost
+      baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
+    }
+
+    const shortOutlet = outletId ? outletId.substring(0, 8) : 'default'
+    const recoveryUrl = baseUrl ? `${baseUrl}/r?o=${shortOutlet}&m=${encodeURIComponent(mobileNumber)}` : `/r?o=${shortOutlet}&m=${encodeURIComponent(mobileNumber)}`
+
+    // Send enhanced OTP SMS with recovery URL
+    try {
+      const firstName = customerName ? customerName.split(' ')[0] : undefined
+      
+      await sltSmsService.sendCustomerRegistrationOTP(mobileNumber, {
+        firstName,
+        otpCode: code,
+        outletName,
+        recoveryUrl
+      }, lang)
+      
+      console.log(`[OTP] Registration OTP sent to ${mobileNumber}`)
+      return res.json({ success: true, message: "Registration OTP sent" })
+    } catch (smsError: any) {
+      console.error('[OTP] Failed to send registration SMS:', smsError)
+      
+      // Fallback to basic SMS helper
+      try {
+        const result = await smsHelper.sendOTP(mobileNumber, code, lang)
+        
+        if (result.success) {
+          console.log(`[OTP] Fallback: Sent via ${result.provider} to ${mobileNumber}`)
+          return res.json({ success: true, message: "OTP sent" })
+        } else {
+          console.error('[OTP] Fallback also failed:', result.error)
+          return res.status(500).json({ 
+            error: result.error || "Failed to send OTP",
+            ...(process.env.NODE_ENV !== 'production' ? { provider: result.provider } : {})
+          })
+        }
+      } catch (fallbackError: any) {
+        console.error("[OTP][FALLBACK_ERROR]", fallbackError?.message)
+        return res.status(500).json({ 
+          error: "Failed to send OTP via SMS",
+          ...(process.env.NODE_ENV !== 'production' ? { details: fallbackError?.message } : {})
+        })
+      }
+    }
+  } catch (error: any) {
+    console.error("[REGISTRATION-OTP][UNCAUGHT]", error?.message)
+    return res.status(500).json({ 
+      error: "Failed to send registration OTP",
+      ...(process.env.NODE_ENV !== 'production' ? { uncaught: error?.message } : {})
+    })
+  }
+})
+
+// Start OTP: send code to mobile (legacy endpoint)
 router.post("/otp/start", async (req, res) => {
   try {
     const { mobileNumber, preferredLanguage } = req.body || {}
@@ -348,6 +459,51 @@ router.post("/register", async (req, res) => {
 
     console.log(`Successfully created token #${token.tokenNumber} for customer ${token.customer.name}`)
 
+    // Calculate queue position and estimated wait time
+    const queuePosition = await prisma.token.count({
+      where: {
+        outletId: token.outletId,
+        status: "waiting",
+        tokenNumber: { lt: token.tokenNumber },
+      },
+    }) + 1
+
+    const estimatedWait = Math.max(1, queuePosition * 5) // 5 min per person, minimum 1 min
+
+    // Send token confirmation SMS with tracking URL
+    try {
+      const firstName = token.customer.name.split(' ')[0]
+      
+      // Build tracking URL
+      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+      let baseUrl = origins[0] || ''
+
+      // Always prioritize Vercel URLs if available
+      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+      if (vercelUrl) {
+        baseUrl = vercelUrl
+      } else if (process.env.NODE_ENV === 'production') {
+        // In production, prefer any HTTPS URL over localhost
+        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
+      }
+
+      const shortId = token.id.substring(0, 8)
+      const trackingUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+
+      await sltSmsService.sendTokenConfirmation(token.customer.mobileNumber, {
+        firstName,
+        tokenNumber: token.tokenNumber,
+        queuePosition,
+        outletName: token.outlet?.name || 'SLT Office',
+        estimatedWait,
+        trackingUrl
+      })
+      console.log(`✓ Token confirmation SMS sent to ${token.customer.mobileNumber}`)
+    } catch (smsError) {
+      console.error('Token confirmation SMS failed:', smsError)
+      // Continue execution even if SMS fails
+    }
+
     // Broadcast update after successful transaction
     broadcast({ type: "NEW_TOKEN", data: token })
 
@@ -355,6 +511,8 @@ router.post("/register", async (req, res) => {
       success: true,
       token,
       message: "Registration successful",
+      queuePosition,
+      estimatedWait,
     })
   } catch (error: any) {
     console.error("Registration error:", error)
@@ -413,6 +571,268 @@ router.get("/token/:tokenId", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch token" })
   }
 })
+
+// Customer lookup by mobile number - for recovery scenarios  
+router.post("/lookup", async (req, res) => {
+  try {
+    const { mobileNumber } = req.body
+
+    if (!mobileNumber) {
+      return res.status(400).json({ error: "Mobile number is required" })
+    }
+
+    // Build base URL for tracking links
+    const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+    let baseUrl = origins[0] || ''
+
+    // Always prioritize Vercel URLs if available
+    const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+    if (vercelUrl) {
+      baseUrl = vercelUrl
+    } else if (process.env.NODE_ENV === 'production') {
+      // In production, prefer any HTTPS URL over localhost
+      baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
+    }
+
+    // Find all active tokens for this mobile number (last 24 hours to avoid too many results)
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000)
+    
+    const tokens = await prisma.token.findMany({
+      where: {
+        customer: { mobileNumber },
+        createdAt: { gte: yesterday },
+        status: { in: ["waiting", "in_service", "completed"] }
+      },
+      include: {
+        customer: true,
+        outlet: true,
+        officer: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 5 // Limit to 5 most recent tokens
+    })
+
+    if (tokens.length === 0) {
+      return res.status(404).json({ 
+        error: "No recent tokens found for this mobile number",
+        suggestion: "Please visit the counter or register a new token"
+      })
+    }
+
+    // Calculate queue positions for waiting tokens
+    const tokensWithDetails = await Promise.all(
+      tokens.map(async (token) => {
+        let queuePosition = null
+        let estimatedWait = null
+        
+        if (token.status === 'waiting') {
+          queuePosition = await prisma.token.count({
+            where: {
+              outletId: token.outletId,
+              status: "waiting",
+              tokenNumber: { lt: token.tokenNumber },
+            },
+          }) + 1
+
+          estimatedWait = Math.max(1, queuePosition * 5) // 5 min per person
+        }
+
+        return {
+          id: token.id,
+          tokenNumber: token.tokenNumber,
+          status: token.status,
+          createdAt: token.createdAt,
+          calledAt: token.calledAt,
+          completedAt: token.completedAt,
+          counterNumber: token.counterNumber,
+          outlet: {
+            name: token.outlet?.name,
+            location: token.outlet?.location
+          },
+          officer: token.officer ? {
+            name: token.officer.name,
+            counterNumber: token.officer.counterNumber
+          } : null,
+          queuePosition,
+          estimatedWaitMinutes: estimatedWait,
+          statusMessage: getStatusMessage(token.status, queuePosition || 0, estimatedWait || 0),
+          trackingUrl: baseUrl ? `${baseUrl}/t/${token.id.substring(0, 8)}` : `/t/${token.id.substring(0, 8)}`
+        }
+      })
+    )
+
+    res.json({
+      success: true,
+      customerName: tokens[0].customer.name,
+      mobileNumber: tokens[0].customer.mobileNumber,
+      tokens: tokensWithDetails,
+      message: tokensWithDetails.length === 1 ? "Token found" : `${tokensWithDetails.length} recent tokens found`
+    })
+  } catch (error) {
+    console.error("Customer lookup error:", error)
+    res.status(500).json({ error: "Failed to lookup customer tokens" })
+  }
+})
+
+// Short URL redirect - resolve short token ID to full token details
+router.get("/t/:shortId", async (req, res) => {
+  try {
+    const { shortId } = req.params
+
+    if (shortId.length !== 8) {
+      return res.status(400).json({ error: "Invalid short ID format" })
+    }
+
+    // Find token by first 8 characters of ID
+    const token = await prisma.token.findFirst({
+      where: {
+        id: { startsWith: shortId }
+      },
+      include: {
+        customer: true,
+        outlet: true,
+        officer: true,
+      },
+      orderBy: { createdAt: 'desc' } // Get most recent if multiple matches (unlikely but safe)
+    })
+
+    if (!token) {
+      return res.status(404).json({ error: "Token not found" })
+    }
+
+    // Calculate position in queue if still waiting
+    let queuePosition = 0
+    let estimatedWait = 0
+    
+    if (token.status === 'waiting') {
+      queuePosition = await prisma.token.count({
+        where: {
+          outletId: token.outletId,
+          status: "waiting",
+          tokenNumber: { lt: token.tokenNumber },
+        },
+      }) + 1
+
+      estimatedWait = Math.max(1, queuePosition * 5) // 5 min per person, minimum 1 min
+    }
+
+    res.json({
+      token: {
+        id: token.id,
+        tokenNumber: token.tokenNumber,
+        status: token.status,
+        createdAt: token.createdAt,
+        calledAt: token.calledAt,
+        completedAt: token.completedAt,
+        counterNumber: token.counterNumber,
+        customer: {
+          name: token.customer.name,
+          mobileNumber: token.customer.mobileNumber
+        },
+        outlet: {
+          name: token.outlet?.name,
+          location: token.outlet?.location
+        },
+        officer: token.officer ? {
+          name: token.officer.name,
+          counterNumber: token.officer.counterNumber
+        } : null
+      },
+      queuePosition: token.status === 'waiting' ? queuePosition : null,
+      estimatedWaitMinutes: token.status === 'waiting' ? estimatedWait : null,
+      statusMessage: getStatusMessage(token.status, queuePosition, estimatedWait),
+      shortUrl: `/t/${shortId}`,
+      fullUrl: `/track/${token.id}`
+    })
+  } catch (error) {
+    console.error("Short URL resolution error:", error)
+    res.status(500).json({ error: "Failed to resolve token" })
+  }
+})
+
+// Customer tracking endpoint for SMS links
+router.get("/track/:tokenId", async (req, res) => {
+  try {
+    const { tokenId } = req.params
+
+    const token = await prisma.token.findUnique({
+      where: { id: tokenId },
+      include: {
+        customer: true,
+        outlet: true,
+        officer: true,
+      },
+    })
+
+    if (!token) {
+      return res.status(404).json({ error: "Token not found" })
+    }
+
+    // Calculate position in queue if still waiting
+    let queuePosition = 0
+    let estimatedWait = 0
+    
+    if (token.status === 'waiting') {
+      queuePosition = await prisma.token.count({
+        where: {
+          outletId: token.outletId,
+          status: "waiting",
+          tokenNumber: { lt: token.tokenNumber },
+        },
+      }) + 1
+
+      estimatedWait = Math.max(1, queuePosition * 5) // 5 min per person, minimum 1 min
+    }
+
+    res.json({
+      token: {
+        id: token.id,
+        tokenNumber: token.tokenNumber,
+        status: token.status,
+        createdAt: token.createdAt,
+        calledAt: token.calledAt,
+        completedAt: token.completedAt,
+        counterNumber: token.counterNumber,
+        customer: {
+          name: token.customer.name,
+          mobileNumber: token.customer.mobileNumber
+        },
+        outlet: {
+          name: token.outlet?.name,
+          location: token.outlet?.location
+        },
+        officer: token.officer ? {
+          name: token.officer.name,
+          counterNumber: token.officer.counterNumber
+        } : null
+      },
+      queuePosition: token.status === 'waiting' ? queuePosition : null,
+      estimatedWaitMinutes: token.status === 'waiting' ? estimatedWait : null,
+      statusMessage: getStatusMessage(token.status, queuePosition, estimatedWait)
+    })
+  } catch (error) {
+    console.error("Token tracking error:", error)
+    res.status(500).json({ error: "Failed to fetch token status" })
+  }
+})
+
+// Helper function to generate user-friendly status messages
+function getStatusMessage(status: string, queuePosition: number, estimatedWait: number): string {
+  switch (status) {
+    case 'waiting':
+      return queuePosition === 1 
+        ? 'You are next in line!' 
+        : `You are position ${queuePosition} in queue. Estimated wait: ${estimatedWait} minutes.`
+    case 'in_service':
+      return 'You are currently being served.'
+    case 'completed':
+      return 'Your service has been completed.'
+    case 'skipped':
+      return 'Your token was skipped. Please contact the counter.'
+    default:
+      return 'Token status unknown.'
+  }
+}
 
 // Shared in-memory store for manager QR tokens (use Redis or database in production)
 interface ManagerQRTokenData {

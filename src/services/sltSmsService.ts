@@ -253,6 +253,189 @@ class SLTSmsService {
   }
 
   /**
+   * Send customer called to counter notification
+   */
+  async sendCustomerCalled(
+    mobileNumber: string,
+    details: {
+      firstName: string
+      tokenNumber: number
+      counterNumber: number
+      outletName: string
+      recoveryUrl: string
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SMSResponse> {
+    console.log(`[SLT SMS CALL] Attempting to send customer called SMS to ${mobileNumber} for token #${details.tokenNumber}`)
+    
+    const messages = {
+      en: `SLT DQMS: Dear ${details.firstName}, Token #${details.tokenNumber} proceed to Counter ${details.counterNumber} at ${details.outletName}. Status: ${details.recoveryUrl} -SLT`,
+      si: `SLT DQMS: ${details.firstName}, ටෝකන් #${details.tokenNumber} කරුණාකර ${details.outletName} කවුන්ටර් ${details.counterNumber} වෙත යන්න. තත්වය: ${details.recoveryUrl} -SLT`,
+      ta: `SLT DQMS: ${details.firstName}, டோக்கன் #${details.tokenNumber} தயவுसெய்து ${details.outletName} கవுண்டர் ${details.counterNumber} க்கு செல்லவும். நிலை: ${details.recoveryUrl} -SLT`
+    }
+
+    console.log(`[SLT SMS CALL] Message content (${messages[language].length} chars): ${messages[language]}`)
+
+    return this.sendSMS({
+      to: mobileNumber,
+      message: messages[language]
+    })
+  }
+
+  /**
+   * Send customer skipped notification
+   */
+  async sendCustomerSkipped(
+    mobileNumber: string,
+    details: {
+      firstName: string
+      tokenNumber: number
+      outletName: string
+      recoveryUrl: string
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SMSResponse> {
+    console.log(`[SLT SMS SKIP] Attempting to send skip SMS to ${mobileNumber} for token #${details.tokenNumber}`)
+    
+    const messages = {
+      en: `SLT DQMS: Dear ${details.firstName}, Token #${details.tokenNumber} skipped at ${details.outletName}. Check status: ${details.recoveryUrl} -SLT`,
+      si: `SLT DQMS: ${details.firstName}, ටෝකන් #${details.tokenNumber} ${details.outletName} මඟ හැරිණි. තත්වය: ${details.recoveryUrl} -SLT`,
+      ta: `SLT DQMS: ${details.firstName}, டோக்கன் #${details.tokenNumber} ${details.outletName} தவிர்க்கப்பட்டது. நிலை: ${details.recoveryUrl} -SLT`
+    }
+
+    console.log(`[SLT SMS SKIP] Message content (${messages[language].length} chars): "${messages[language]}"`)
+    
+    if (messages[language].length > 160) {
+      console.warn(`[SLT SMS SKIP] WARNING: Message exceeds 160 chars (${messages[language].length}), might be split or rejected`)
+    }
+
+    return this.sendSMS({
+      to: mobileNumber,
+      message: messages[language]
+    })
+  }
+
+  /**
+   * Send customer recalled notification
+   */
+  async sendCustomerRecalled(
+    mobileNumber: string,
+    details: {
+      firstName: string
+      tokenNumber: number
+      outletName: string
+      recoveryUrl: string
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SMSResponse> {
+    console.log(`[SLT SMS RECALL] Attempting to send recall SMS to ${mobileNumber} for token #${details.tokenNumber}`)
+    
+    const messages = {
+      en: `SLT DQMS: Dear ${details.firstName}, Token #${details.tokenNumber} recalled at ${details.outletName}. Check status: ${details.recoveryUrl} -SLT`,
+      si: `SLT DQMS: ${details.firstName}, ටෝකන් #${details.tokenNumber} ${details.outletName} නැවත ඇමතිණි. තත්වය: ${details.recoveryUrl} -SLT`,
+      ta: `SLT DQMS: ${details.firstName}, டோக்கன் #${details.tokenNumber} ${details.outletName} திரும்ப அழைக்கப்பட்டது. நிலை: ${details.recoveryUrl} -SLT`
+    }
+
+    console.log(`[SLT SMS RECALL] Message content (${messages[language].length} chars): "${messages[language]}"`)
+    
+    if (messages[language].length > 160) {
+      console.warn(`[SLT SMS RECALL] WARNING: Message exceeds 160 chars (${messages[language].length}), might be split or rejected`)
+    }
+
+    return this.sendSMS({
+      to: mobileNumber,
+      message: messages[language]
+    })
+  }
+
+  /**
+   * Send service completion notification with feedback reminder
+   */
+  async sendServiceCompletion(
+    mobileNumber: string,
+    details: {
+      firstName: string
+      refNumber: string
+      services: string
+      feedbackUrl: string
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SMSResponse> {
+    console.log(`[SLT SMS COMPLETE] Attempting to send service completion SMS to ${mobileNumber} for ref ${details.refNumber}`)
+    
+    const messages = {
+      en: `SLT DQMS: Dear ${details.firstName}, service completed. Ref: ${details.refNumber}. Please rate us: ${details.feedbackUrl} -SLT`,
+      si: `SLT DQMS: ${details.firstName}, සේවාව සම්පූර්ණයි. Ref: ${details.refNumber}. කරුණාකර අගයන්න: ${details.feedbackUrl} -SLT`,
+      ta: `SLT DQMS: ${details.firstName}, சேவை முடிந்தது. Ref: ${details.refNumber}. தயவुसेटि மதிப्पीटுங্গள्: ${details.feedbackUrl} -SLT`
+    }
+
+    console.log(`[SLT SMS COMPLETE] Message content (${messages[language].length} chars): "${messages[language]}"`)
+    
+    if (messages[language].length > 160) {
+      console.warn(`[SLT SMS COMPLETE] WARNING: Message exceeds 160 chars (${messages[language].length}), might be split or rejected`)
+    }
+
+    return this.sendSMS({
+      to: mobileNumber,
+      message: messages[language]
+    })
+  }
+
+  /**
+   * Send OTP for customer registration with recovery URL
+   */
+  async sendCustomerRegistrationOTP(
+    mobileNumber: string,
+    details: {
+      firstName?: string
+      otpCode: string
+      outletName: string
+      recoveryUrl: string
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SMSResponse> {
+    const greeting = details.firstName ? ` Dear ${details.firstName},` : ''
+    
+    const messages = {
+      en: `SLT DQMS:${greeting} Your registration code for ${details.outletName} is ${details.otpCode}. Valid 5 min. Continue: ${details.recoveryUrl} -SLT`,
+      si: `SLT DQMS:${details.firstName ? ` ${details.firstName},` : ''} ${details.outletName} ලියාපදිංචි කේතය ${details.otpCode}. මිනිත්තු 5. පුරිදු: ${details.recoveryUrl} -SLT`,
+      ta: `SLT DQMS:${details.firstName ? ` ${details.firstName},` : ''} ${details.outletName} பதிவு குறியீடு ${details.otpCode}. 5 நிமிடம். தொடர்: ${details.recoveryUrl} -SLT`
+    }
+
+    return this.sendSMS({
+      to: mobileNumber,
+      message: messages[language]
+    })
+  }
+
+  /**
+   * Send token number and queue position with tracking URL
+   */
+  async sendTokenConfirmation(
+    mobileNumber: string,
+    details: {
+      firstName: string
+      tokenNumber: number
+      queuePosition: number
+      outletName: string
+      estimatedWait: number
+      trackingUrl: string
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SMSResponse> {
+    const messages = {
+      en: `SLT DQMS: Dear ${details.firstName}, Token #${details.tokenNumber} at ${details.outletName}. Position: ${details.queuePosition}. Est. wait: ${details.estimatedWait} min. Track: ${details.trackingUrl} -SLT`,
+      si: `SLT DQMS: ${details.firstName}, ${details.outletName} ටෝකන් #${details.tokenNumber}. ස්ථානය: ${details.queuePosition}. ඇස්තමේන්තු: ${details.estimatedWait} මිනි. ට්‍රැක්: ${details.trackingUrl} -SLT`,
+      ta: `SLT DQMS: ${details.firstName}, ${details.outletName} டోக்கன் #${details.tokenNumber}. நிலை: ${details.queuePosition}. மதிப்பீடு: ${details.estimatedWait} நிமி. கண்காணி: ${details.trackingUrl} -SLT`
+    }
+
+    return this.sendSMS({
+      to: mobileNumber,
+      message: messages[language]
+    })
+  }
+
+  /**
    * Send registration confirmation
    */
   async sendRegistrationConfirmation(
