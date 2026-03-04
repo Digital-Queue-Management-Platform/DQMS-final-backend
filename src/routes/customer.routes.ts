@@ -460,11 +460,13 @@ router.post("/register", async (req, res) => {
     console.log(`Successfully created token #${token.tokenNumber} for customer ${token.customer.name}`)
 
     // Calculate queue position and estimated wait time
+    const lastReset = getLastDailyReset()
     const queuePosition = await prisma.token.count({
       where: {
         outletId: token.outletId,
         status: "waiting",
         tokenNumber: { lt: token.tokenNumber },
+        createdAt: { gte: lastReset },
       },
     }) + 1
 
@@ -550,11 +552,13 @@ router.get("/token/:tokenId", async (req, res) => {
     }
 
     // Calculate `position in queue`
+    const lastReset = getLastDailyReset()
     const position = await prisma.token.count({
       where: {
         outletId: token.outletId,
         status: "waiting",
         tokenNumber: { lt: token.tokenNumber },
+        createdAt: { gte: lastReset },
       },
     })
 
@@ -626,11 +630,13 @@ router.post("/lookup", async (req, res) => {
         let estimatedWait = null
         
         if (token.status === 'waiting') {
+          const lastReset = getLastDailyReset()
           queuePosition = await prisma.token.count({
             where: {
               outletId: token.outletId,
               status: "waiting",
               tokenNumber: { lt: token.tokenNumber },
+              createdAt: { gte: lastReset },
             },
           }) + 1
 
@@ -705,11 +711,13 @@ router.get("/t/:shortId", async (req, res) => {
     let estimatedWait = 0
     
     if (token.status === 'waiting') {
+      const lastReset = getLastDailyReset()
       queuePosition = await prisma.token.count({
         where: {
           outletId: token.outletId,
           status: "waiting",
           tokenNumber: { lt: token.tokenNumber },
+          createdAt: { gte: lastReset },
         },
       }) + 1
 
@@ -773,11 +781,13 @@ router.get("/track/:tokenId", async (req, res) => {
     let estimatedWait = 0
     
     if (token.status === 'waiting') {
+      const lastReset = getLastDailyReset()
       queuePosition = await prisma.token.count({
         where: {
           outletId: token.outletId,
           status: "waiting",
           tokenNumber: { lt: token.tokenNumber },
+          createdAt: { gte: lastReset },
         },
       }) + 1
 
