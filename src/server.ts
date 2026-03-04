@@ -26,6 +26,7 @@ import gmRoutes from "./routes/gm.routes"
 import dgmRoutes from "./routes/dgm.routes"
 import kioskRoutes from "./routes/kiosk.routes"
 import billRoutes from "./routes/bill.routes"
+import sltSmsRoutes from "./routes/slt-sms.routes"
 
 export const prisma = new PrismaClient()
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
@@ -122,6 +123,7 @@ app.use("/api/twilio", twilioRoutes)
 app.use("/api/service-case", serviceCaseRoutes)
 app.use("/api/kiosk", kioskRoutes)
 app.use("/api/bills", billRoutes)
+app.use("/api/slt-sms", sltSmsRoutes)
 app.use("/api/gm", gmRoutes)
 app.use("/api/dgm", dgmRoutes)
 

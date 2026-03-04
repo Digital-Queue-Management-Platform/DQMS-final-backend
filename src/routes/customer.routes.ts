@@ -3,6 +3,7 @@ import { prisma, broadcast } from "../server"
 import { getLastDailyReset } from "../utils/resetWindow"
 import * as jwt from "jsonwebtoken"
 import Twilio from "twilio"
+import smsHelper from "../utils/smsHelper"
 
 const router = Router()
 
@@ -49,31 +50,9 @@ router.post("/otp/start", async (req, res) => {
   try {
     const { mobileNumber, preferredLanguage } = req.body || {}
     if (!mobileNumber) return res.status(400).json({ error: "mobileNumber is required" })
-    // Read env at request time to avoid early-evaluation issues
-    const ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || ""
-    const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || ""
-    const FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || ""
-    const MSG_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || ""
+    
     const OTP_DEV_MODE = process.env.OTP_DEV_MODE === "true"
     const OTP_DEV_ECHO = process.env.OTP_DEV_ECHO === "true"
-
-    const twilioClient = (ACCOUNT_SID && AUTH_TOKEN) ? Twilio(ACCOUNT_SID, AUTH_TOKEN) : null
-    const twilioConfigured = !!(twilioClient && (MSG_SERVICE_SID || FROM_NUMBER))
-
-    // Debug instrumentation (non-secret) to trace 500 causes
-    const debugMeta = {
-      OTP_DEV_MODE,
-      OTP_DEV_ECHO,
-      hasTwilioClient: !!twilioClient,
-      TWILIO_MESSAGING_SERVICE_SID_PRESENT: !!MSG_SERVICE_SID,
-      TWILIO_FROM_NUMBER_PRESENT: !!FROM_NUMBER,
-      twilioConfigured,
-      preferredLanguage,
-      rawMobileNumber: mobileNumber,
-    }
-    if (process.env.NODE_ENV !== 'production') {
-      console.log('[OTP-START][DEBUG] incoming request', debugMeta)
-    }
 
     const key = mobileNumber
     const existing = otpStore.get(key)
@@ -91,53 +70,42 @@ router.post("/otp/start", async (req, res) => {
     }
     otpStore.set(key, record)
 
-    const to = toE164(mobileNumber)
     // Localize OTP message by language; fallback to English
     const lang = (typeof preferredLanguage === 'string' ? preferredLanguage : 'en') as 'en' | 'si' | 'ta'
-    const otpBodies: Record<'en' | 'si' | 'ta', string> = {
-      en: `Your verification code is ${code}. It expires in 1 minute.`,
-      si: `ඔබගේ තහවුරු කේතය ${code}. එය මිනිත්තුවකින් කල් ඉකුත් වේ.`,
-      ta: `உங்கள் சரிபார்ப்பு குறியீடு ${code} ஆகும். இது 1 நிமிடத்தில் காலாவதியாகும்.`,
-    }
-    const body = otpBodies[otpBodies[lang] ? lang : 'en']
 
-    // DEV mode takes precedence even if Twilio is configured
+    // DEV mode takes precedence
     if (OTP_DEV_MODE) {
-      console.log(`[OTP-DEV] OTP for ${to}: ${code}`)
+      console.log(`[OTP-DEV] OTP for ${mobileNumber}: ${code}`)
       return res.json({ success: true, message: "OTP sent (dev mode)", ...(OTP_DEV_ECHO ? { devCode: code } : {}) })
     }
 
-    if (!twilioConfigured) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('[OTP-START][ERROR] Twilio not configured', {
-          hasTwilioClient: !!twilioClient,
-          TWILIO_MESSAGING_SERVICE_SID_PRESENT: !!MSG_SERVICE_SID,
-          TWILIO_FROM_NUMBER_PRESENT: !!FROM_NUMBER,
+    // Use unified SMS helper that supports both Twilio and SLT SMS
+    try {
+      const result = await smsHelper.sendOTP(mobileNumber, code, lang)
+      
+      if (result.success) {
+        console.log(`[OTP] Sent via ${result.provider} to ${mobileNumber}`)
+        return res.json({ success: true, message: "OTP sent" })
+      } else {
+        console.error('[OTP] Failed to send:', result.error)
+        return res.status(500).json({ 
+          error: result.error || "Failed to send OTP",
+          ...(process.env.NODE_ENV !== 'production' ? { provider: result.provider } : {})
         })
       }
-      return res.status(500).json({ error: "OTP service not configured", ...(process.env.NODE_ENV !== 'production' ? { details: 'Missing Twilio credentials', meta: debugMeta } : {}) })
+    } catch (smsError: any) {
+      console.error("[OTP][SMS_ERROR]", smsError?.message)
+      return res.status(500).json({ 
+        error: "Failed to send OTP via SMS",
+        ...(process.env.NODE_ENV !== 'production' ? { details: smsError?.message } : {})
+      })
     }
-
-    // Prefer Messaging Service SID if available; fallback to from number
-    const params: any = { to, body }
-    if (MSG_SERVICE_SID) {
-      params.messagingServiceSid = MSG_SERVICE_SID
-    } else if (FROM_NUMBER) {
-      params.from = FROM_NUMBER
-    }
-
-    // Wrap Twilio call to surface errors
-    try {
-      await twilioClient!.messages.create(params)
-    } catch (twErr: any) {
-      console.error('[OTP-START][TWILIO_ERROR]', twErr?.message, twErr?.code)
-      return res.status(500).json({ error: 'Failed to send OTP via provider', ...(process.env.NODE_ENV !== 'production' ? { providerError: twErr?.message, code: twErr?.code } : {}) })
-    }
-
-    res.json({ success: true, message: "OTP sent" })
   } catch (error: any) {
     console.error("[OTP-START][UNCAUGHT]", error?.message)
-    return res.status(500).json({ error: "Failed to send OTP", ...(process.env.NODE_ENV !== 'production' ? { uncaught: error?.message, stack: error?.stack } : {}) })
+    return res.status(500).json({ 
+      error: "Failed to send OTP",
+      ...(process.env.NODE_ENV !== 'production' ? { uncaught: error?.message } : {})
+    })
   }
 })
 
