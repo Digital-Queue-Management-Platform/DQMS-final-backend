@@ -57,6 +57,21 @@ router.get("/outlet/:outletId", async (req, res) => {
       fromAppointment: appointmentTokenIdSet.has(t.id),
     }))
 
+    // Optional officer-specific filtering: hide tokens this officer has transferred away.
+    const { officerId } = req.query
+    let filteredWaitingTokens = waitingWithFlags
+    if (officerId) {
+      const transferredFromOfficer = await prisma.transferLog.findMany({
+        where: {
+          fromOfficerId: String(officerId),
+          createdAt: { gte: lastReset },
+        },
+        select: { tokenId: true },
+      })
+      const transferredTokenIds = new Set(transferredFromOfficer.map((t) => t.tokenId))
+      filteredWaitingTokens = waitingWithFlags.filter((t: any) => !transferredTokenIds.has(t.id))
+    }
+
     const inServiceTokens = await prisma.token.findMany({
       where: {
         outletId,
@@ -77,10 +92,10 @@ router.get("/outlet/:outletId", async (req, res) => {
     })
 
     res.json({
-      waiting: waitingWithFlags,
+      waiting: filteredWaitingTokens,
       inService: inServiceTokens,
       availableOfficers,
-      totalWaiting: waitingTokens.length,
+      totalWaiting: filteredWaitingTokens.length,
     })
   } catch (error) {
     console.error("Queue fetch error:", error)
@@ -151,25 +166,6 @@ router.get('/regions', async (req, res) => {
       console.log("Fallback: returning regions with basic data")
       res.json(regionsBasic)
     } catch (fallbackError) {
-
-        // If officerId is provided, exclude tokens transferred from this officer
-        const { officerId } = req.query
-        let filteredWaitingTokens = waitingWithFlags
-    
-        if (officerId) {
-          // Get token IDs transferred from this officer
-          const transferredFromOfficer = await prisma.transferLog.findMany({
-            where: {
-              fromOfficerId: String(officerId),
-              createdAt: { gte: lastReset },
-            },
-            select: { tokenId: true },
-          })
-          const transferredTokenIds = new Set(transferredFromOfficer.map((t) => t.tokenId))
-      
-          // Filter out tokens transferred from this officer
-          filteredWaitingTokens = waitingWithFlags.filter((t) => !transferredTokenIds.has(t.id))
-        }
       console.error('Regions fallback also failed:', fallbackError)
       res.status(500).json({ error: 'Failed to fetch regions' })
     }
