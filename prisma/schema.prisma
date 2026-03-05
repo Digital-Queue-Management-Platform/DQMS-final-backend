@@ -380,3 +380,16 @@ model OTP {
   @@index([mobileNumber, userType, verified])
   @@index([expiresAt])
 }
+
+// System Health Check Logs: track health status over time for real uptime calculation
+model HealthCheck {
+  id            String   @id @default(uuid())
+  serviceName   String   // "database" | "application" | "sms_gateway" | "email_service"
+  status        String   // "healthy" | "warning" | "error"
+  responseTime  Int?     // Response time in milliseconds
+  errorMessage  String?  // Error details if status is not healthy
+  checkedAt     DateTime @default(now())
+
+  @@index([serviceName, checkedAt])
+  @@index([checkedAt])
+}

@@ -8,6 +8,7 @@ import { PrismaClient } from "@prisma/client"
 import compression from "compression"
 import pino from "pino"
 import { getNextDailyReset, getLastDailyReset } from "./utils/resetWindow"
+import { healthMonitoringService } from './services/healthMonitoringService'
 
 // Import routes
 import customerRoutes from "./routes/customer.routes"
@@ -231,6 +232,10 @@ const PORT = process.env.PORT || 3001
 
 server.listen(PORT, () => {
   logger.info(`Server running on port ${PORT}`)
+  
+  // Start health monitoring service
+  logger.info('Starting system health monitoring...')
+  healthMonitoringService.startPeriodicHealthChecks(5) // Check every 5 minutes
 })
 
 // Periodic job: detect long-wait tokens and create alerts
