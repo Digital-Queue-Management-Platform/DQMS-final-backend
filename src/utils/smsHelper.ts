@@ -217,9 +217,9 @@ class UnifiedSmsHelper {
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SendSMSResult> {
     const messages = {
-      en: `Welcome ${details.name}! Your token #${details.tokenNumber} at ${details.outletName}. Est. wait: ${details.estimatedWait} min. -DQMS`,
-      si: `සාදරයෙන් පිළිගනිමු ${details.name}! ඔබගේ ටෝකන් #${details.tokenNumber} - ${details.outletName}. ඇස්තමේන්තු් පොරොත්තුව: ${details.estimatedWait} මිනි. -DQMS`,
-      ta: `வரவேற்கிறோம் ${details.name}! உங்கள் டோக்கன் #${details.tokenNumber} - ${details.outletName}. மதிப்பீட்டு காத்திருப்பு: ${details.estimatedWait} நிமி. -DQMS`
+      en: `Dear Valued Customer Your token number ${details.tokenNumber} at ${details.outletName} is now active. SLT-MOBITEL`,
+      si: `ගරු ගිණුම්කරු ඔබගේ ටෝකන් සංඛ්‍යා ${details.tokenNumber} - ${details.outletName} දැන් ක්‍රියාකාරී ය. SLT-MOBITEL`,
+      ta: `மதிப்புமிக்க வாடிக்கையாளர் உங்கள் டோக்கன் எண் ${details.tokenNumber} - ${details.outletName} இப்போது செயல்பாட்டுத் தமாய உள்ளது. SLT-MOBITEL`
     }
 
     return this.sendSMS({
