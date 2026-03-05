@@ -32,17 +32,16 @@ const FIVE_MIN = 1 * 60 * 1000
 const RESEND_WINDOW = 30 * 1000
 
 function toE164(mobile: string): string {
-  // Default to Sri Lanka if starting with 0 and length 10: 07XXXXXXXX -> +947XXXXXXXX
+  // Relaxed validation: Just normalize to 10 digits if starting with 0, or keep as is.
   const cleaned = (mobile || "").replace(/\D/g, "")
   if (!cleaned) return mobile
   if (cleaned.startsWith("0") && cleaned.length === 10) {
     return "+94" + cleaned.substring(1)
   }
+  // Allow other formats as provided by customer
   if (cleaned.startsWith("94") && cleaned.length === 11) {
     return "+" + cleaned
   }
-  if (mobile.startsWith("+")) return mobile
-  // As a fallback, prefix + if it seems already international without +
   return mobile.startsWith("+") ? mobile : "+" + cleaned
 }
 
@@ -51,7 +50,7 @@ router.post("/registration/otp/start", async (req, res) => {
   try {
     const { mobileNumber, customerName, outletId, preferredLanguage } = req.body || {}
     if (!mobileNumber) return res.status(400).json({ error: "mobileNumber is required" })
-    
+
     const OTP_DEV_MODE = process.env.OTP_DEV_MODE === "true"
     const OTP_DEV_ECHO = process.env.OTP_DEV_ECHO === "true"
 
@@ -112,36 +111,36 @@ router.post("/registration/otp/start", async (req, res) => {
     // Send enhanced OTP SMS with recovery URL
     try {
       const firstName = customerName ? customerName.split(' ')[0] : undefined
-      
+
       await sltSmsService.sendCustomerRegistrationOTP(mobileNumber, {
         firstName,
         otpCode: code,
         outletName,
         recoveryUrl
       }, lang)
-      
+
       console.log(`[OTP] Registration OTP sent to ${mobileNumber}`)
       return res.json({ success: true, message: "Registration OTP sent" })
     } catch (smsError: any) {
       console.error('[OTP] Failed to send registration SMS:', smsError)
-      
+
       // Fallback to basic SMS helper
       try {
         const result = await smsHelper.sendOTP(mobileNumber, code, lang)
-        
+
         if (result.success) {
           console.log(`[OTP] Fallback: Sent via ${result.provider} to ${mobileNumber}`)
           return res.json({ success: true, message: "OTP sent" })
         } else {
           console.error('[OTP] Fallback also failed:', result.error)
-          return res.status(500).json({ 
+          return res.status(500).json({
             error: result.error || "Failed to send OTP",
             ...(process.env.NODE_ENV !== 'production' ? { provider: result.provider } : {})
           })
         }
       } catch (fallbackError: any) {
         console.error("[OTP][FALLBACK_ERROR]", fallbackError?.message)
-        return res.status(500).json({ 
+        return res.status(500).json({
           error: "Failed to send OTP via SMS",
           ...(process.env.NODE_ENV !== 'production' ? { details: fallbackError?.message } : {})
         })
@@ -149,7 +148,7 @@ router.post("/registration/otp/start", async (req, res) => {
     }
   } catch (error: any) {
     console.error("[REGISTRATION-OTP][UNCAUGHT]", error?.message)
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: "Failed to send registration OTP",
       ...(process.env.NODE_ENV !== 'production' ? { uncaught: error?.message } : {})
     })
@@ -161,7 +160,7 @@ router.post("/otp/start", async (req, res) => {
   try {
     const { mobileNumber, preferredLanguage } = req.body || {}
     if (!mobileNumber) return res.status(400).json({ error: "mobileNumber is required" })
-    
+
     const OTP_DEV_MODE = process.env.OTP_DEV_MODE === "true"
     const OTP_DEV_ECHO = process.env.OTP_DEV_ECHO === "true"
 
@@ -193,27 +192,27 @@ router.post("/otp/start", async (req, res) => {
     // Use unified SMS helper that supports both Twilio and SLT SMS
     try {
       const result = await smsHelper.sendOTP(mobileNumber, code, lang)
-      
+
       if (result.success) {
         console.log(`[OTP] Sent via ${result.provider} to ${mobileNumber}`)
         return res.json({ success: true, message: "OTP sent" })
       } else {
         console.error('[OTP] Failed to send:', result.error)
-        return res.status(500).json({ 
+        return res.status(500).json({
           error: result.error || "Failed to send OTP",
           ...(process.env.NODE_ENV !== 'production' ? { provider: result.provider } : {})
         })
       }
     } catch (smsError: any) {
       console.error("[OTP][SMS_ERROR]", smsError?.message)
-      return res.status(500).json({ 
+      return res.status(500).json({
         error: "Failed to send OTP via SMS",
         ...(process.env.NODE_ENV !== 'production' ? { details: smsError?.message } : {})
       })
     }
   } catch (error: any) {
     console.error("[OTP-START][UNCAUGHT]", error?.message)
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: "Failed to send OTP",
       ...(process.env.NODE_ENV !== 'production' ? { uncaught: error?.message } : {})
     })
@@ -475,7 +474,7 @@ router.post("/register", async (req, res) => {
     // Send token confirmation SMS with tracking URL
     try {
       const firstName = token.customer.name.split(' ')[0]
-      
+
       // Build tracking URL
       const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
       let baseUrl = origins[0] || ''
@@ -492,13 +491,20 @@ router.post("/register", async (req, res) => {
       const shortId = token.id.substring(0, 8)
       const trackingUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
 
+      // Fetch service names for SMS
+      const services = await prisma.service.findMany({
+        where: { code: { in: serviceTypes } },
+        select: { title: true }
+      });
+      const serviceNames = services.map(s => s.title).join(", ") || "Service";
+
       await sltSmsService.sendTokenConfirmation(token.customer.mobileNumber, {
         firstName,
         tokenNumber: token.tokenNumber,
         queuePosition,
         outletName: token.outlet?.name || 'SLT Office',
-        estimatedWait,
-        trackingUrl
+        trackingUrl,
+        services: serviceNames
       })
       console.log(`✓ Token confirmation SMS sent to ${token.customer.mobileNumber}`)
     } catch (smsError) {
@@ -600,7 +606,7 @@ router.post("/lookup", async (req, res) => {
 
     // Find all active tokens for this mobile number (last 24 hours to avoid too many results)
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000)
-    
+
     const tokens = await prisma.token.findMany({
       where: {
         customer: { mobileNumber },
@@ -617,7 +623,7 @@ router.post("/lookup", async (req, res) => {
     })
 
     if (tokens.length === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: "No recent tokens found for this mobile number",
         suggestion: "Please visit the counter or register a new token"
       })
@@ -628,7 +634,7 @@ router.post("/lookup", async (req, res) => {
       tokens.map(async (token) => {
         let queuePosition = null
         let estimatedWait = null
-        
+
         if (token.status === 'waiting') {
           const lastReset = getLastDailyReset()
           queuePosition = await prisma.token.count({
@@ -709,7 +715,7 @@ router.get("/t/:shortId", async (req, res) => {
     // Calculate position in queue if still waiting
     let queuePosition = 0
     let estimatedWait = 0
-    
+
     if (token.status === 'waiting') {
       const lastReset = getLastDailyReset()
       queuePosition = await prisma.token.count({
@@ -779,7 +785,7 @@ router.get("/track/:tokenId", async (req, res) => {
     // Calculate position in queue if still waiting
     let queuePosition = 0
     let estimatedWait = 0
-    
+
     if (token.status === 'waiting') {
       const lastReset = getLastDailyReset()
       queuePosition = await prisma.token.count({
@@ -830,8 +836,8 @@ router.get("/track/:tokenId", async (req, res) => {
 function getStatusMessage(status: string, queuePosition: number, estimatedWait: number): string {
   switch (status) {
     case 'waiting':
-      return queuePosition === 1 
-        ? 'You are next in line!' 
+      return queuePosition === 1
+        ? 'You are next in line!'
         : `You are position ${queuePosition} in queue. Estimated wait: ${estimatedWait} minutes.`
     case 'in_service':
       return 'You are currently being served.'

@@ -103,7 +103,7 @@ class SLTSmsService {
       }
 
       console.log(`[SLT SMS] Sending SMS to ${normalizedMobile}`)
-      
+
       // Send request to SLT SMS API using GET with query parameters
       const response = await this.axiosInstance.get('', {
         params: {
@@ -144,8 +144,8 @@ class SLTSmsService {
    * Send OTP SMS
    */
   async sendOTP(
-    mobileNumber: string, 
-    otpCode: string, 
+    mobileNumber: string,
+    otpCode: string,
     userType?: string,
     userName?: string,
     language: 'en' | 'si' | 'ta' = 'en'
@@ -160,14 +160,14 @@ class SLTSmsService {
     }
 
     const role = userType && roleNames[userType] ? roleNames[userType] : null
-    
+
     // Extract first name only for personalization
     const firstName = userName ? userName.split(' ')[0] : null
     const greeting = firstName ? `Dear ${firstName},` : ''
 
     // Keep messages concise and professional
     const otpMessages = {
-      en: role 
+      en: role
         ? `SLT DQMS: ${greeting} Your ${role.en} login code is ${otpCode}. Valid for 5 minutes. Do not share this code. -SLT Mobitel`
         : `SLT DQMS: ${greeting} Your login code is ${otpCode}. Valid for 5 minutes. Do not share this code. -SLT Mobitel`,
       si: role
@@ -267,7 +267,7 @@ class SLTSmsService {
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
     console.log(`[SLT SMS CALL] Attempting to send customer called SMS to ${mobileNumber} for token #${details.tokenNumber}`)
-    
+
     const messages = {
       en: `SLT DQMS: Dear ${details.firstName}, Token #${details.tokenNumber} proceed to Counter ${details.counterNumber} at ${details.outletName}. Status: ${details.recoveryUrl} -SLT`,
       si: `SLT DQMS: ${details.firstName}, ටෝකන් #${details.tokenNumber} කරුණාකර ${details.outletName} කවුන්ටර් ${details.counterNumber} වෙත යන්න. තත්වය: ${details.recoveryUrl} -SLT`,
@@ -296,7 +296,7 @@ class SLTSmsService {
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
     console.log(`[SLT SMS SKIP] Attempting to send skip SMS to ${mobileNumber} for token #${details.tokenNumber}`)
-    
+
     const messages = {
       en: `SLT DQMS: Dear ${details.firstName}, Token #${details.tokenNumber} skipped at ${details.outletName}. Check status: ${details.recoveryUrl} -SLT`,
       si: `SLT DQMS: ${details.firstName}, ටෝකන් #${details.tokenNumber} ${details.outletName} මඟ හැරිණි. තත්වය: ${details.recoveryUrl} -SLT`,
@@ -304,7 +304,7 @@ class SLTSmsService {
     }
 
     console.log(`[SLT SMS SKIP] Message content (${messages[language].length} chars): "${messages[language]}"`)
-    
+
     if (messages[language].length > 160) {
       console.warn(`[SLT SMS SKIP] WARNING: Message exceeds 160 chars (${messages[language].length}), might be split or rejected`)
     }
@@ -329,7 +329,7 @@ class SLTSmsService {
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
     console.log(`[SLT SMS RECALL] Attempting to send recall SMS to ${mobileNumber} for token #${details.tokenNumber}`)
-    
+
     const messages = {
       en: `SLT DQMS: Dear ${details.firstName}, Token #${details.tokenNumber} recalled at ${details.outletName}. Check status: ${details.recoveryUrl} -SLT`,
       si: `SLT DQMS: ${details.firstName}, ටෝකන් #${details.tokenNumber} ${details.outletName} නැවත ඇමතිණි. තත්වය: ${details.recoveryUrl} -SLT`,
@@ -337,7 +337,7 @@ class SLTSmsService {
     }
 
     console.log(`[SLT SMS RECALL] Message content (${messages[language].length} chars): "${messages[language]}"`)
-    
+
     if (messages[language].length > 160) {
       console.warn(`[SLT SMS RECALL] WARNING: Message exceeds 160 chars (${messages[language].length}), might be split or rejected`)
     }
@@ -362,7 +362,7 @@ class SLTSmsService {
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
     console.log(`[SLT SMS COMPLETE] Attempting to send service completion SMS to ${mobileNumber} for ref ${details.refNumber}`)
-    
+
     const messages = {
       en: `SLT DQMS: Dear ${details.firstName}, service completed. Ref: ${details.refNumber}. Please rate us: ${details.feedbackUrl} -SLT`,
       si: `SLT DQMS: ${details.firstName}, සේවාව සම්පූර්ණයි. Ref: ${details.refNumber}. කරුණාකර අගයන්න: ${details.feedbackUrl} -SLT`,
@@ -370,7 +370,7 @@ class SLTSmsService {
     }
 
     console.log(`[SLT SMS COMPLETE] Message content (${messages[language].length} chars): "${messages[language]}"`)
-    
+
     if (messages[language].length > 160) {
       console.warn(`[SLT SMS COMPLETE] WARNING: Message exceeds 160 chars (${messages[language].length}), might be split or rejected`)
     }
@@ -395,7 +395,7 @@ class SLTSmsService {
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
     const greeting = details.firstName ? ` Dear ${details.firstName},` : ''
-    
+
     const messages = {
       en: `SLT DQMS:${greeting} Your registration code for ${details.outletName} is ${details.otpCode}. Valid 5 min. Continue: ${details.recoveryUrl} -SLT`,
       si: `SLT DQMS:${details.firstName ? ` ${details.firstName},` : ''} ${details.outletName} ලියාපදිංචි කේතය ${details.otpCode}. මිනිත්තු 5. පුරිදු: ${details.recoveryUrl} -SLT`,
@@ -418,15 +418,15 @@ class SLTSmsService {
       tokenNumber: number
       queuePosition: number
       outletName: string
-      estimatedWait: number
       trackingUrl: string
+      services: string
     },
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
     const messages = {
-      en: `SLT DQMS: Dear ${details.firstName}, Token #${details.tokenNumber} at ${details.outletName}. Position: ${details.queuePosition}. Est. wait: ${details.estimatedWait} min. Track: ${details.trackingUrl} -SLT`,
-      si: `SLT DQMS: ${details.firstName}, ${details.outletName} ටෝකන් #${details.tokenNumber}. ස්ථානය: ${details.queuePosition}. ඇස්තමේන්තු: ${details.estimatedWait} මිනි. ට්‍රැක්: ${details.trackingUrl} -SLT`,
-      ta: `SLT DQMS: ${details.firstName}, ${details.outletName} டోக்கன் #${details.tokenNumber}. நிலை: ${details.queuePosition}. மதிப்பீடு: ${details.estimatedWait} நிமி. கண்காணி: ${details.trackingUrl} -SLT`
+      en: `SLT DQMS: Dear ${details.firstName}, Token #${details.tokenNumber} for ${details.services} at ${details.outletName}. Position: ${details.queuePosition}. Track: ${details.trackingUrl} -SLT`,
+      si: `SLT DQMS: ${details.firstName}, ${details.outletName} හි ${details.services} සඳහා ටෝකන් #${details.tokenNumber}. ස්ථානය: ${details.queuePosition}. ට්‍රැක්: ${details.trackingUrl} -SLT`,
+      ta: `SLT DQMS: ${details.firstName}, ${details.outletName} இல் ${details.services} க்கான டோக்கன் #${details.tokenNumber}. நிலை: ${details.queuePosition}. கண்காணி: ${details.trackingUrl} -SLT`
     }
 
     return this.sendSMS({

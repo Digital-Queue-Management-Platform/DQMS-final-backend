@@ -106,17 +106,13 @@ router.use(authenticateKiosk)
 // Get available services
 router.get("/services", async (req, res) => {
   try {
-    const services = await prisma.service.findMany({
-      where: { isActive: true },
-      select: {
-        id: true,
-        code: true,
-        title: true,
-        description: true
-      },
-      orderBy: { title: 'asc' }
-    })
-
+    // Use raw query to avoid Prisma client issues before regeneration
+    const services = await prisma.$queryRaw`
+      SELECT "id", "code", "title", "description", "order"
+      FROM "Service" 
+      WHERE "isActive" = true 
+      ORDER BY "order" ASC, "createdAt" ASC
+    `
     res.json(services)
   } catch (error) {
     console.error("Fetch services error:", error)

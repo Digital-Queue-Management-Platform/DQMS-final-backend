@@ -107,17 +107,23 @@ router.post("/book", async (req, res) => {
     try {
       const when = new Date(appointmentAt)
       const whenStr = when.toLocaleString()
-      const services = Array.isArray(serviceTypes) ? serviceTypes.join(', ') : ''
-      
+
+      // Map service codes to titles for SMS
+      const serviceRecords = await prisma.service.findMany({
+        where: { code: { in: serviceTypes } },
+        select: { title: true }
+      })
+      const services = serviceRecords.map(s => s.title).join(', ') || ''
+
       const lang: 'en' | 'si' | 'ta' = (preferredLanguage === 'si' || preferredLanguage === 'ta') ? preferredLanguage : 'en'
-      
+
       const result = await smsHelper.sendAppointmentConfirmation(mobileNumber, {
         name,
         outletName: outlet.name,
         dateTime: whenStr,
         services
       }, lang)
-      
+
       if (result.success) {
         console.log(`[APPT][SMS] Sent confirmation via ${result.provider}`)
       } else {
@@ -178,18 +184,13 @@ router.get("/outlet/:outletId", async (req, res) => {
 // Get available services for appointments
 router.get("/services", async (req, res) => {
   try {
-    const services = await prisma.service.findMany({
-      where: { isActive: true },
-      select: {
-        id: true,
-        code: true,
-        title: true,
-        description: true,
-        isActive: true
-      },
-      orderBy: { title: 'asc' }
-    })
-
+    // Use raw query to avoid Prisma client issues before regeneration
+    const services = await prisma.$queryRaw`
+      SELECT "id", "code", "title", "description", "isActive", "order"
+      FROM "Service" 
+      WHERE "isActive" = true 
+      ORDER BY "order" ASC, "createdAt" ASC
+    `
     res.json(services)
   } catch (error) {
     console.error("Fetch services error:", error)

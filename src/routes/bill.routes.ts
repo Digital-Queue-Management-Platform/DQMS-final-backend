@@ -11,11 +11,11 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
   try {
     const { telephoneNumber } = req.params;
 
-    // Validate telephone number format (SLT numbers: 10 digits starting with 01, 041, or 081)
-    const phoneRegex = /^(01\d{8}|041\d{7}|081\d{7})$/;
+    // Relaxed validation: Just check for 10 digits
+    const phoneRegex = /^\d{10}$/;
     if (!phoneRegex.test(telephoneNumber)) {
-      return res.status(400).json({ 
-        error: 'Invalid SLT telephone number. Must be 10 digits starting with 01, 041, or 081.' 
+      return res.status(400).json({
+        error: 'Invalid telephone number. Must be 10 digits.'
       });
     }
 
@@ -23,7 +23,7 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
       // Fetch bill information from SLT API
       console.log(`Fetching bill from SLT API for: ${telephoneNumber}`);
       const sltBillInfo = await fetchBillFromSltApi(telephoneNumber);
-      
+
       // Normalize the data (pass the queried number to ensure consistency)
       const normalizedData = normalizeSltBillData(sltBillInfo, telephoneNumber);
 
@@ -50,8 +50,8 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
         }
       });
 
-      res.json({ 
-        success: true, 
+      res.json({
+        success: true,
         bill,
         source: 'slt_api',
         smsNotification: {
@@ -64,7 +64,7 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
 
     } catch (apiError: any) {
       console.error('SLT API error, checking local cache:', apiError.message);
-      
+
       // If API fails, try to get cached data from database
       const cachedBill = await prisma.sltBill.findUnique({
         where: { telephoneNumber },
@@ -84,8 +84,8 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
 
       if (cachedBill) {
         console.log('Returning cached bill data');
-        return res.json({ 
-          success: true, 
+        return res.json({
+          success: true,
           bill: cachedBill,
           source: 'cache', // Indicate data is from cache
           warning: 'Bill information may not be current. SLT API temporarily unavailable.'
@@ -93,8 +93,8 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
       }
 
       // If no cached data and API failed, return error
-      return res.status(404).json({ 
-        error: apiError.message || 'No account found for this telephone number.' 
+      return res.status(404).json({
+        error: apiError.message || 'No account found for this telephone number.'
       });
     }
 
@@ -113,11 +113,11 @@ router.post('/search', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Telephone number is required' });
     }
 
-    // Validate telephone number format
-    const phoneRegex = /^(01\d{8}|041\d{7}|081\d{7})$/;
+    // Relaxed validation: Just check for 10 digits
+    const phoneRegex = /^\d{10}$/;
     if (!phoneRegex.test(telephoneNumber)) {
-      return res.status(400).json({ 
-        error: 'Invalid SLT telephone number. Must be 10 digits starting with 01, 041, or 081.' 
+      return res.status(400).json({
+        error: 'Invalid telephone number. Must be 10 digits.'
       });
     }
 
@@ -125,7 +125,7 @@ router.post('/search', async (req: Request, res: Response) => {
       // Fetch bill information from SLT API
       console.log(`Searching bill from SLT API for: ${telephoneNumber}`);
       const sltBillInfo = await fetchBillFromSltApi(telephoneNumber);
-      
+
       // Normalize the data (pass the queried number to ensure consistency)
       const normalizedData = normalizeSltBillData(sltBillInfo, telephoneNumber);
 
@@ -152,8 +152,8 @@ router.post('/search', async (req: Request, res: Response) => {
         }
       });
 
-      res.json({ 
-        success: true, 
+      res.json({
+        success: true,
         bill,
         source: 'slt_api',
         smsNotification: {
@@ -166,7 +166,7 @@ router.post('/search', async (req: Request, res: Response) => {
 
     } catch (apiError: any) {
       console.error('SLT API error, checking local cache:', apiError.message);
-      
+
       // If API fails, try to get cached data from database
       const cachedBill = await prisma.sltBill.findUnique({
         where: { telephoneNumber },
@@ -186,8 +186,8 @@ router.post('/search', async (req: Request, res: Response) => {
 
       if (cachedBill) {
         console.log('Returning cached bill data');
-        return res.json({ 
-          success: true, 
+        return res.json({
+          success: true,
           bill: cachedBill,
           source: 'cache',
           warning: 'Bill information may not be current. SLT API temporarily unavailable.'
@@ -195,8 +195,8 @@ router.post('/search', async (req: Request, res: Response) => {
       }
 
       // If no cached data and API failed, return error
-      return res.status(404).json({ 
-        error: apiError.message || 'No account found for this telephone number.' 
+      return res.status(404).json({
+        error: apiError.message || 'No account found for this telephone number.'
       });
     }
 
@@ -257,7 +257,7 @@ router.post('/send-notification', async (req: Request, res: Response) => {
         to: mobileNumber,
         body: `Dear ${accountName},\n\nYour SLT bill details:\nAmount Due: Rs. ${formattedAmount}\nDue Date: ${dueDateFormatted}\nSLT Account: ${sltNumber}\n\nThank you!`
       });
-      
+
       if (result.success) {
         console.log(`[BILL][SMS] Sent bill notification via ${result.provider} to ${mobileNumber}`);
       } else {
@@ -268,17 +268,17 @@ router.post('/send-notification', async (req: Request, res: Response) => {
       // Don't fail the request if SMS fails
     }
 
-    res.json({ 
-      success: true, 
-      message: 'Notification sent successfully' 
+    res.json({
+      success: true,
+      message: 'Notification sent successfully'
     });
 
   } catch (error) {
     console.error('Error sending notification:', error);
     // Still return success even if there's an error (notification is non-critical)
-    res.json({ 
-      success: true, 
-      message: 'Notification processed' 
+    res.json({
+      success: true,
+      message: 'Notification processed'
     });
   }
 });
