@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - new-logins-back
+      - feat/sms-temp-update
   workflow_dispatch:  # Allow manual triggers
 
 env:
