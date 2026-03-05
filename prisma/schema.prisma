@@ -176,9 +176,12 @@ model Service {
   code             String             @unique
   title            String
   description      String?
+  order            Int                @default(999)
   isActive         Boolean            @default(true)
   createdAt        DateTime           @default(now())
   completedServices CompletedService[]
+  
+  @@index([order])
 }
 
 model CompletedService {

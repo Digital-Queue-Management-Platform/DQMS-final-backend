@@ -161,7 +161,7 @@ router.get('/regions', async (req, res) => {
 // Get all services (including inactive ones for admin management)
 router.get('/services', async (req, res) => {
   try {
-    const services = await prisma.$queryRaw`SELECT * FROM "Service" ORDER BY "createdAt" DESC`
+    const services = await prisma.$queryRaw`SELECT * FROM "Service" ORDER BY "order" ASC, "createdAt" ASC`
     res.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=120')
     res.json(services)
   } catch (error) {
@@ -173,12 +173,14 @@ router.get('/services', async (req, res) => {
 // Create service
 router.post('/services', async (req, res) => {
   try {
-    const { code, title, description } = req.body
+    const { code, title, description, order } = req.body
     if (!code || !title) return res.status(400).json({ error: 'code and title are required' })
 
+    const orderValue = order !== undefined ? order : 999
+
     const service = await prisma.$executeRaw`
-      INSERT INTO "Service" ("id","code","title","description","isActive","createdAt")
-      VALUES (gen_random_uuid()::text, ${code}, ${title}, ${description || null}, true, now())`
+      INSERT INTO "Service" ("id","code","title","description","order","isActive","createdAt")
+      VALUES (gen_random_uuid()::text, ${code}, ${title}, ${description || null}, ${orderValue}, true, now())`
 
     // return created row
     const created = await prisma.$queryRaw`SELECT * FROM "Service" WHERE "code" = ${code} LIMIT 1` as any[]
@@ -193,13 +195,14 @@ router.post('/services', async (req, res) => {
 router.patch('/services/:id', async (req, res) => {
   try {
     const { id } = req.params
-    const { title, description, isActive } = req.body
+    const { title, description, isActive, order } = req.body
 
     // build update query dynamically
     const data: any = {}
     if (title !== undefined) data.title = title
     if (description !== undefined) data.description = description
     if (isActive !== undefined) data.isActive = isActive
+    if (order !== undefined) data.order = order
 
     // use prisma.$executeRaw for simplicity
     const sets = Object.keys(data).map((k, idx) => `"${k}" = $${idx + 2}`).join(', ')
