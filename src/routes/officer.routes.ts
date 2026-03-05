@@ -973,7 +973,7 @@ router.post("/complete-service", async (req, res) => {
   }
 })
 
-// Transfer current customer to another service/counter
+// Transfer current customer to another service/counter (keeps service open until final closure)
 router.post("/transfer-token", async (req, res) => {
   console.log("[Transfer] Received request body:", JSON.stringify(req.body, null, 2))
   try {
@@ -1006,37 +1006,39 @@ router.post("/transfer-token", async (req, res) => {
     const txStart = Date.now()
     const result = await prisma.$transaction(async (tx) => {
       const step1Start = Date.now()
-      // 1. Complete the current token
-      console.log("[Transfer-Tx] Updating original token to completed...")
-      const completedToken = await tx.token.update({
+      // 1. Update the existing token with new service types and counter, keep service OPEN
+      console.log("[Transfer-Tx] Updating token with new service types and counter...")
+      const updatedToken = await tx.token.update({
         where: { id: tokenId },
         data: {
-          status: "completed",
-          completedAt: new Date(),
-          accountRef: notes ? (typeof notes === 'string' ? `${notes} (Transferred)` : "(Transferred)") : "(Transferred)",
-        },
-        include: { customer: true, outlet: true, officer: true }
-      })
-      console.log(`[Transfer-Tx] Step 1 (Update) took ${Date.now() - step1Start}ms`)
-
-      const step2Start = Date.now()
-      // 2. Create a new token for the same customer with the same token number
-      console.log("[Transfer-Tx] Creating new token for next service...")
-      const newToken = await (tx.token as any).create({
-        data: {
-          tokenNumber: originalToken.tokenNumber,
-          customerId: originalToken.customerId,
           serviceTypes: newServiceTypes,
-          outletId: originalToken.outletId,
           counterNumber: targetCounterNumber ? Number(targetCounterNumber) : null,
-          status: "waiting",
-          isPriority: true, // Also keep priority tag for faster service
-          isTransferred: true, // Explicit flag for the new dashboard section
-          preferredLanguages: originalToken.preferredLanguages || undefined,
+          status: "waiting", // Put back in waiting queue for new officer to pick up
+          assignedTo: null, // Unassign from current officer
+          isPriority: true, // Priority for faster service
+          isTransferred: true, // Mark as transferred for tracking
+          // Keep completedAt as null - service is NOT closed
+          // Keep accountRef unchanged - no "transferred" marker on same token
         },
         include: { customer: true, outlet: true }
       })
-      console.log(`[Transfer-Tx] Step 2 (Create) took ${Date.now() - step2Start}ms`)
+      console.log(`[Transfer-Tx] Step 1 (Token Update) took ${Date.now() - step1Start}ms`)
+
+      const step2Start = Date.now()
+      // 2. Create a TransferLog record for audit trail and reporting
+      console.log("[Transfer-Tx] Creating transfer log entry...")
+      await tx.transferLog.create({
+        data: {
+          tokenId: tokenId,
+          fromOfficerId: officerId,
+          fromCounterNumber: officer.counterNumber,
+          toCounterNumber: targetCounterNumber ? Number(targetCounterNumber) : null,
+          previousServiceTypes: originalToken.serviceTypes,
+          newServiceTypes: newServiceTypes,
+          notes: notes || null
+        }
+      })
+      console.log(`[Transfer-Tx] Step 2 (Transfer Log) took ${Date.now() - step2Start}ms`)
 
       const step3Start = Date.now()
       // 3. Set officer back to available
@@ -1047,18 +1049,17 @@ router.post("/transfer-token", async (req, res) => {
       })
       console.log(`[Transfer-Tx] Step 3 (Officer) took ${Date.now() - step3Start}ms`)
 
-      return { completedToken, newToken }
+      return { updatedToken }
     }, {
       timeout: 20000 // Increase timeout to 20 seconds
     })
 
-    console.log(`[Transfer] Transaction completed in ${Date.now() - txStart}ms. New token ID: ${result.newToken.id}`)
+    console.log(`[Transfer] Transaction completed in ${Date.now() - txStart}ms. Token ID: ${result.updatedToken.id}`)
 
-    // Broadcast updates
+    // Broadcast token update (not completion)
     try {
-      broadcast({ type: "TOKEN_COMPLETED", data: result.completedToken })
-      broadcast({ type: "NEW_TOKEN", data: result.newToken })
-      console.log("[Transfer] Broadcasts sent")
+      broadcast({ type: "TOKEN_UPDATED", data: result.updatedToken })
+      console.log("[Transfer] Broadcast sent")
     } catch (broadcastErr) {
       console.error("[Transfer] Broadcast failed:", broadcastErr)
     }
@@ -1066,10 +1067,10 @@ router.post("/transfer-token", async (req, res) => {
     // Send SMS to customer about the transfer
     try {
       console.log("[Transfer-SMS] Preparing SMS notification...")
-      const firstName = result.newToken.customer.name ? result.newToken.customer.name.split(" ")[0] : "Customer"
+      const firstName = result.updatedToken.customer.name ? result.updatedToken.customer.name.split(" ")[0] : "Customer"
 
       // Map service codes to titles for SMS
-      const tokenServiceCodes = Array.isArray(result.newToken.serviceTypes) ? result.newToken.serviceTypes : []
+      const tokenServiceCodes = Array.isArray(result.updatedToken.serviceTypes) ? result.updatedToken.serviceTypes : []
       const serviceRecords = await prisma.service.findMany({
         where: { code: { in: tokenServiceCodes } },
         select: { title: true }
@@ -1099,29 +1100,29 @@ router.post("/transfer-token", async (req, res) => {
 
       const messages = {
         en: targetCounterNumber
-          ? `SLT DQMS: Dear ${firstName}, your token #${result.newToken.tokenNumber} is transferred to Counter #${targetCounterNumber} for ${serviceNames}. Please proceed there. [PRIORITY]`
-          : `SLT DQMS: Dear ${firstName}, your token #${result.newToken.tokenNumber} is transferred for ${serviceNames}. Please wait for your turn. [PRIORITY]`,
+          ? `SLT DQMS: Dear ${firstName}, your token #${result.updatedToken.tokenNumber} is transferred to Counter #${targetCounterNumber} for ${serviceNames}. Please proceed there.`
+          : `SLT DQMS: Dear ${firstName}, your token #${result.updatedToken.tokenNumber} is transferred for ${serviceNames}. Please proceed to the next available counter.`,
         si: targetCounterNumber
-          ? `SLT DQMS: ${firstName}, ඔබගේ ටෝකන් #${result.newToken.tokenNumber} ${serviceNames} සඳහා කවුටර අංක ${targetCounterNumber} වෙත මාරු කරන ලදී. කරුණාකර එතැනට පැමිණෙන්න. [ප්‍රමුඛතාවය]`
-          : `SLT DQMS: ${firstName}, ඔබගේ ටෝකන් #${result.newToken.tokenNumber} ${serviceNames} සඳහා මාරු කරන ලදී. කරුණාකර ඔබගේ වාරය එනතෙක් රැඳී සිටින්න. [ප්‍රමුඛතාවය]`,
+          ? `SLT DQMS: ${firstName}, ඔබගේ ටෝකන් #${result.updatedToken.tokenNumber} ${serviceNames} සඳහා කවුටර අංක ${targetCounterNumber} වෙත මාරු කරන ලදී. කරුණාකර එතැනට පැමිණෙන්න.`
+          : `SLT DQMS: ${firstName}, ඔබගේ ටෝකන් #${result.updatedToken.tokenNumber} ${serviceNames} සඳහා මාරු කරන ලදී. කරුණාකර ඊළඟ ලබ්‍ධ කවුටරට පැමිණෙන්න.`,
         ta: targetCounterNumber
-          ? `SLT DQMS: ${firstName}, உங்கள் டோக்கன் #${result.newToken.tokenNumber} கவுண்டர் #${targetCounterNumber} க்கு ${serviceNames} க்காக மாற்றப்பட்டது. தயவுசெய்து அங்கு செல்லவும். [முன்னுரிமை]`
-          : `SLT DQMS: ${firstName}, உங்கள் டோக்கன் #${result.newToken.tokenNumber} ${serviceNames} க்காக மாற்றப்பட்டது. தயவுசெய்து உங்கள் முறைக்காக காத்திருக்கவும். [முன்னுரிமை]`
+          ? `SLT DQMS: ${firstName}, உங்கள் டோக்கன் #${result.updatedToken.tokenNumber} கவுண்டர் #${targetCounterNumber} க்கு ${serviceNames} க்காக மாற்றப்பட்டது. தயவுசெய்து அங்கு செல்லவும்.`
+          : `SLT DQMS: ${firstName}, உங்கள் டோக்கன் #${result.updatedToken.tokenNumber} ${serviceNames} க்காக மாற்றப்பட்டது. தயவுசெய்து அதிக திறந்த கவுண்டரக்கு செல்லவும்.`
       }
 
-      console.log(`[Transfer-SMS] Sending ${lang} message to ${result.newToken.customer.mobileNumber}`)
+      console.log(`[Transfer-SMS] Sending ${lang} message to ${result.updatedToken.customer.mobileNumber}`)
 
       await sltSmsService.sendSMS({
-        to: result.newToken.customer.mobileNumber,
+        to: result.updatedToken.customer.mobileNumber,
         message: messages[lang] || messages.en
       })
-      console.log(`✓ [Transfer-SMS] Sent successfully to ${result.newToken.customer.mobileNumber}`)
+      console.log(`✓ [Transfer-SMS] Sent successfully to ${result.updatedToken.customer.mobileNumber}`)
     } catch (smsError) {
       console.error("[Transfer-SMS] SMS failed:", smsError)
       // We don't fail the request if SMS fails
     }
 
-    res.json({ success: true, token: result.newToken })
+    res.json({ success: true, token: result.updatedToken })
   } catch (error: any) {
     console.error("[Transfer] FATAL ERROR:", error)
     // Check for Prisma specific errors

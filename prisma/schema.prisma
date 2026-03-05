@@ -44,6 +44,7 @@ model Token {
   completedServices  CompletedService[]
   feedback           Feedback?
   serviceCases       ServiceCase[]
+  transferLogs       TransferLog[]
   officer            Officer?           @relation(fields: [assignedTo], references: [id])
   customer           Customer           @relation(fields: [customerId], references: [id])
   outlet             Outlet             @relation(fields: [outletId], references: [id])
@@ -89,6 +90,7 @@ model Officer {
   outlet            Outlet             @relation(fields: [outletId], references: [id])
   serviceCases      ServiceCase[]
   tokens            Token[]
+  transferLogs      TransferLog[]
 
   @@index([outletId, status])
 }
@@ -215,6 +217,23 @@ model BreakLog {
   Officer   Officer   @relation(fields: [officerId], references: [id])
 
   @@index([officerId, startedAt])
+}
+
+model TransferLog {
+  id                   String   @id @default(uuid())
+  tokenId              String
+  fromOfficerId        String
+  fromCounterNumber    Int?
+  toCounterNumber      Int?
+  previousServiceTypes String[]
+  newServiceTypes      String[]
+  notes                String?
+  createdAt            DateTime @default(now())
+  token                Token    @relation(fields: [tokenId], references: [id])
+  fromOfficer          Officer  @relation(fields: [fromOfficerId], references: [id])
+
+  @@index([tokenId])
+  @@index([fromOfficerId, createdAt])
 }
 
 model ManagerQRToken {
