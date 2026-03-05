@@ -491,12 +491,20 @@ router.post("/register", async (req, res) => {
       const shortId = token.id.substring(0, 8)
       const trackingUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
 
+      // Fetch service names for SMS
+      const services = await prisma.service.findMany({
+        where: { code: { in: serviceTypes } },
+        select: { title: true }
+      });
+      const serviceNames = services.map(s => s.title).join(", ") || "Service";
+
       await sltSmsService.sendTokenConfirmation(token.customer.mobileNumber, {
         firstName,
         tokenNumber: token.tokenNumber,
         queuePosition,
         outletName: token.outlet?.name || 'SLT Office',
-        trackingUrl
+        trackingUrl,
+        services: serviceNames
       })
       console.log(`✓ Token confirmation SMS sent to ${token.customer.mobileNumber}`)
     } catch (smsError) {

@@ -37,8 +37,8 @@ router.post("/request-otp", async (req, res) => {
       return res.status(500).json({ error: result.message })
     }
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: result.message,
       officerName: officer.name
     })
@@ -294,17 +294,41 @@ router.post("/next-token", async (req, res) => {
       }
 
       // Get candidate tokens that match officer's assigned services
-      const candidateTokens = await prisma.token.findMany({
+      // Priority 1: Tokens specifically assigned to THIS counter
+      let candidateTokens = await prisma.token.findMany({
         where: {
           outletId: officer.outletId,
           status: 'waiting',
+          counterNumber: officer.counterNumber && officer.counterNumber > 0 ? officer.counterNumber : undefined,
           serviceTypes: { hasSome: assignedServices },
           createdAt: { gte: lastReset },
         },
-        orderBy: { tokenNumber: 'asc' },
-        take: 50, // Increased to find more matches
+        orderBy: [
+          { isPriority: 'desc' },
+          { tokenNumber: 'asc' }
+        ],
+        take: 20,
         include: { customer: true },
       })
+
+      // If no counter-specific tokens, look for general pool tokens (counterNumber is null)
+      if (candidateTokens.length === 0) {
+        candidateTokens = await prisma.token.findMany({
+          where: {
+            outletId: officer.outletId,
+            status: 'waiting',
+            counterNumber: null,
+            serviceTypes: { hasSome: assignedServices },
+            createdAt: { gte: lastReset },
+          },
+          orderBy: [
+            { isPriority: 'desc' },
+            { tokenNumber: 'asc' }
+          ],
+          take: 50,
+          include: { customer: true },
+        })
+      }
 
       console.log(`Found ${candidateTokens.length} tokens with matching services`)
 
@@ -355,7 +379,7 @@ router.post("/next-token", async (req, res) => {
     // Send SMS notification to customer
     try {
       const firstName = updatedToken.customer.name.split(' ')[0]
-      
+
       // Build recovery URL for customer lookup
       const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
       let baseUrl = origins[0] || ''
@@ -537,7 +561,7 @@ router.post("/skip-token", async (req, res) => {
     // Send SMS notification to customer about skip
     try {
       const firstName = skipped.customer.name.split(' ')[0]
-      
+
       // Build recovery URL
       const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
       let baseUrl = origins[0] || ''
@@ -607,7 +631,7 @@ router.post("/recall-token", async (req, res) => {
     // Send SMS notification to customer about recall  
     try {
       const firstName = recalled.customer.name.split(' ')[0]
-      
+
       // Build recovery URL
       const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
       let baseUrl = origins[0] || ''
@@ -691,7 +715,7 @@ router.post("/call-token", async (req, res) => {
     const officer = await prisma.officer.findUnique({ where: { id: officerId } })
     if (!officer) return res.status(404).json({ error: 'Officer not found' })
 
-    const token = await prisma.token.findUnique({ 
+    const token = await prisma.token.findUnique({
       where: { id: tokenId },
       include: { customer: true, outlet: true }
     })
@@ -720,7 +744,7 @@ router.post("/call-token", async (req, res) => {
     // Send SMS notification to customer
     try {
       const firstName = called.customer.name.split(' ')[0]
-      
+
       // Build recovery URL for customer lookup
       const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
       let baseUrl = origins[0] || ''
@@ -847,8 +871,15 @@ router.post("/complete-service", async (req, res) => {
       // Send SMS notification to customer with service completion and feedback link
       try {
         const firstName = token.customer.name.split(' ')[0]
-        const services = Array.isArray((token as any).serviceTypes) ? (token as any).serviceTypes.join(', ') : 'Service'
-        
+
+        // Map service codes to titles for SMS
+        const tokenServiceCodes = Array.isArray((token as any).serviceTypes) ? (token as any).serviceTypes : []
+        const serviceRecords = await prisma.service.findMany({
+          where: { code: { in: tokenServiceCodes } },
+          select: { title: true }
+        })
+        const services = serviceRecords.map(s => s.title).join(', ') || 'Service'
+
         // Build base URL
         const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
         let baseUrl = origins[0] || ''
@@ -861,7 +892,7 @@ router.post("/complete-service", async (req, res) => {
           // In production, prefer any HTTPS URL over localhost
           baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
         }
-        
+
         // Build feedback URL - use first 8 chars of reference number for shorter URL
         const shortRef = serviceCase.refNumber.split('/').pop()?.substring(0, 8) || 'ref'
         const feedbackUrl = baseUrl ? `${baseUrl}/f?r=${shortRef}` : `/f?r=${shortRef}`
@@ -880,7 +911,12 @@ router.post("/complete-service", async (req, res) => {
 
       // "SMS" via console output with full tracking URL (for debug/legacy)
       try {
-        const services = Array.isArray((token as any).serviceTypes) ? (token as any).serviceTypes.join(', ') : ''
+        const tokenServiceCodes = Array.isArray((token as any).serviceTypes) ? (token as any).serviceTypes : []
+        const serviceRecords = await prisma.service.findMany({
+          where: { code: { in: tokenServiceCodes } },
+          select: { title: true }
+        })
+        const services = serviceRecords.map(s => s.title).join(', ') || ''
         const officerName = (token as any)?.officer?.name || 'Officer'
         const outlet = token.outlet?.name || ''
 
@@ -934,6 +970,165 @@ router.post("/complete-service", async (req, res) => {
   } catch (error) {
     console.error("Complete service error:", error)
     res.status(500).json({ error: "Failed to complete service" })
+  }
+})
+
+// Transfer current customer to another service/counter
+router.post("/transfer-token", async (req, res) => {
+  console.log("[Transfer] Received request body:", JSON.stringify(req.body, null, 2))
+  try {
+    const { officerId, tokenId, newServiceTypes, targetCounterNumber, notes } = req.body
+
+    if (!officerId || !tokenId || !newServiceTypes || !Array.isArray(newServiceTypes) || newServiceTypes.length === 0) {
+      console.warn("[Transfer] Missing required fields")
+      return res.status(400).json({ error: "officerId, tokenId and non-empty newServiceTypes array are required" })
+    }
+
+    const officer = await prisma.officer.findUnique({ where: { id: officerId } })
+    if (!officer) {
+      console.warn(`[Transfer] Officer ${officerId} not found`)
+      return res.status(404).json({ error: "Officer not found" })
+    }
+
+    const originalToken = await prisma.token.findUnique({
+      where: { id: tokenId },
+      include: { customer: true, outlet: true }
+    })
+
+    if (!originalToken) {
+      console.warn(`[Transfer] Token ${tokenId} not found`)
+      return res.status(404).json({ error: "Token not found" })
+    }
+
+    console.log(`[Transfer] Found original token #${originalToken.tokenNumber} for customer ${originalToken.customer.name}`)
+
+    // Execute transfer in a transaction with extended timeout to prevent expiration
+    const txStart = Date.now()
+    const result = await prisma.$transaction(async (tx) => {
+      const step1Start = Date.now()
+      // 1. Complete the current token
+      console.log("[Transfer-Tx] Updating original token to completed...")
+      const completedToken = await tx.token.update({
+        where: { id: tokenId },
+        data: {
+          status: "completed",
+          completedAt: new Date(),
+          accountRef: notes ? (typeof notes === 'string' ? `${notes} (Transferred)` : "(Transferred)") : "(Transferred)",
+        },
+        include: { customer: true, outlet: true, officer: true }
+      })
+      console.log(`[Transfer-Tx] Step 1 (Update) took ${Date.now() - step1Start}ms`)
+
+      const step2Start = Date.now()
+      // 2. Create a new token for the same customer with the same token number
+      console.log("[Transfer-Tx] Creating new token for next service...")
+      const newToken = await (tx.token as any).create({
+        data: {
+          tokenNumber: originalToken.tokenNumber,
+          customerId: originalToken.customerId,
+          serviceTypes: newServiceTypes,
+          outletId: originalToken.outletId,
+          counterNumber: targetCounterNumber ? Number(targetCounterNumber) : null,
+          status: "waiting",
+          isPriority: true, // Also keep priority tag for faster service
+          isTransferred: true, // Explicit flag for the new dashboard section
+          preferredLanguages: originalToken.preferredLanguages || undefined,
+        },
+        include: { customer: true, outlet: true }
+      })
+      console.log(`[Transfer-Tx] Step 2 (Create) took ${Date.now() - step2Start}ms`)
+
+      const step3Start = Date.now()
+      // 3. Set officer back to available
+      console.log("[Transfer-Tx] Resetting officer status to available...")
+      await tx.officer.update({
+        where: { id: officerId },
+        data: { status: "available" }
+      })
+      console.log(`[Transfer-Tx] Step 3 (Officer) took ${Date.now() - step3Start}ms`)
+
+      return { completedToken, newToken }
+    }, {
+      timeout: 20000 // Increase timeout to 20 seconds
+    })
+
+    console.log(`[Transfer] Transaction completed in ${Date.now() - txStart}ms. New token ID: ${result.newToken.id}`)
+
+    // Broadcast updates
+    try {
+      broadcast({ type: "TOKEN_COMPLETED", data: result.completedToken })
+      broadcast({ type: "NEW_TOKEN", data: result.newToken })
+      console.log("[Transfer] Broadcasts sent")
+    } catch (broadcastErr) {
+      console.error("[Transfer] Broadcast failed:", broadcastErr)
+    }
+
+    // Send SMS to customer about the transfer
+    try {
+      console.log("[Transfer-SMS] Preparing SMS notification...")
+      const firstName = result.newToken.customer.name ? result.newToken.customer.name.split(" ")[0] : "Customer"
+
+      // Map service codes to titles for SMS
+      const tokenServiceCodes = Array.isArray(result.newToken.serviceTypes) ? result.newToken.serviceTypes : []
+      const serviceRecords = await prisma.service.findMany({
+        where: { code: { in: tokenServiceCodes } },
+        select: { title: true }
+      })
+      const serviceNames = serviceRecords.map(s => s.title).join(", ") || "Service"
+
+      // Extract first language from JSON field
+      let lang: "en" | "si" | "ta" = "en"
+      const prefs = originalToken.preferredLanguages
+
+      if (Array.isArray(prefs) && prefs.length > 0) {
+        const firstPref = String(prefs[0]).toLowerCase()
+        if (["en", "si", "ta"].includes(firstPref)) {
+          lang = firstPref as "en" | "si" | "ta"
+        }
+      } else if (typeof prefs === "string") {
+        try {
+          const parsed = JSON.parse(prefs)
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const firstPref = String(parsed[0]).toLowerCase()
+            if (["en", "si", "ta"].includes(firstPref)) {
+              lang = firstPref as "en" | "si" | "ta"
+            }
+          }
+        } catch { }
+      }
+
+      const messages = {
+        en: targetCounterNumber
+          ? `SLT DQMS: Dear ${firstName}, your token #${result.newToken.tokenNumber} is transferred to Counter #${targetCounterNumber} for ${serviceNames}. Please proceed there. [PRIORITY]`
+          : `SLT DQMS: Dear ${firstName}, your token #${result.newToken.tokenNumber} is transferred for ${serviceNames}. Please wait for your turn. [PRIORITY]`,
+        si: targetCounterNumber
+          ? `SLT DQMS: ${firstName}, ඔබගේ ටෝකන් #${result.newToken.tokenNumber} ${serviceNames} සඳහා කවුටර අංක ${targetCounterNumber} වෙත මාරු කරන ලදී. කරුණාකර එතැනට පැමිණෙන්න. [ප්‍රමුඛතාවය]`
+          : `SLT DQMS: ${firstName}, ඔබගේ ටෝකන් #${result.newToken.tokenNumber} ${serviceNames} සඳහා මාරු කරන ලදී. කරුණාකර ඔබගේ වාරය එනතෙක් රැඳී සිටින්න. [ප්‍රමුඛතාවය]`,
+        ta: targetCounterNumber
+          ? `SLT DQMS: ${firstName}, உங்கள் டோக்கன் #${result.newToken.tokenNumber} கவுண்டர் #${targetCounterNumber} க்கு ${serviceNames} க்காக மாற்றப்பட்டது. தயவுசெய்து அங்கு செல்லவும். [முன்னுரிமை]`
+          : `SLT DQMS: ${firstName}, உங்கள் டோக்கன் #${result.newToken.tokenNumber} ${serviceNames} க்காக மாற்றப்பட்டது. தயவுசெய்து உங்கள் முறைக்காக காத்திருக்கவும். [முன்னுரிமை]`
+      }
+
+      console.log(`[Transfer-SMS] Sending ${lang} message to ${result.newToken.customer.mobileNumber}`)
+
+      await sltSmsService.sendSMS({
+        to: result.newToken.customer.mobileNumber,
+        message: messages[lang] || messages.en
+      })
+      console.log(`✓ [Transfer-SMS] Sent successfully to ${result.newToken.customer.mobileNumber}`)
+    } catch (smsError) {
+      console.error("[Transfer-SMS] SMS failed:", smsError)
+      // We don't fail the request if SMS fails
+    }
+
+    res.json({ success: true, token: result.newToken })
+  } catch (error: any) {
+    console.error("[Transfer] FATAL ERROR:", error)
+    // Check for Prisma specific errors
+    if (error.code === 'P2002') {
+      return res.status(500).json({ error: "Transfer failed: Data consistency error" })
+    }
+    res.status(500).json({ error: "Failed to transfer token: " + (error.message || "Internal Server Error") })
   }
 })
 

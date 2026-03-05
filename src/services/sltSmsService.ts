@@ -419,13 +419,14 @@ class SLTSmsService {
       queuePosition: number
       outletName: string
       trackingUrl: string
+      services: string
     },
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
     const messages = {
-      en: `SLT DQMS: Dear ${details.firstName}, Token #${details.tokenNumber} at ${details.outletName}. Position: ${details.queuePosition}. Track: ${details.trackingUrl} -SLT`,
-      si: `SLT DQMS: ${details.firstName}, ${details.outletName} ටෝකන් #${details.tokenNumber}. ස්ථානය: ${details.queuePosition}. ට්‍රැක්: ${details.trackingUrl} -SLT`,
-      ta: `SLT DQMS: ${details.firstName}, ${details.outletName} டෝக்கன் #${details.tokenNumber}. நிலை: ${details.queuePosition}. கண்காணி: ${details.trackingUrl} -SLT`
+      en: `SLT DQMS: Dear ${details.firstName}, Token #${details.tokenNumber} for ${details.services} at ${details.outletName}. Position: ${details.queuePosition}. Track: ${details.trackingUrl} -SLT`,
+      si: `SLT DQMS: ${details.firstName}, ${details.outletName} හි ${details.services} සඳහා ටෝකන් #${details.tokenNumber}. ස්ථානය: ${details.queuePosition}. ට්‍රැක්: ${details.trackingUrl} -SLT`,
+      ta: `SLT DQMS: ${details.firstName}, ${details.outletName} இல் ${details.services} க்கான டோக்கன் #${details.tokenNumber}. நிலை: ${details.queuePosition}. கண்காணி: ${details.trackingUrl} -SLT`
     }
 
     return this.sendSMS({

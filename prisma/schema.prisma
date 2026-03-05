@@ -1,5 +1,5 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
   binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
@@ -16,10 +16,10 @@ model Customer {
   sltMobileNumber   String?
   nicNumber         String?
   email             String?
-  feedbacks         Feedback[]
-  tokens            Token[]
   completedServices CompletedService[]
+  feedbacks         Feedback[]
   serviceCases      ServiceCase[]
+  tokens            Token[]
 
   @@index([mobileNumber])
 }
@@ -28,11 +28,9 @@ model Token {
   id                 String             @id @default(uuid())
   tokenNumber        Int
   customerId         String
-  serviceTypes       String[]           @default([]) @map("serviceType")
   preferredLanguages Json?
   accountRef         String?
   status             String             @default("waiting")
-  isPriority         Boolean            @default(false) // VIP/priority customer flag
   outletId           String
   assignedTo         String?
   counterNumber      Int?
@@ -40,8 +38,11 @@ model Token {
   calledAt           DateTime?
   startedAt          DateTime?
   completedAt        DateTime?
-  feedback           Feedback?
+  serviceTypes       String[]           @default([]) @map("serviceType")
+  isPriority         Boolean            @default(false)
+  isTransferred      Boolean            @default(false)
   completedServices  CompletedService[]
+  feedback           Feedback?
   serviceCases       ServiceCase[]
   officer            Officer?           @relation(fields: [assignedTo], references: [id])
   customer           Customer           @relation(fields: [customerId], references: [id])
@@ -49,7 +50,6 @@ model Token {
 
   @@index([outletId, status])
   @@index([assignedTo])
-  // Composite index to speed frequent queries filtering outlet + status + date range + ordering by tokenNumber
   @@index([outletId, status, createdAt, tokenNumber])
 }
 
@@ -57,15 +57,15 @@ model TeleshopManager {
   id                String             @id @default(uuid())
   name              String
   mobileNumber      String             @unique
-  email             String?
   regionId          String
-  branchId          String?
   isActive          Boolean            @default(true)
   createdAt         DateTime           @default(now())
   lastLoginAt       DateTime?
-  region            Region             @relation(fields: [regionId], references: [id])
-  branch            Outlet?            @relation(fields: [branchId], references: [id])
+  email             String?
+  branchId          String?
   completedServices CompletedService[]
+  branch            Outlet?            @relation(fields: [branchId], references: [id])
+  region            Region             @relation(fields: [regionId], references: [id])
 
   @@index([regionId])
   @@index([mobileNumber])
@@ -86,8 +86,8 @@ model Officer {
   languages         Json?
   BreakLog          BreakLog[]
   completedServices CompletedService[]
-  serviceCases      ServiceCase[]
   outlet            Outlet             @relation(fields: [outletId], references: [id])
+  serviceCases      ServiceCase[]
   tokens            Token[]
 
   @@index([outletId, status])
@@ -101,16 +101,16 @@ model Outlet {
   isActive          Boolean            @default(true)
   createdAt         DateTime           @default(now())
   counterCount      Int?               @default(0)
-  kioskPassword     String?            // Password for Walk-in Appoinment dashboard
-  officers          Officer[]
-  completedServices CompletedService[]
-  serviceCases      ServiceCase[]
-  region            Region             @relation(fields: [regionId], references: [id])
-  tokens            Token[]
-  managerQRTokens   ManagerQRToken[]
+  kioskPassword     String?
   appointments      Appointment[]
-  teleshopManagers  TeleshopManager[]
   closureNotices    ClosureNotice[]
+  completedServices CompletedService[]
+  managerQRTokens   ManagerQRToken[]
+  officers          Officer[]
+  region            Region             @relation(fields: [regionId], references: [id])
+  serviceCases      ServiceCase[]
+  teleshopManagers  TeleshopManager[]
+  tokens            Token[]
 }
 
 model Region {
@@ -119,27 +119,27 @@ model Region {
   managerId        String?
   managerEmail     String?
   managerMobile    String?
-  managerPassword  String?
   createdAt        DateTime          @default(now())
+  managerPassword  String?
   outlets          Outlet[]
   teleshopManagers TeleshopManager[]
 }
 
 model Feedback {
-  id                String   @id @default(uuid())
-  tokenId           String   @unique
+  id                String    @id @default(uuid())
+  tokenId           String    @unique
   customerId        String
   rating            Int
   comment           String?
-  assignedTo        String?  // Based on rating: admin, regional_manager, teleshop_manager
-  assignedToId      String?  // ID of the person/role it's assigned to
-  isResolved        Boolean  @default(false)
+  createdAt         DateTime  @default(now())
+  assignedTo        String?
+  assignedToId      String?
+  isResolved        Boolean   @default(false)
+  resolutionComment String?
   resolvedAt        DateTime?
   resolvedBy        String?
-  resolutionComment String?
-  createdAt         DateTime @default(now())
-  customer          Customer @relation(fields: [customerId], references: [id])
-  token             Token    @relation(fields: [tokenId], references: [id])
+  customer          Customer  @relation(fields: [customerId], references: [id])
+  token             Token     @relation(fields: [tokenId], references: [id])
 
   @@index([rating])
   @@index([createdAt])
@@ -172,37 +172,35 @@ model Alert {
 }
 
 model Service {
-  id               String             @id @default(uuid())
-  code             String             @unique
-  title            String
-  description      String?
-  order            Int                @default(999)
-  isActive         Boolean            @default(true)
-  createdAt        DateTime           @default(now())
+  id                String             @id @default(uuid())
+  code              String             @unique
+  title             String
+  description       String?
+  isActive          Boolean            @default(true)
+  createdAt         DateTime           @default(now())
+  order             Int                @default(999)
   completedServices CompletedService[]
-  
+
   @@index([order])
 }
 
 model CompletedService {
-  id                String          @id @default(uuid())
+  id                String           @id @default(uuid())
   tokenId           String
   serviceId         String
   officerId         String
   teleshopManagerId String?
   customerId        String
   outletId          String
-  duration          Int?            // Service duration in minutes
+  duration          Int?
   notes             String?
-  completedAt       DateTime        @default(now())
-  
-  // Relations
-  token             Token           @relation(fields: [tokenId], references: [id])
-  service           Service         @relation(fields: [serviceId], references: [id])
-  officer           Officer         @relation(fields: [officerId], references: [id])
+  completedAt       DateTime         @default(now())
+  customer          Customer         @relation(fields: [customerId], references: [id])
+  officer           Officer          @relation(fields: [officerId], references: [id])
+  outlet            Outlet           @relation(fields: [outletId], references: [id])
+  service           Service          @relation(fields: [serviceId], references: [id])
   teleshopManager   TeleshopManager? @relation(fields: [teleshopManagerId], references: [id])
-  customer          Customer        @relation(fields: [customerId], references: [id])
-  outlet            Outlet          @relation(fields: [outletId], references: [id])
+  token             Token            @relation(fields: [tokenId], references: [id])
 
   @@index([teleshopManagerId, completedAt])
   @@index([officerId, completedAt])
@@ -224,125 +222,115 @@ model ManagerQRToken {
   outletId    String
   generatedAt DateTime @default(now())
   createdAt   DateTime @default(now())
-
   outlet      Outlet   @relation(fields: [outletId], references: [id])
 
   @@index([outletId])
 }
 
 model Appointment {
-  id                String   @id @default(uuid())
-  name              String
-  mobileNumber      String
-  outletId          String
-  serviceTypes      String[]
-  preferredLanguage String?  // 'en' | 'si' | 'ta'
-  sltTelephoneNumber String? // For bill payment appointments
-  appointmentAt     DateTime
-  status            String   @default("booked") // booked | queued | completed | cancelled | no_show
-  tokenId           String?
-  notes             String?
-  createdAt         DateTime @default(now())
-  queuedAt          DateTime?
-  completedAt       DateTime?
-
-  outlet            Outlet   @relation(fields: [outletId], references: [id])
+  id                 String    @id @default(uuid())
+  name               String
+  mobileNumber       String
+  outletId           String
+  serviceTypes       String[]
+  preferredLanguage  String?
+  appointmentAt      DateTime
+  status             String    @default("booked")
+  tokenId            String?
+  notes              String?
+  createdAt          DateTime  @default(now())
+  queuedAt           DateTime?
+  completedAt        DateTime?
+  sltTelephoneNumber String?
+  outlet             Outlet    @relation(fields: [outletId], references: [id])
 
   @@index([outletId, appointmentAt])
   @@index([mobileNumber, appointmentAt])
   @@index([status, appointmentAt])
 }
 
-// Service Tracking: a multi-stage process after the counter service completes
 model ServiceCase {
-  id            String      @id @default(uuid())
-  refNumber     String      @unique
-  tokenId       String
-  outletId      String
-  officerId     String
+  id                String              @id @default(uuid())
+  refNumber         String              @unique
+  tokenId           String
+  outletId          String
+  officerId         String
   teleshopManagerId String?
-  customerId    String
-  serviceTypes  String[]
-  status        String      @default("open") // open | completed | cancelled
-  createdAt     DateTime    @default(now())
-  completedAt   DateTime?
-  lastUpdatedAt DateTime    @default(now())
-
-  // Relations
-  token         Token       @relation(fields: [tokenId], references: [id])
-  outlet        Outlet      @relation(fields: [outletId], references: [id])
-  officer       Officer     @relation(fields: [officerId], references: [id])
-  customer      Customer    @relation(fields: [customerId], references: [id])
-  updates       ServiceCaseUpdate[]
+  customerId        String
+  serviceTypes      String[]
+  status            String              @default("open")
+  createdAt         DateTime            @default(now())
+  completedAt       DateTime?
+  lastUpdatedAt     DateTime            @default(now())
+  customer          Customer            @relation(fields: [customerId], references: [id])
+  officer           Officer             @relation(fields: [officerId], references: [id])
+  outlet            Outlet              @relation(fields: [outletId], references: [id])
+  token             Token               @relation(fields: [tokenId], references: [id])
+  updates           ServiceCaseUpdate[]
 
   @@index([refNumber])
   @@index([outletId, createdAt])
 }
 
 model ServiceCaseUpdate {
-  id         String      @id @default(uuid())
-  caseId     String
-  actorRole  String
-  actorId    String?
-  status     String?
-  note       String
-  createdAt  DateTime    @default(now())
-
+  id          String      @id @default(uuid())
+  caseId      String
+  actorRole   String
+  actorId     String?
+  status      String?
+  note        String
+  createdAt   DateTime    @default(now())
   serviceCase ServiceCase @relation(fields: [caseId], references: [id])
 
   @@index([caseId, createdAt])
 }
 
-// SLT Bill information for bill payment service
 model SltBill {
-  id              String   @id @default(uuid())
-  telephoneNumber String   @unique // SLT telephone number
-  mobileNumber    String?  // Registered mobile number for the SLT account
-  accountName     String   // Account holder name
-  accountAddress  String?  // Billing address
-  currentBill     Float    // Current bill amount
-  dueDate         DateTime // Bill due date
-  status          String   @default("unpaid") // unpaid | paid | overdue
+  id              String    @id @default(uuid())
+  telephoneNumber String    @unique
+  accountName     String
+  accountAddress  String?
+  currentBill     Float
+  dueDate         DateTime
+  status          String    @default("unpaid")
   lastPaymentDate DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  mobileNumber    String?
 
   @@index([telephoneNumber])
   @@index([status, dueDate])
 }
 
-// GM: General Manager - island-wide minor admin, oversees all DGMs
 model GM {
-  id           String   @id @default(uuid())
+  id           String    @id @default(uuid())
   name         String
-  mobileNumber String   @unique
+  mobileNumber String    @unique
   email        String?
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
   lastLoginAt  DateTime?
   dgms         DGM[]
 
   @@index([mobileNumber])
 }
 
-// DGM: Deputy General Manager - oversees specific Regions under a GM
 model DGM {
-  id           String   @id @default(uuid())
+  id           String    @id @default(uuid())
   name         String
-  mobileNumber String   @unique
+  mobileNumber String    @unique
   email        String?
   gmId         String
-  gm           GM       @relation(fields: [gmId], references: [id])
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
   lastLoginAt  DateTime?
-  regionIds    String[] // Region IDs this DGM oversees
+  regionIds    String[]
+  gm           GM        @relation(fields: [gmId], references: [id])
 
   @@index([mobileNumber])
   @@index([gmId])
 }
 
-// Closure Notices: custom closure messages created by RTOM or Teleshop Manager
 model ClosureNotice {
   id          String   @id @default(uuid())
   outletId    String
@@ -350,35 +338,33 @@ model ClosureNotice {
   message     String
   startsAt    DateTime
   endsAt      DateTime
-  createdBy   String   // "teleshop_manager" | "rtom_manager"
-  createdById String   // ID of the creator
+  createdBy   String
+  createdById String
   createdAt   DateTime @default(now())
   outlet      Outlet   @relation(fields: [outletId], references: [id])
 
   @@index([outletId, endsAt])
 }
 
-// Mercantile Holidays: public holidays on which branches are considered closed
 model MercantileHoliday {
   id          String   @id @default(uuid())
-  date        DateTime // The holiday date (store as date at midnight UTC)
-  name        String   // e.g., "Sinhalese & Tamil New Year"
-  isRecurring Boolean  @default(false) // true = same month/day every year
+  date        DateTime
+  name        String
   createdAt   DateTime @default(now())
+  isRecurring Boolean  @default(false)
 
   @@index([date])
 }
 
-// OTP: One-Time Password for user authentication
 model OTP {
-  id              String   @id @default(uuid())
-  mobileNumber    String   // Mobile number to which OTP was sent
-  otpCode         String   // 4-digit OTP code
-  userType        String   // "officer" | "teleshop_manager" | "rtom" | "gm" | "dgm"
-  expiresAt       DateTime // OTP expiration time (5 minutes from creation)
-  verified        Boolean  @default(false) // Whether OTP has been verified
-  attempts        Int      @default(0) // Number of verification attempts
-  createdAt       DateTime @default(now())
+  id           String   @id @default(uuid())
+  mobileNumber String
+  otpCode      String
+  userType     String
+  expiresAt    DateTime
+  verified     Boolean  @default(false)
+  attempts     Int      @default(0)
+  createdAt    DateTime @default(now())
 
   @@index([mobileNumber, userType, verified])
   @@index([expiresAt])

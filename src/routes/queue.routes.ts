@@ -30,16 +30,16 @@ router.get("/outlet/:outletId", async (req, res) => {
 
     // Fetch in separate queries to avoid long-lived interactive transaction issues (P2028)
     const waitingTokens = await prisma.token.findMany({
-        where: {
-          outletId,
-          status: { in: ["waiting", "skipped"] },
-          createdAt: { gte: lastReset },
-        },
-        orderBy: { tokenNumber: "asc" },
-        include: {
-          customer: true,
-        },
-      })
+      where: {
+        outletId,
+        status: { in: ["waiting", "skipped"] },
+        createdAt: { gte: lastReset },
+      },
+      orderBy: { tokenNumber: "asc" },
+      include: {
+        customer: true,
+      },
+    })
 
     // Determine which waiting tokens originated from appointments
     const waitingTokenIds = waitingTokens.map((t) => t.id)
@@ -129,7 +129,7 @@ router.get("/outlets", async (req, res) => {
 // Get all regions (for admin UIs)
 router.get('/regions', async (req, res) => {
   try {
-    const regions = await prisma.region.findMany({ 
+    const regions = await prisma.region.findMany({
       orderBy: { name: 'asc' },
       select: {
         id: true,
@@ -184,7 +184,8 @@ router.post('/services', async (req, res) => {
 
     // return created row
     const created = await prisma.$queryRaw`SELECT * FROM "Service" WHERE "code" = ${code} LIMIT 1` as any[]
-    res.json({ success: true, service: created[0] })  } catch (error) {
+    res.json({ success: true, service: created[0] })
+  } catch (error) {
     console.error('Create service error:', error)
     // unique constraint on code could fail
     res.status(500).json({ error: 'Failed to create service' })
@@ -260,8 +261,8 @@ router.post('/outlets', async (req, res) => {
 
     console.log(`✅ Auto-generated QR code for new outlet: ${outlet.name} (${outlet.id}) - Token: ${qrToken}`)
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       outlet,
       qrCode: {
         token: qrToken,
@@ -304,6 +305,58 @@ router.delete('/outlets/:id', async (req, res) => {
   } catch (error) {
     console.error('Delete outlet error:', error)
     res.status(500).json({ error: 'Failed to delete outlet' })
+  }
+})
+
+// Get all counters and their current officer status for an outlet
+router.get("/outlet/:outletId/counters", async (req, res) => {
+  try {
+    const { outletId } = req.params
+
+    // Get outlet to know total counters
+    const outlet = await prisma.outlet.findUnique({
+      where: { id: outletId },
+      select: { counterCount: true }
+    })
+
+    if (!outlet) return res.status(404).json({ error: "Outlet not found" })
+
+    // Get all officers in this outlet that are not offline
+    const activeOfficers = await prisma.officer.findMany({
+      where: {
+        outletId,
+        status: { not: "offline" }
+      },
+      select: {
+        name: true,
+        counterNumber: true,
+        status: true,
+        assignedServices: true,
+        id: true
+      }
+    })
+
+    const counters = []
+    const totalCount = outlet.counterCount || 10
+
+    for (let i = 1; i <= totalCount; i++) {
+      const officer = activeOfficers.find(o => o.counterNumber === i)
+      counters.push({
+        number: i,
+        isStaffed: !!officer,
+        officer: officer ? {
+          id: officer.id,
+          name: officer.name,
+          status: officer.status,
+          services: officer.assignedServices
+        } : null
+      })
+    }
+
+    res.json(counters)
+  } catch (error) {
+    console.error("Fetch counters error:", error)
+    res.status(500).json({ error: "Failed to fetch counters" })
   }
 })
 

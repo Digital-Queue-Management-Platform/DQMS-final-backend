@@ -107,17 +107,23 @@ router.post("/book", async (req, res) => {
     try {
       const when = new Date(appointmentAt)
       const whenStr = when.toLocaleString()
-      const services = Array.isArray(serviceTypes) ? serviceTypes.join(', ') : ''
-      
+
+      // Map service codes to titles for SMS
+      const serviceRecords = await prisma.service.findMany({
+        where: { code: { in: serviceTypes } },
+        select: { title: true }
+      })
+      const services = serviceRecords.map(s => s.title).join(', ') || ''
+
       const lang: 'en' | 'si' | 'ta' = (preferredLanguage === 'si' || preferredLanguage === 'ta') ? preferredLanguage : 'en'
-      
+
       const result = await smsHelper.sendAppointmentConfirmation(mobileNumber, {
         name,
         outletName: outlet.name,
         dateTime: whenStr,
         services
       }, lang)
-      
+
       if (result.success) {
         console.log(`[APPT][SMS] Sent confirmation via ${result.provider}`)
       } else {
