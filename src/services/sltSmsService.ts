@@ -438,9 +438,9 @@ class SLTSmsService {
       : '';
 
     const messages = {
-      en: `Dear Valued Customer Your token number ${details.tokenNumber} at ${details.outletName} is now active. You are currently in position ${details.queuePosition}${waitTimeInfo}. SLT-MOBITEL`,
-      si: `ගරු ගිණුම්කරු ඔබගේ ටෝකන් සංඛ්‍යා ${details.tokenNumber} - ${details.outletName} දැන් ක්‍රියාකාරී ය. ඔබ දැනට ස්ථානයේ ${details.queuePosition}${waitTimeInfoSi}. SLT-MOBITEL`,
-      ta: `மதிப்புமிக்க வாடிக்கையாளர் உங்கள் டோக்கன் எண் ${details.tokenNumber} - ${details.outletName} இப்போது செயல்பாட்டுத் தமாய உள்ளது. நீங்கள் தற்போது நிலை ${details.queuePosition}${waitTimeInfoTa}. SLT-MOBITEL`
+      en: `Dear Valued Customer\n\nToken Number ${details.tokenNumber} at ${details.outletName} is now active. You are in position ${details.queuePosition}${waitTimeInfo}.\n\nTrack: ${details.trackingUrl}\n\nSLT-MOBITEL`,
+      si: `ගරු ගිණුම්කරු\n\nටෝකන් සංඛ්‍යා ${details.tokenNumber} - ${details.outletName} දැන් ක්‍රියාකාරී ය. ඔබ ස්ථානයේ ${details.queuePosition}${waitTimeInfoSi}.\n\nපිළිබඳ: ${details.trackingUrl}\n\nSLT-MOBITEL`,
+      ta: `மதிப்புமிக்க வாடிக்கையாளர்\n\nடோக்கன் எண் ${details.tokenNumber} - ${details.outletName} இப்போது செயல்பாட்டுத் தமாய உள்ளது. நீங்கள் நிலை ${details.queuePosition}${waitTimeInfoTa}.\n\nபின்தொடர்: ${details.trackingUrl}\n\nSLT-MOBITEL`
     }
 
     return this.sendSMS({
