@@ -897,13 +897,27 @@ router.post("/complete-service", async (req, res) => {
         const shortRef = serviceCase.refNumber.split('/').pop()?.substring(0, 8) || 'ref'
         const feedbackUrl = baseUrl ? `${baseUrl}/f?r=${shortRef}` : `/f?r=${shortRef}`
 
-        await sltSmsService.sendServiceCompletion(token.customer.mobileNumber, {
-          firstName,
-          refNumber: serviceCase.refNumber,
-          services,
-          feedbackUrl
-        })
-        console.log(`✓ Service completion SMS sent to ${token.customer.mobileNumber}`)
+        // Extract customer's preferred language
+        const preferredLanguages = (token.customer as any)?.preferredLanguages
+        let customerLang: 'en' | 'si' | 'ta' = 'en'
+        if (Array.isArray(preferredLanguages) && preferredLanguages.length > 0) {
+          const langStr = preferredLanguages[0]
+          if (langStr === 'si' || langStr === 'ta') {
+            customerLang = langStr as 'en' | 'si' | 'ta'
+          }
+        }
+
+        await sltSmsService.sendServiceCompletion(
+          token.customer.mobileNumber,
+          {
+            firstName,
+            refNumber: serviceCase.refNumber,
+            services,
+            feedbackUrl
+          },
+          customerLang
+        )
+        console.log(`✓ Service completion SMS sent to ${token.customer.mobileNumber} (language: ${customerLang})`)
       } catch (smsError) {
         console.error('SMS sending failed:', smsError)
         // Continue execution even if SMS fails

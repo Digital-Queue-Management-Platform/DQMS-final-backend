@@ -366,14 +366,10 @@ class SLTSmsService {
   ): Promise<SMSResponse> {
     console.log(`[SLT SMS COMPLETE] Attempting to send service completion SMS to ${mobileNumber} for ref ${details.refNumber}`)
 
-    const tokenInfo = details.tokenNumber ? ` for token number ${details.tokenNumber}` : '';
-    const tokenInfoSi = details.tokenNumber ? ` ටෝකන් සංඛ්‍යා ${details.tokenNumber} සඳහා` : '';
-    const tokenInfoTa = details.tokenNumber ? ` டோக்கன் எண் ${details.tokenNumber} க்கான` : '';
-
     const messages = {
-      en: `Dear Valued Customer Your service${tokenInfo} has been successfully completed. Thank you for visiting us. For future inquiries, your reference number is Ref: ${details.refNumber}. We value your feedback! Please take a moment to rate your experience: ${details.feedbackUrl} -SLT-MOBITEL`,
-      si: `ගරු ගිණුම්කරු${tokenInfoSi} ඔබගේ සේවාව සාර්ථකව සම්පූර්ණ කර ඇත. අපට පැමිණීම සඳහා ස්තුතියි. අනාගත විමසීම් සඳහා, ඔබගේ යොමු අංකය Ref: ${details.refNumber}. ඔබගේ ප්‍රතිචාරය අපට වැදගත්! කරුණාකර ඔබගේ අත්දැකීම අගයන්න: ${details.feedbackUrl} -SLT-MOBITEL`,
-      ta: `மதிப்புமிக்க வாடிக்கையாளர்${tokenInfoTa} உங்கள் சேவை வெற்றிகரமாக முடிந்துவிட்டது. எங்களை பார்வையிட்டமைக்கு நன்றி. எதிர்கால விசாரணைகளுக்கு, உங்கள் குறிப்பு எண் Ref: ${details.refNumber}. உங்கள் கருத்து எங்களுக்கு மதிப்புடையது! தயவுசெய்து உங்கள் அனுபவத்தை மதிப்பிடவும்: ${details.feedbackUrl} -SLT-MOBITEL`
+      en: `Dear Valued Customer\n\nYour service has been successfully completed. Thank you for visiting us.\n\nRef: ${details.refNumber}\nFeedback: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
+      si: `ගරු ගිණුම්කරු\n\nඔබගේ සේවාව සාර්ථකව සම්පූර්ණ කර ඇත. අපට පැමිණීම සඳහා ස්තුතියි.\n\nRef: ${details.refNumber}\nප්‍රතිචාරය: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
+      ta: `மதிப்புமிக்க வாடிக்கையாளர்\n\nஉங்கள் சேவை வெற்றிகரமாக முடிந்துவிட்டது. எங்களை பார்வையிட்டமைக்கு நன்றி.\n\nRef: ${details.refNumber}\nபின்னூட்டம்: ${details.feedbackUrl}\n\nSLT-MOBITEL`
     }
 
     console.log(`[SLT SMS COMPLETE] Message content (${messages[language].length} chars): "${messages[language]}"`)
