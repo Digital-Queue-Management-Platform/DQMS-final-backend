@@ -37,10 +37,10 @@ interface SltApiResponse {
  */
 export async function fetchBillFromSltApi(sltNumber: string): Promise<SltBillInfo> {
   try {
-    // Validate SLT number format (SLT numbers: 10 digits starting with 01, 041, or 081)
-    const phoneRegex = /^(01\d{8}|041\d{7}|081\d{7})$/;
+    // Relaxed validation: Just check for 10 digits
+    const phoneRegex = /^\d{10}$/;
     if (!phoneRegex.test(sltNumber)) {
-      throw new Error('Invalid SLT telephone number. Must be 10 digits starting with 01, 041, or 081.');
+      throw new Error('Invalid telephone number. Must be 10 digits.');
     }
 
     console.log(`Fetching bill info for SLT number: ${sltNumber}`);
@@ -90,14 +90,14 @@ export async function fetchBillFromSltApi(sltNumber: string): Promise<SltBillInf
 
   } catch (error: any) {
     console.error('Error fetching bill from SLT API:', error.message);
-    
+
     if (axios.isAxiosError(error)) {
       if (error.response) {
         // The request was made and the server responded with a status code
         // that falls out of the range of 2xx
         const statusCode = error.response.status;
         const errorMessage = error.response.data?.error || error.response.data?.message || error.message;
-        
+
         if (statusCode === 404) {
           throw new Error('No account found for this telephone number');
         } else if (statusCode === 400) {
@@ -136,8 +136,8 @@ export function normalizeSltBillData(sltBillInfo: SltBillInfo, queriedNumber: st
     mobileNumber: sltBillInfo.maskedMobile || sltBillInfo.mobileNumber || null,
     accountName: sltBillInfo.accountName || 'Verified Account',
     accountAddress: sltBillInfo.accountAddress || null,
-    currentBill: typeof sltBillInfo.currentBill === 'number' 
-      ? sltBillInfo.currentBill 
+    currentBill: typeof sltBillInfo.currentBill === 'number'
+      ? sltBillInfo.currentBill
       : 0, // Bill amount sent via SMS, not returned in API
     dueDate: sltBillInfo.dueDate ? new Date(sltBillInfo.dueDate) : new Date(),
     status: 'sms_sent', // Indicate that bill was sent via SMS
