@@ -168,14 +168,14 @@ class SLTSmsService {
     // Keep messages concise and professional
     const otpMessages = {
       en: role
-        ? `SLT DQMS: ${greeting} Your ${role.en} login code is ${otpCode}. Valid for 5 minutes. Do not share this code. -SLT Mobitel`
-        : `SLT DQMS: ${greeting} Your login code is ${otpCode}. Valid for 5 minutes. Do not share this code. -SLT Mobitel`,
+        ? `SLT DQMS: ${greeting} Your ${role.en} login code is ${otpCode}. Valid for 5 minutes. Do not share this code. -SLT-MOBITEL`
+        : `SLT DQMS: ${greeting} Your login code is ${otpCode}. Valid for 5 minutes. Do not share this code. -SLT-MOBITEL`,
       si: role
-        ? `SLT DQMS: ${firstName ? `${firstName},` : ''} ඔබගේ ${role.si} කේතය ${otpCode}. මිනිත්තු 5. කේතය බෙදා නොගන්න. -SLT Mobitel`
-        : `SLT DQMS: ${firstName ? `${firstName},` : ''} ඔබගේ කේතය ${otpCode}. මිනිත්තු 5. -SLT Mobitel`,
+        ? `SLT DQMS: ${firstName ? `${firstName},` : ''} ඔබගේ ${role.si} කේතය ${otpCode}. මිනිත්තු 5. කේතය බෙදා නොගන්න. -SLT-MOBITEL`
+        : `SLT DQMS: ${firstName ? `${firstName},` : ''} ඔබගේ කේතය ${otpCode}. මිනිත්තු 5. -SLT-MOBITEL`,
       ta: role
-        ? `SLT DQMS: ${firstName ? `${firstName},` : ''} உங்கள் ${role.ta} குறியீடு ${otpCode}. 5 நிமிடம். பகிர வேண்டாம். -SLT Mobitel`
-        : `SLT DQMS: ${firstName ? `${firstName},` : ''} உங்கள் குறியீடு ${otpCode}. 5 நிமிடம். -SLT Mobitel`
+        ? `SLT DQMS: ${firstName ? `${firstName},` : ''} உங்கள் ${role.ta} குறியீடு ${otpCode}. 5 நிமிடம். பகிர வேண்டாம். -SLT-MOBITEL`
+        : `SLT DQMS: ${firstName ? `${firstName},` : ''} உங்கள் குறியீடு ${otpCode}. 5 நிமிடம். -SLT-MOBITEL`
     }
 
     console.log(`[SLT SMS DEBUG] Sending OTP to ${mobileNumber}, userName: "${userName}", firstName: "${firstName}", userType: "${userType}", message: "${otpMessages[language]}" (${otpMessages[language].length} chars)`)
@@ -200,9 +200,95 @@ class SLTSmsService {
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
     const messages = {
-      en: `Dear ${appointmentDetails.name}, your appointment at ${appointmentDetails.outletName} is confirmed for ${appointmentDetails.dateTime}. Services: ${appointmentDetails.services}. -DQMS`,
-      si: `${appointmentDetails.name}, ${appointmentDetails.outletName} හි ඔබගේ හමුව ${appointmentDetails.dateTime} සඳහා තහවුරු කර ඇත. සේවාවන්: ${appointmentDetails.services}. -DQMS`,
-      ta: `${appointmentDetails.name}, ${appointmentDetails.outletName} இல் உங்கள் சந்திப்பு ${appointmentDetails.dateTime} அன்று உறுதிப்படுத்தப்பட்டது. சேவைகள்: ${appointmentDetails.services}. -DQMS`
+      en: `Dear Valued Customer\n\nYour appointment is confirmed for ${appointmentDetails.dateTime} at ${appointmentDetails.outletName}. Please arrive 10 minutes early. Thank You.\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\n${appointmentDetails.outletName} හි ${appointmentDetails.dateTime} සඳහා ඔබගේ හමුව තහවුරු කර ඇත. කරුණාකර විනාඩි 10කට පෙර පැමිණෙන්න. ස්තුතියි.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${appointmentDetails.outletName} இல் ${appointmentDetails.dateTime} அன்று உங்கள் சந்திப்பு உறுதிப்படுத்தப்பட்டது. தயவுசெய்து 10 நிமிடங்களுக்கு முன்பாக வரவும். நன்றி.\n\nSLT-MOBITEL`
+    }
+
+    return this.sendSMS({
+      to: mobileNumber,
+      message: messages[language]
+    })
+  }
+
+  /**
+   * Send appointment reminder notification
+   * @param hoursBeforeAppointment - Number of hours before the appointment (24 or 1)
+   */
+  async sendAppointmentReminder(
+    mobileNumber: string,
+    appointmentDetails: {
+      outletName: string
+      dateTime: string
+      hoursBeforeAppointment: number
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SMSResponse> {
+    const reminderType = appointmentDetails.hoursBeforeAppointment === 24 ? 'tomorrow' : 'today'
+    
+    const messages = {
+      en: appointmentDetails.hoursBeforeAppointment === 24
+        ? `Dear Valued Customer\n\nReminder: You have an appointment tomorrow at ${appointmentDetails.dateTime} at ${appointmentDetails.outletName}. We look forward to serving you.\n\nSLT-MOBITEL`
+        : `Dear Valued Customer\n\nReminder: You have an appointment today at ${appointmentDetails.dateTime} at ${appointmentDetails.outletName}. We look forward to serving you.\n\nSLT-MOBITEL`,
+      si: appointmentDetails.hoursBeforeAppointment === 24
+        ? `ගරු පාරිභෝගිකයා\n\nසිහිකැඳවීම: ඔබට හෙට ${appointmentDetails.dateTime} ට ${appointmentDetails.outletName} හි හමුවක් ඇත. ඔබට සේවය කිරීමට අපි බලාපොරොත්තු වෙමු.\n\nSLT-MOBITEL`
+        : `ගරු පාරිභෝගිකයා\n\nසිහිකැඳවීම: ඔබට අද ${appointmentDetails.dateTime} ට ${appointmentDetails.outletName} හි හමුවක් ඇත. ඔබට සේවය කිරීමට අපි බලාපොරොත්තු වෙමු.\n\nSLT-MOBITEL`,
+      ta: appointmentDetails.hoursBeforeAppointment === 24
+        ? `அன்பு வாடிக்கையாளரே\n\nநினைவூட்டல்: நாளை ${appointmentDetails.dateTime} அன்று ${appointmentDetails.outletName} இல் உங்களுக்கு சந்திப்பு உள்ளது. உங்களுக்கு சேவை செய்ய நாங்கள் எதிர்நோக்குகிறோம்.\n\nSLT-MOBITEL`
+        : `அன்பு வாடிக்கையாளரே\n\nநினைவூட்டல்: இன்று ${appointmentDetails.dateTime} அன்று ${appointmentDetails.outletName} இல் உங்களுக்கு சந்திப்பு உள்ளது. உங்களுக்கு சேவை செய்ய நாங்கள் எதிர்நோக்குகிறோம்.\n\nSLT-MOBITEL`
+    }
+
+    return this.sendSMS({
+      to: mobileNumber,
+      message: messages[language]
+    })
+  }
+
+  /**
+   * Send token expiry warning
+   */
+  async sendTokenExpiryWarning(
+    mobileNumber: string,
+    details: {
+      tokenNumber: number
+      outletName: string
+      minutesRemaining: number
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SMSResponse> {
+    // Format token number to 3 digits (e.g., 001, 018, 123)
+    const formattedToken = details.tokenNumber.toString().padStart(3, '0')
+    
+    const messages = {
+      en: `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} will expire soon. Kindly arrive within ${details.minutesRemaining} minutes.\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${formattedToken} ඉක්මනින් කල් ඉකුත් වේ. කරුණාකර විනාඩි ${details.minutesRemaining} ඇතුළත පැමිණෙන්න.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} விரைவில் காலாவதியாகும். தயவுசெய்து ${details.minutesRemaining} நிமிடங்களுக்குள் வரவும்.\n\nSLT-MOBITEL`
+    }
+
+    return this.sendSMS({
+      to: mobileNumber,
+      message: messages[language]
+    })
+  }
+
+  /**
+   * Send service delay notification
+   */
+  async sendServiceDelayNotification(
+    mobileNumber: string,
+    details: {
+      tokenNumber: number
+      outletName: string
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SMSResponse> {
+    // Format token number to 3 digits (e.g., 001, 018, 123)
+    const formattedToken = details.tokenNumber.toString().padStart(3, '0')
+    
+    const messages = {
+      en: `Dear Valued Customer\n\nWe're experiencing a delay in service. Your token number ${formattedToken} will be called shortly. We appreciate your patience.\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\nසේවාවේ ප්‍රමාදයක් ඇත. ඔබගේ ටෝකන් අංකය ${formattedToken} ඉක්මනින් ඇමතීමට යොදවනු ඇත. ඔබගේ ඉවසීම අගය කරමු.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\nசேவையில் தாமதம் ஏற்பட்டுள்ளது. உங்கள் டோக்கன் எண் ${formattedToken} விரைவில் அழைக்கப்படும். உங்கள் பொறுமைக்கு நன்றி.\n\nSLT-MOBITEL`
     }
 
     return this.sendSMS({
@@ -220,10 +306,13 @@ class SLTSmsService {
     counterNumber: number,
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
+    // Format token number to 3 digits (e.g., 001, 018, 123)
+    const formattedToken = tokenNumber.toString().padStart(3, '0')
+    
     const messages = {
-      en: `Token #${tokenNumber}: Please proceed to Counter ${counterNumber}. -DQMS`,
-      si: `ටෝකන් #${tokenNumber}: කරුණාකර කවුන්ටර් ${counterNumber} වෙත යන්න. -DQMS`,
-      ta: `டோக்கன் #${tokenNumber}: கவுண்டர் ${counterNumber} க்கு செல்லவும். -DQMS`
+      en: `Dear Valued Customer\n\nToken Number ${formattedToken}. Please proceed to Counter ${counterNumber}.\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\nටෝකන් අංකය ${formattedToken}. කරුණාකර කවුන්ටර් ${counterNumber} වෙත යන්න.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\nடோக்கன் எண் ${formattedToken}. தயவுசெய்து கவுண்டர் ${counterNumber} க்கு செல்லவும்.\n\nSLT-MOBITEL`
     }
 
     return this.sendSMS({
@@ -244,7 +333,7 @@ class SLTSmsService {
       accountNumber: string
     }
   ): Promise<SMSResponse> {
-    const message = `Dear ${billDetails.accountName}, your SLT bill: Rs. ${billDetails.amount} due on ${billDetails.dueDate}. Account: ${billDetails.accountNumber}. -SLT Telecom`
+    const message = `Dear Valued Customer\n\nYour SLT bill payment reminder:\n\nAmount: Rs. ${billDetails.amount}\nDue Date: ${billDetails.dueDate}\nAccount: ${billDetails.accountNumber}\n\nSLT-MOBITEL`
 
     return this.sendSMS({
       to: mobileNumber,
@@ -268,10 +357,16 @@ class SLTSmsService {
   ): Promise<SMSResponse> {
     console.log(`[SLT SMS CALL] Attempting to send customer called SMS to ${mobileNumber} for token #${details.tokenNumber}`)
 
+    // Format token number to 3 digits (e.g., 001, 018, 123)
+    const formattedToken = details.tokenNumber.toString().padStart(3, '0')
+
+    const fullEnglishMessage = `Dear Valued Customer\n\nToken Number ${formattedToken}. Please proceed to Counter ${details.counterNumber}.\n\nStatus: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`
+    const compactEnglishMessage = `Dear Valued Customer\n\nToken Number ${formattedToken}. Please proceed to Counter ${details.counterNumber}.\n\nSLT-MOBITEL`
+    
     const messages = {
-      en: `SLT DQMS: Dear ${details.firstName}, Token #${details.tokenNumber} proceed to Counter ${details.counterNumber} at ${details.outletName}. Status: ${details.recoveryUrl} -SLT`,
-      si: `SLT DQMS: ${details.firstName}, ටෝකන් #${details.tokenNumber} කරුණාකර ${details.outletName} කවුන්ටර් ${details.counterNumber} වෙත යන්න. තත්වය: ${details.recoveryUrl} -SLT`,
-      ta: `SLT DQMS: ${details.firstName}, டோக்கன் #${details.tokenNumber} தயவுसெய்து ${details.outletName} கవுண்டர் ${details.counterNumber} க்கு செல்லவும். நிலை: ${details.recoveryUrl} -SLT`
+      en: fullEnglishMessage.length <= 160 ? fullEnglishMessage : compactEnglishMessage,
+      si: `ගරු පාරිභෝගිකයා\n\nටෝකන් අංකය ${formattedToken}. කරුණාකර කවුන්ටර් ${details.counterNumber} වෙත යන්න.\n\nතත්වය: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\nடோக்கன் எண் ${formattedToken}. தயவுசெய்து கவுண்டர் ${details.counterNumber} க்கு செல்லவும்.\n\nநிலை: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`
     }
 
     console.log(`[SLT SMS CALL] Message content (${messages[language].length} chars): ${messages[language]}`)
@@ -297,10 +392,13 @@ class SLTSmsService {
   ): Promise<SMSResponse> {
     console.log(`[SLT SMS SKIP] Attempting to send skip SMS to ${mobileNumber} for token #${details.tokenNumber}`)
 
+    // Format token number to 3 digits (e.g., 001, 018, 123)
+    const formattedToken = details.tokenNumber.toString().padStart(3, '0')
+    
     const messages = {
-      en: `SLT DQMS: Dear ${details.firstName}, Token #${details.tokenNumber} skipped at ${details.outletName}. Check status: ${details.recoveryUrl} -SLT`,
-      si: `SLT DQMS: ${details.firstName}, ටෝකන් #${details.tokenNumber} ${details.outletName} මඟ හැරිණි. තත්වය: ${details.recoveryUrl} -SLT`,
-      ta: `SLT DQMS: ${details.firstName}, டோக்கன் #${details.tokenNumber} ${details.outletName} தவிர்க்கப்பட்டது. நிலை: ${details.recoveryUrl} -SLT`
+      en: `Dear Valued Customer\n\nToken ${formattedToken} was skipped.\n\nStatus: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\nටෝකන් ${formattedToken} මඟ හැරිණි.\n\nතත්වය: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\nடோக்கன் ${formattedToken} தவிர்க்கப்பட்டது.\n\nநிலை: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`
     }
 
     console.log(`[SLT SMS SKIP] Message content (${messages[language].length} chars): "${messages[language]}"`)
@@ -330,10 +428,13 @@ class SLTSmsService {
   ): Promise<SMSResponse> {
     console.log(`[SLT SMS RECALL] Attempting to send recall SMS to ${mobileNumber} for token #${details.tokenNumber}`)
 
+    // Format token number to 3 digits (e.g., 001, 018, 123)
+    const formattedToken = details.tokenNumber.toString().padStart(3, '0')
+    
     const messages = {
-      en: `SLT DQMS: Dear ${details.firstName}, Token #${details.tokenNumber} recalled at ${details.outletName}. Check status: ${details.recoveryUrl} -SLT`,
-      si: `SLT DQMS: ${details.firstName}, ටෝකන් #${details.tokenNumber} ${details.outletName} නැවත ඇමතිණි. තත්වය: ${details.recoveryUrl} -SLT`,
-      ta: `SLT DQMS: ${details.firstName}, டோக்கன் #${details.tokenNumber} ${details.outletName} திரும்ப அழைக்கப்பட்டது. நிலை: ${details.recoveryUrl} -SLT`
+      en: `Dear Valued Customer\n\nToken ${formattedToken} has been recalled.\n\nStatus: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\nටෝකන් ${formattedToken} නැවත ඇමතිණි.\n\nතත්වය: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\nடோக்கன் ${formattedToken} திரும்ப அழைக்கப்பட்டது.\n\nநிலை: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`
     }
 
     console.log(`[SLT SMS RECALL] Message content (${messages[language].length} chars): "${messages[language]}"`)
@@ -355,6 +456,7 @@ class SLTSmsService {
     mobileNumber: string,
     details: {
       firstName: string
+      tokenNumber?: number
       refNumber: string
       services: string
       feedbackUrl: string
@@ -363,10 +465,19 @@ class SLTSmsService {
   ): Promise<SMSResponse> {
     console.log(`[SLT SMS COMPLETE] Attempting to send service completion SMS to ${mobileNumber} for ref ${details.refNumber}`)
 
+    // Format token number to 3 digits if provided
+    const formattedToken = details.tokenNumber ? details.tokenNumber.toString().padStart(3, '0') : null
+    
     const messages = {
-      en: `SLT DQMS: Dear ${details.firstName}, service completed. Ref: ${details.refNumber}. Please rate us: ${details.feedbackUrl} -SLT`,
-      si: `SLT DQMS: ${details.firstName}, සේවාව සම්පූර්ණයි. Ref: ${details.refNumber}. කරුණාකර අගයන්න: ${details.feedbackUrl} -SLT`,
-      ta: `SLT DQMS: ${details.firstName}, சேவை முடிந்தது. Ref: ${details.refNumber}. தயவुसेटि மதிப्पीटுங্গள्: ${details.feedbackUrl} -SLT`
+      en: formattedToken 
+        ? `Thank you! Service completed. Ref: ${details.refNumber}. Feedback: ${details.feedbackUrl} -SLT-MOBITEL`
+        : `Thank you! Service completed. Ref: ${details.refNumber}. Feedback: ${details.feedbackUrl} -SLT-MOBITEL`,
+      si: formattedToken
+        ? `ස්තුතියි! සේවාව සම්පූර්ණයි. Ref: ${details.refNumber}. ප්‍රතිපෝෂණ: ${details.feedbackUrl} -SLT-MOBITEL`
+        : `ස්තුතියි! සේවාව සම්පූර්ණයි. Ref: ${details.refNumber}. ප්‍රතිපෝෂණ: ${details.feedbackUrl} -SLT-MOBITEL`,
+      ta: formattedToken
+        ? `நன்றி! சேவை முடிந்தது. Ref: ${details.refNumber}. கருத்து: ${details.feedbackUrl} -SLT-MOBITEL`
+        : `நன்றி! சேவை முடிந்தது. Ref: ${details.refNumber}. கருத்து: ${details.feedbackUrl} -SLT-MOBITEL`
     }
 
     console.log(`[SLT SMS COMPLETE] Message content (${messages[language].length} chars): "${messages[language]}"`)
@@ -394,12 +505,10 @@ class SLTSmsService {
     },
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
-    const greeting = details.firstName ? ` Dear ${details.firstName},` : ''
-
     const messages = {
-      en: `SLT DQMS:${greeting} Your registration code for ${details.outletName} is ${details.otpCode}. Valid 5 min. Continue: ${details.recoveryUrl} -SLT`,
-      si: `SLT DQMS:${details.firstName ? ` ${details.firstName},` : ''} ${details.outletName} ලියාපදිංචි කේතය ${details.otpCode}. මිනිත්තු 5. පුරිදු: ${details.recoveryUrl} -SLT`,
-      ta: `SLT DQMS:${details.firstName ? ` ${details.firstName},` : ''} ${details.outletName} பதிவு குறியீடு ${details.otpCode}. 5 நிமிடம். தொடர்: ${details.recoveryUrl} -SLT`
+      en: `Dear Valued Customer\n\nYour registration code for ${details.outletName} is ${details.otpCode}. Valid for 5 minutes.\n\nContinue: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} සඳහා ඔබගේ ලියාපදිංචි කේතය ${details.otpCode}. මිනිත්තු 5 සඳහා වලංගුයි.\n\nදිගටම කරගෙන යන්න: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} க்கான உங்கள் பதிவு குறியீடு ${details.otpCode}. 5 நிமிடங்களுக்கு செல்லுபடியாகும்.\n\nதொடர: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`
     }
 
     return this.sendSMS({
@@ -414,19 +523,41 @@ class SLTSmsService {
   async sendTokenConfirmation(
     mobileNumber: string,
     details: {
-      firstName: string
+      firstName?: string
       tokenNumber: number
       queuePosition: number
       outletName: string
-      trackingUrl: string
-      services: string
+      trackingUrl?: string
+      services?: string
+      estimatedWait?: number
     },
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
+    // Format token number to 3 digits (e.g., 001, 018, 123)
+    const formattedToken = details.tokenNumber.toString().padStart(3, '0')
+    const estimatedWait = details.estimatedWait ?? Math.max(1, details.queuePosition * 5)
+
+    const fullEnglishMessage = `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active. You are currently in position ${details.queuePosition} with an estimated wait time of ${estimatedWait} minutes.\n\nSLT-MOBITEL`
+
+    const buildCompactEnglishMessage = () => {
+      const prefix = `Dear Valued Customer\n\nToken ${formattedToken} at `
+      const suffix = ` is active. Position ${details.queuePosition}. Est. wait ${estimatedWait} min.\n\nSLT-MOBITEL`
+      const maxOutletLength = 160 - prefix.length - suffix.length
+      const safeMax = Math.max(8, maxOutletLength)
+      const outlet = details.outletName.length > safeMax
+        ? `${details.outletName.slice(0, safeMax - 3).trimEnd()}...`
+        : details.outletName
+
+      const compact = `${prefix}${outlet}${suffix}`
+      if (compact.length <= 160) return compact
+
+      return `Dear Valued Customer\n\nToken ${formattedToken} active. Pos ${details.queuePosition}. Wait ${estimatedWait} min.\n\nSLT-MOBITEL`
+    }
+    
     const messages = {
-      en: `SLT DQMS: Dear ${details.firstName}, Token #${details.tokenNumber} for ${details.services} at ${details.outletName}. Position: ${details.queuePosition}. Track: ${details.trackingUrl} -SLT`,
-      si: `SLT DQMS: ${details.firstName}, ${details.outletName} හි ${details.services} සඳහා ටෝකන් #${details.tokenNumber}. ස්ථානය: ${details.queuePosition}. ට්‍රැක්: ${details.trackingUrl} -SLT`,
-      ta: `SLT DQMS: ${details.firstName}, ${details.outletName} இல் ${details.services} க்கான டோக்கன் #${details.tokenNumber}. நிலை: ${details.queuePosition}. கண்காணி: ${details.trackingUrl} -SLT`
+      en: fullEnglishMessage.length <= 160 ? fullEnglishMessage : buildCompactEnglishMessage(),
+      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${formattedToken} දැන් සක්‍රීයයි. ඔබ දැනට ${details.queuePosition} ස්ථානයේ සිටී. ඇස්තමේන්තු පොරොත්තු කාලය: විනාඩි ${estimatedWait}.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} இப்போது செயலில் உள்ளது. நீங்கள் தற்போது ${details.queuePosition} நிலையில் உள்ளீர்கள். மதிப்பீட்டு காத்திருப்பு நேரம்: ${estimatedWait} நிமிடங்கள்.\n\nSLT-MOBITEL`
     }
 
     return this.sendSMS({
@@ -448,10 +579,13 @@ class SLTSmsService {
     },
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
+    // Format token number to 3 digits (e.g., 001, 018, 123)
+    const formattedToken = details.tokenNumber.toString().padStart(3, '0')
+    
     const messages = {
-      en: `Welcome ${details.name}! Your token #${details.tokenNumber} at ${details.outletName}. Est. wait: ${details.estimatedWait} min. -DQMS`,
-      si: `සාදරයෙන් පිළිගනිමු ${details.name}! ඔබගේ ටෝකන් #${details.tokenNumber} - ${details.outletName}. ඇස්තමේන්තු් පොරොත්තුව: ${details.estimatedWait} මිනි. -DQMS`,
-      ta: `வரவேற்கிறோம் ${details.name}! உங்கள் டோக்கன் #${details.tokenNumber} - ${details.outletName}. மதிப்பீட்டு காத்திருப்பு: ${details.estimatedWait} நிமி. -DQMS`
+      en: `Dear Valued Customer\n\nWelcome to ${details.outletName}!\n\nYour token number: ${formattedToken}\nEstimated wait time: ${details.estimatedWait} minutes\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} වෙත සාදරයෙන් පිළිගනිමු!\n\nඔබගේ ටෝකන් අංකය: ${formattedToken}\nඇස්තමේන්තු පොරොත්තු කාලය: විනාඩි ${details.estimatedWait}\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} க்கு வரவேற்கிறோம்!\n\nஉங்கள் டோக்கன் எண்: ${formattedToken}\nமதிப்பீட்டு காத்திருப்பு நேரம்: ${details.estimatedWait} நிமிடங்கள்\n\nSLT-MOBITEL`
     }
 
     return this.sendSMS({

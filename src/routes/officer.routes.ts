@@ -899,6 +899,7 @@ router.post("/complete-service", async (req, res) => {
 
         await sltSmsService.sendServiceCompletion(token.customer.mobileNumber, {
           firstName,
+          tokenNumber: token.tokenNumber,
           refNumber: serviceCase.refNumber,
           services,
           feedbackUrl
