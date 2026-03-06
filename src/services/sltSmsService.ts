@@ -536,12 +536,16 @@ class SLTSmsService {
     // Format token number to 3 digits (e.g., 001, 018, 123)
     const formattedToken = details.tokenNumber.toString().padStart(3, '0')
     const estimatedWait = details.estimatedWait ?? Math.max(1, details.queuePosition * 5)
+    const hasTrackingUrl = !!details.trackingUrl
 
-    const fullEnglishMessage = `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active. You are currently in position ${details.queuePosition} with an estimated wait time of ${estimatedWait} minutes.\n\nSLT-MOBITEL`
+    const fullEnglishMessage = hasTrackingUrl
+      ? `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active. You are currently in position ${details.queuePosition} with an estimated wait time of ${estimatedWait} minutes.\n\nStatus: ${details.trackingUrl} -SLT\n\nSLT-MOBITEL`
+      : `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active. You are currently in position ${details.queuePosition} with an estimated wait time of ${estimatedWait} minutes.\n\nSLT-MOBITEL`
 
     const buildCompactEnglishMessage = () => {
+      const statusSuffix = hasTrackingUrl ? `\n\nStatus: ${details.trackingUrl} -SLT` : ''
       const prefix = `Dear Valued Customer\n\nToken ${formattedToken} at `
-      const suffix = ` is active. Position ${details.queuePosition}. Est. wait ${estimatedWait} min.\n\nSLT-MOBITEL`
+      const suffix = ` is active. Position ${details.queuePosition}. Est. wait ${estimatedWait} min.${statusSuffix}\n\nSLT-MOBITEL`
       const maxOutletLength = 160 - prefix.length - suffix.length
       const safeMax = Math.max(8, maxOutletLength)
       const outlet = details.outletName.length > safeMax
@@ -550,6 +554,11 @@ class SLTSmsService {
 
       const compact = `${prefix}${outlet}${suffix}`
       if (compact.length <= 160) return compact
+
+      if (hasTrackingUrl) {
+        const compactWithStatus = `Dear Valued Customer\n\nToken ${formattedToken} active. Pos ${details.queuePosition}. Wait ${estimatedWait} min.\n\nStatus: ${details.trackingUrl} -SLT\n\nSLT-MOBITEL`
+        if (compactWithStatus.length <= 160) return compactWithStatus
+      }
 
       return `Dear Valued Customer\n\nToken ${formattedToken} active. Pos ${details.queuePosition}. Wait ${estimatedWait} min.\n\nSLT-MOBITEL`
     }

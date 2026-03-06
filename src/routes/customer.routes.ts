@@ -473,10 +473,27 @@ router.post("/register", async (req, res) => {
 
     // Send token confirmation SMS
     try {
+      // Build tracking URL for customer lookup
+      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+      let baseUrl = origins[0] || ''
+
+      // Always prioritize Vercel URLs if available
+      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+      if (vercelUrl) {
+        baseUrl = vercelUrl
+      } else if (process.env.NODE_ENV === 'production') {
+        // In production, prefer any HTTPS URL over localhost
+        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
+      }
+
+      const shortId = token.id.substring(0, 8)
+      const trackingUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+
       await sltSmsService.sendTokenConfirmation(token.customer.mobileNumber, {
         tokenNumber: token.tokenNumber,
         queuePosition,
         outletName: token.outlet?.name || 'SLT Office',
+        trackingUrl,
         estimatedWait
       })
       console.log(`✓ Token confirmation SMS sent to ${token.customer.mobileNumber}`)
