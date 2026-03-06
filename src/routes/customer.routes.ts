@@ -307,7 +307,13 @@ router.post("/register", async (req, res) => {
   try {
     const { name, mobileNumber, serviceTypes, outletId, qrToken, preferredLanguages, sltMobileNumber, nicNumber, email, verifiedMobileToken } = req.body
 
-    console.log(`Registration attempt - Mobile: ${mobileNumber}, Outlet: ${outletId}, Services: ${serviceTypes}`)
+    console.log(`\n========== [REGISTRATION] new registration attempt ==========`)
+    console.log(`[REGISTRATION] Mobile: ${mobileNumber}`)
+    console.log(`[REGISTRATION] Outlet: ${outletId}`)
+    console.log(`[REGISTRATION] Services: ${JSON.stringify(serviceTypes)}`)
+    console.log(`[REGISTRATION] Name: ${name}`)
+    console.log(`[REGISTRATION] Languages: ${JSON.stringify(preferredLanguages)}`)
+    console.log(`==========================================================\n`)
 
     // Validate input
     if (!name || !mobileNumber || !Array.isArray(serviceTypes) || serviceTypes.length === 0 || !outletId) {
@@ -471,9 +477,14 @@ router.post("/register", async (req, res) => {
 
     const estimatedWait = Math.max(1, queuePosition * 5) // 5 min per person, minimum 1 min
 
+    console.log(`[REGISTRATION] Successfully created token #${token.tokenNumber} for ${token.customer.name}, position: ${queuePosition}, wait: ${estimatedWait} min`)
+
     // Send token confirmation SMS with tracking URL
     try {
       const firstName = token.customer.name.split(' ')[0]
+      const smsLanguage = Array.isArray(token.preferredLanguages) && token.preferredLanguages.length > 0
+        ? (token.preferredLanguages[0] as 'en' | 'si' | 'ta')
+        : 'en'
 
       // Build tracking URL
       const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
@@ -498,19 +509,54 @@ router.post("/register", async (req, res) => {
       });
       const serviceNames = services.map(s => s.title).join(", ") || "Service";
 
-      await sltSmsService.sendTokenConfirmation(token.customer.mobileNumber, {
+      console.log(`[REGISTRATION] About to send token confirmation SMS to ${token.customer.mobileNumber} for token #${token.tokenNumber} (language: ${smsLanguage})`)
+
+      const smsResult = await sltSmsService.sendTokenConfirmation(token.customer.mobileNumber, {
         firstName,
         tokenNumber: token.tokenNumber,
         queuePosition,
         outletName: token.outlet?.name || 'SLT Office',
         trackingUrl,
-        services: serviceNames
-      })
-      console.log(`✓ Token confirmation SMS sent to ${token.customer.mobileNumber}`)
+        recoveryUrl: trackingUrl,
+        services: serviceNames,
+        estimatedWaitMinutes: estimatedWait
+      }, smsLanguage)
+
+      console.log(`[REGISTRATION] SMS result:`, smsResult)
+
+      if (smsResult.success) {
+        console.log(`✓ Token confirmation SMS sent to ${token.customer.mobileNumber} via SLT`)
+      } else {
+        console.error(`✗ Token confirmation SMS failed (SLT):`, smsResult.error)
+        
+        const tokenDisplay = String(token.tokenNumber).padStart(3, '0')
+        const fallbackBody = `Dear Valued Customer\n\nYour token number ${tokenDisplay} at ${token.outlet?.name || 'SLT Office'} is now active. You are currently in position ${queuePosition} with an estimated wait time of ${estimatedWait} minutes.\n\nRecovery URL: ${trackingUrl}\n\nSLT-MOBITEL`
+
+        console.log(`[REGISTRATION] Trying fallback SMS helper...`)
+        const fallbackResult = await smsHelper.sendSMS({
+          to: token.customer.mobileNumber,
+          body: fallbackBody,
+          language: smsLanguage,
+        })
+
+        console.log(`[REGISTRATION] Fallback result:`, fallbackResult)
+
+        if (fallbackResult.success) {
+          console.log(`✓ Token confirmation SMS sent to ${token.customer.mobileNumber} via fallback (${fallbackResult.provider})`)
+        } else {
+          console.error(`✗ Token confirmation SMS failed completely for ${token.customer.mobileNumber}:`, {
+            sltError: smsResult.error,
+            fallbackError: fallbackResult.error,
+            fallbackProvider: fallbackResult.provider,
+          })
+        }
+      }
     } catch (smsError) {
-      console.error('Token confirmation SMS failed:', smsError)
+      console.error('Token confirmation SMS exception:', smsError)
       // Continue execution even if SMS fails
     }
+
+    console.log(`[REGISTRATION] Completed! Token #${token.tokenNumber} created and SMS attempt sent\n`)
 
     // Broadcast update after successful transaction
     broadcast({ type: "NEW_TOKEN", data: token })

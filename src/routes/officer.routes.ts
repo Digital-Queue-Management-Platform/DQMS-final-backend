@@ -396,16 +396,27 @@ router.post("/next-token", async (req, res) => {
       const shortId = updatedToken.id.substring(0, 8)
       const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
 
-      console.log(`[NEXT-TOKEN] About to send SMS to ${updatedToken.customer.mobileNumber} for token #${updatedToken.tokenNumber}`)
+      // Extract customer's preferred language
+      const preferredLanguages = Array.isArray(updatedToken.preferredLanguages) ? updatedToken.preferredLanguages : []
+      const customerLang: 'en' | 'si' | 'ta' = (preferredLanguages.length > 0 && (preferredLanguages[0] === 'si' || preferredLanguages[0] === 'ta')) 
+        ? preferredLanguages[0] as 'en' | 'si' | 'ta'
+        : 'en'
 
-      await sltSmsService.sendCustomerCalled(updatedToken.customer.mobileNumber, {
+      console.log(`[NEXT-TOKEN] About to send SMS to ${updatedToken.customer.mobileNumber} for token #${updatedToken.tokenNumber} (language: ${customerLang})`)
+
+      const smsResult = await sltSmsService.sendCustomerCalled(updatedToken.customer.mobileNumber, {
         firstName,
         tokenNumber: updatedToken.tokenNumber,
         counterNumber: officer.counterNumber || 0,
         outletName: updatedToken.outlet?.name || 'SLT Office',
         recoveryUrl
-      })
-      console.log(`✓ Next-token SMS sent to customer ${updatedToken.customer.mobileNumber} for token #${updatedToken.tokenNumber}`)
+      }, customerLang)
+      
+      if (smsResult.success) {
+        console.log(`✓ Next-token SMS sent to customer ${updatedToken.customer.mobileNumber} for token #${updatedToken.tokenNumber}`)
+      } else {
+        console.error(`✗ Next-token SMS failed for ${updatedToken.customer.mobileNumber}:`, smsResult.error)
+      }
     } catch (smsError) {
       console.error('Next-token SMS sending failed:', smsError)
       // Continue execution even if SMS fails
@@ -576,13 +587,24 @@ router.post("/skip-token", async (req, res) => {
       const shortId = skipped.id.substring(0, 8)
       const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
 
-      await sltSmsService.sendCustomerSkipped(skipped.customer.mobileNumber, {
+      // Extract customer's preferred language
+      const preferredLanguages = Array.isArray(skipped.preferredLanguages) ? skipped.preferredLanguages : []
+      const customerLang: 'en' | 'si' | 'ta' = (preferredLanguages.length > 0 && (preferredLanguages[0] === 'si' || preferredLanguages[0] === 'ta')) 
+        ? preferredLanguages[0] as 'en' | 'si' | 'ta'
+        : 'en'
+
+      const smsResult = await sltSmsService.sendCustomerSkipped(skipped.customer.mobileNumber, {
         firstName,
         tokenNumber: skipped.tokenNumber,
         outletName: skipped.outlet?.name || 'SLT Office',
         recoveryUrl
-      })
-      console.log(`✓ Skip SMS sent to customer ${skipped.customer.mobileNumber} for token #${skipped.tokenNumber}`)
+      }, customerLang)
+      
+      if (smsResult.success) {
+        console.log(`✓ Skip SMS sent to customer ${skipped.customer.mobileNumber} for token #${skipped.tokenNumber} (language: ${customerLang})`)
+      } else {
+        console.error(`✗ Skip SMS failed for ${skipped.customer.mobileNumber}:`, smsResult.error)
+      }
     } catch (smsError) {
       console.error('Skip SMS sending failed:', smsError)
       // Continue execution even if SMS fails
@@ -646,13 +668,26 @@ router.post("/recall-token", async (req, res) => {
       const shortId = recalled.id.substring(0, 8)
       const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
 
-      await sltSmsService.sendCustomerRecalled(recalled.customer.mobileNumber, {
+      // Extract customer's preferred language
+      const preferredLanguages = Array.isArray(recalled.preferredLanguages) ? recalled.preferredLanguages : []
+      const customerLang: 'en' | 'si' | 'ta' = (preferredLanguages.length > 0 && (preferredLanguages[0] === 'si' || preferredLanguages[0] === 'ta')) 
+        ? preferredLanguages[0] as 'en' | 'si' | 'ta'
+        : 'en'
+
+      console.log(`[RECALL-TOKEN] About to send SMS to ${recalled.customer.mobileNumber} for token #${recalled.tokenNumber} (language: ${customerLang})`)
+
+      const smsResult = await sltSmsService.sendCustomerRecalled(recalled.customer.mobileNumber, {
         firstName,
         tokenNumber: recalled.tokenNumber,
         outletName: recalled.outlet?.name || 'SLT Office',
         recoveryUrl
-      })
-      console.log(`✓ Recall SMS sent to customer ${recalled.customer.mobileNumber} for token #${recalled.tokenNumber}`)
+      }, customerLang)
+      
+      if (smsResult.success) {
+        console.log(`✓ Recall SMS sent to customer ${recalled.customer.mobileNumber} for token #${recalled.tokenNumber} (language: ${customerLang})`)
+      } else {
+        console.error(`✗ Recall SMS failed for ${recalled.customer.mobileNumber}:`, smsResult.error)
+      }
     } catch (smsError) {
       console.error('Recall SMS sending failed:', smsError)
       // Continue execution even if SMS fails
@@ -761,16 +796,27 @@ router.post("/call-token", async (req, res) => {
       const shortId = called.id.substring(0, 8)
       const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
 
-      console.log(`[CALL-TOKEN] About to send SMS to ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
+      // Extract customer's preferred language
+      const preferredLanguages = Array.isArray(called.preferredLanguages) ? called.preferredLanguages : []
+      const customerLang: 'en' | 'si' | 'ta' = (preferredLanguages.length > 0 && (preferredLanguages[0] === 'si' || preferredLanguages[0] === 'ta')) 
+        ? preferredLanguages[0] as 'en' | 'si' | 'ta'
+        : 'en'
 
-      await sltSmsService.sendCustomerCalled(called.customer.mobileNumber, {
+      console.log(`[CALL-TOKEN] About to send SMS to ${called.customer.mobileNumber} for token #${called.tokenNumber} (language: ${customerLang})`)
+
+      const smsResult = await sltSmsService.sendCustomerCalled(called.customer.mobileNumber, {
         firstName,
         tokenNumber: called.tokenNumber,
         counterNumber: officer.counterNumber || 0,
         outletName: called.outlet?.name || 'SLT Office',
         recoveryUrl
-      })
-      console.log(`✓ Call-to-counter SMS sent to customer ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
+      }, customerLang)
+      
+      if (smsResult.success) {
+        console.log(`✓ Call-to-counter SMS sent to customer ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
+      } else {
+        console.error(`✗ Call-to-counter SMS failed for ${called.customer.mobileNumber}:`, smsResult.error)
+      }
     } catch (smsError) {
       console.error('Call-to-counter SMS sending failed:', smsError)
       // Continue execution even if SMS fails

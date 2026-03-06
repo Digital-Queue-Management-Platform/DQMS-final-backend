@@ -83,10 +83,14 @@ class SLTSmsService {
     try {
       // Validate credentials
       if (!this.config.username || !this.config.password || !this.config.smsAlias) {
-        console.warn('SLT SMS credentials not configured')
+        console.error('[SLT SMS] Missing credentials:', {
+          hasUsername: !!this.config.username,
+          hasPassword: !!this.config.password,
+          hasAlias: !!this.config.smsAlias
+        })
         return {
           success: false,
-          error: 'SLT SMS service not configured'
+          error: 'SLT SMS service not configured - missing credentials'
         }
       }
 
@@ -95,14 +99,15 @@ class SLTSmsService {
 
       // Validate Sri Lankan mobile number (should start with 94 and be 11 digits)
       if (!normalizedMobile.startsWith('94') || normalizedMobile.length !== 11) {
-        console.error(`Invalid Sri Lankan mobile number: ${params.to}`)
+        console.error(`[SLT SMS] Invalid Sri Lankan mobile number: ${params.to} -> normalized: ${normalizedMobile}`)
         return {
           success: false,
-          error: 'Invalid mobile number format'
+          error: `Invalid mobile number format: ${params.to}`
         }
       }
 
-      console.log(`[SLT SMS] Sending SMS to ${normalizedMobile}`)
+      console.log(`[SLT SMS] Sending SMS to ${normalizedMobile} (original: ${params.to})`)
+      console.log(`[SLT SMS] Message: ${params.message.substring(0, 100)}...`)
 
       // Send request to SLT SMS API using GET with query parameters
       const response = await this.axiosInstance.get('', {
@@ -120,19 +125,26 @@ class SLTSmsService {
       // Check response - SLT API typically returns status in response
       if (response.status === 200) {
         console.log(`[SLT SMS] Message sent successfully to ${normalizedMobile}`)
+        console.log(`[SLT SMS] Response:`, response.data)
         return {
           success: true,
           messageId: response.data?.messageId || Date.now().toString()
         }
       } else {
-        console.error(`[SLT SMS] Failed to send message:`, response.data)
+        console.error(`[SLT SMS] Failed to send message - Status: ${response.status}`)
+        console.error(`[SLT SMS] Response:`, response.data)
         return {
           success: false,
-          error: response.data?.error || 'Failed to send SMS'
+          error: response.data?.error || `HTTP ${response.status}: Failed to send SMS`
         }
       }
     } catch (error: any) {
-      console.error('[SLT SMS] Error sending SMS:', error.message)
+      console.error('[SLT SMS] Exception sending SMS:', error.message)
+      console.error('[SLT SMS] Error details:', {
+        code: error.code,
+        response: error.response?.data,
+        status: error.response?.status
+      })
       return {
         success: false,
         error: error.message || 'Failed to send SMS'
@@ -271,9 +283,9 @@ class SLTSmsService {
     console.log(`[SLT SMS CALL] Attempting to send customer called SMS to ${mobileNumber} for token #${details.tokenNumber}`)
 
     const messages = {
-      en: `Dear Valued Customer\n\nToken Number ${details.tokenNumber}. Please proceed to Counter ${details.counterNumber}.\n\nStatus: ${details.recoveryUrl}\n\nSLT-MOBITEL`,
-      si: `ගරු ගිණුම්කරු\n\nටෝකන් සංඛ්‍යා ${details.tokenNumber}. කරුණාකර කවුන්ටර් ${details.counterNumber} වෙත යන්න.\n\nතත්වය: ${details.recoveryUrl}\n\nSLT-MOBITEL`,
-      ta: `மதிப்புமிக்க வாடிக்கையாளர்\n\nடோக்கன் எண் ${details.tokenNumber}. கவுண்டர் ${details.counterNumber} க்கு செல்லவும்.\n\nநிலை: ${details.recoveryUrl}\n\nSLT-MOBITEL`
+      en: `Dear Customer\n\nToken ${details.tokenNumber}. Please come to Counter ${details.counterNumber}.\n\nStatus: ${details.recoveryUrl}\n\nSLT-MOBITEL`,
+      si: `ගරු ගිණුම්කරු\n\nටෝකන් ${details.tokenNumber}. කවුන්ටර් ${details.counterNumber} වෙත එන්න.\n\nතත්වය: ${details.recoveryUrl}\n\nSLT-MOBITEL`,
+      ta: `வாடிக்கையாளர்\n\nடோக்கன் ${details.tokenNumber}. கவுண்டர் ${details.counterNumber} வாருங்கள்.\n\nநிலை: ${details.recoveryUrl}\n\nSLT-MOBITEL`
     }
 
     console.log(`[SLT SMS CALL] Message content (${messages[language].length} chars): ${messages[language]}`)
@@ -300,9 +312,9 @@ class SLTSmsService {
     console.log(`[SLT SMS SKIP] Attempting to send skip SMS to ${mobileNumber} for token #${details.tokenNumber}`)
 
     const messages = {
-      en: `Dear Valued Customer\n\nToken Number ${details.tokenNumber} could not be processed at ${details.outletName}.\n\nCheck status: ${details.recoveryUrl}\n\nSLT-MOBITEL`,
-      si: `ගරු ගිණුම්කරු\n\nටෝකන් සංඛ්‍යා ${details.tokenNumber} ${details.outletName} බිම සැකසිය නොහැකි විය.\n\nතත්වය: ${details.recoveryUrl}\n\nSLT-MOBITEL`,
-      ta: `மதிப்புமிக்க வாடிக்கையாளர்\n\nடோக்கன் எண் ${details.tokenNumber} ஐ ${details.outletName} இல் செயல்படுத்த முடியவில்லை.\n\nநிலை: ${details.recoveryUrl}\n\nSLT-MOBITEL`
+      en: `Dear Customer\n\nToken ${details.tokenNumber} skipped at ${details.outletName}.\n\nStatus: ${details.recoveryUrl}\n\nSLT-MOBITEL`,
+      si: `ගරු ගිණුම්කරු\n\nටෝකන් ${details.tokenNumber} ${details.outletName} මඟ හැරිණි.\n\nතත්වය: ${details.recoveryUrl}\n\nSLT-MOBITEL`,
+      ta: `வாடிக்கையாளர்\n\nடோக்கன் ${details.tokenNumber} ${details.outletName} இல் தவிர்க்கப்பட்டது.\n\nநிலை: ${details.recoveryUrl}\n\nSLT-MOBITEL`
     }
 
     console.log(`[SLT SMS SKIP] Message content (${messages[language].length} chars): "${messages[language]}"`)
@@ -333,9 +345,9 @@ class SLTSmsService {
     console.log(`[SLT SMS RECALL] Attempting to send recall SMS to ${mobileNumber} for token #${details.tokenNumber}`)
 
     const messages = {
-      en: `Dear Valued Customer\n\nToken Number ${details.tokenNumber}.\n\nPlease proceed to Counter at ${details.outletName}.\n\nCheck status: ${details.recoveryUrl}\n\nSLT-MOBITEL`,
-      si: `ගරු ගිණුම්කරු\n\nටෝකන් සංඛ්‍යා ${details.tokenNumber}.\n\n${details.outletName} බිම කවුන්ටරට යන්න.\n\nතත්වය: ${details.recoveryUrl}\n\nSLT-MOBITEL`,
-      ta: `மதிப்புமிக்க வாடிக்கையாளர்\n\nடோக்கன் எண் ${details.tokenNumber}.\n\n${details.outletName} கவுண்டருக்கு செல்லவும்.\n\nநிலை: ${details.recoveryUrl}\n\nSLT-MOBITEL`
+      en: `Dear Customer\n\nToken ${details.tokenNumber}\n\nPlease come to ${details.outletName}.\n\nStatus: ${details.recoveryUrl}\n\nSLT-MOBITEL`,
+      si: `ගරු ගිණුම්කරු\n\nටෝකන් ${details.tokenNumber}\n\n${details.outletName} කවුන්ටරට එන්න.\n\nතත්වය: ${details.recoveryUrl}\n\nSLT-MOBITEL`,
+      ta: `வாடிக்கையாளர்\n\nடோக்கன் ${details.tokenNumber}\n\n${details.outletName} வாருங்கள்.\n\nநிலை: ${details.recoveryUrl}\n\nSLT-MOBITEL`
     }
 
     console.log(`[SLT SMS RECALL] Message content (${messages[language].length} chars): "${messages[language]}"`)
@@ -367,9 +379,9 @@ class SLTSmsService {
     console.log(`[SLT SMS COMPLETE] Attempting to send service completion SMS to ${mobileNumber} for ref ${details.refNumber}`)
 
     const messages = {
-      en: `Dear Valued Customer\n\nYour service has been successfully completed. Thank you for visiting us.\n\nRef: ${details.refNumber}\nFeedback: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
-      si: `ගරු ගිණුම්කරු\n\nඔබගේ සේවාව සාර්ථකව සම්පූර්ණ කර ඇත. අපට පැමිණීම සඳහා ස්තුතියි.\n\nRef: ${details.refNumber}\nප්‍රතිචාරය: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
-      ta: `மதிப்புமிக்க வாடிக்கையாளர்\n\nஉங்கள் சேவை வெற்றிகரமாக முடிந்துவிட்டது. எங்களை பார்வையிட்டமைக்கு நன்றி.\n\nRef: ${details.refNumber}\nபின்னூட்டம்: ${details.feedbackUrl}\n\nSLT-MOBITEL`
+      en: `Dear Customer\n\nService completed!\n\nRef: ${details.refNumber}\nFeedback: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
+      si: `ගරු ගිණුම්කරු\n\nසේවාව සම්පූර්ණ.\n\nRef: ${details.refNumber}\nප්‍රතිචාරය: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
+      ta: `வாடிக்கையாளர்\n\nசேவை முடிந்தது!\n\nRef: ${details.refNumber}\nபின்னூட்டம்: ${details.feedbackUrl}\n\nSLT-MOBITEL`
     }
 
     console.log(`[SLT SMS COMPLETE] Message content (${messages[language].length} chars): "${messages[language]}"`)
@@ -422,26 +434,33 @@ class SLTSmsService {
       queuePosition: number
       outletName: string
       trackingUrl: string
+      recoveryUrl?: string
       services: string
       estimatedWaitMinutes?: number
     },
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
+    console.log(`[SLT SMS TOKEN-CONFIRM] Attempting to send token confirmation SMS to ${mobileNumber} for token #${details.tokenNumber}`)
+    
+    const recoveryUrl = details.recoveryUrl || details.trackingUrl
+    const tokenDisplay = String(details.tokenNumber).padStart(3, '0')
     const waitTimeInfo = details.estimatedWaitMinutes 
-      ? ` with an estimated wait time of ${details.estimatedWaitMinutes} minutes` 
+      ? ` (~${details.estimatedWaitMinutes} min)` 
       : '';
     const waitTimeInfoSi = details.estimatedWaitMinutes 
-      ? ` ඇස්තමේන්තු පොරොත්තු කාලය මිනිත්තු ${details.estimatedWaitMinutes}` 
+      ? ` (~${details.estimatedWaitMinutes} මිනි)` 
       : '';
     const waitTimeInfoTa = details.estimatedWaitMinutes 
-      ? ` மதிப்பீட்டு காத்திருப்பு நேரம் ${details.estimatedWaitMinutes} நிமிடங்கள்` 
+      ? ` (~${details.estimatedWaitMinutes} நிமி)` 
       : '';
 
     const messages = {
-      en: `Dear Valued Customer\n\nToken Number ${details.tokenNumber} at ${details.outletName} is now active. You are in position ${details.queuePosition}${waitTimeInfo}.\n\nTrack: ${details.trackingUrl}\n\nSLT-MOBITEL`,
-      si: `ගරු ගිණුම්කරු\n\nටෝකන් සංඛ්‍යා ${details.tokenNumber} - ${details.outletName} දැන් ක්‍රියාකාරී ය. ඔබ ස්ථානයේ ${details.queuePosition}${waitTimeInfoSi}.\n\nපිළිබඳ: ${details.trackingUrl}\n\nSLT-MOBITEL`,
-      ta: `மதிப்புமிக்க வாடிக்கையாளர்\n\nடோக்கன் எண் ${details.tokenNumber} - ${details.outletName} இப்போது செயல்பாட்டுத் தமாய உள்ளது. நீங்கள் நிலை ${details.queuePosition}${waitTimeInfoTa}.\n\nபின்தொடர்: ${details.trackingUrl}\n\nSLT-MOBITEL`
+      en: `Dear Customer\n\nToken ${tokenDisplay} at ${details.outletName}. Position ${details.queuePosition}${waitTimeInfo}.\n\nURL: ${recoveryUrl}\n\nSLT-MOBITEL`,
+      si: `ගරු ගිණුම්කරු\n\nටෝකන් ${tokenDisplay} - ${details.outletName}. ස්ථානය ${details.queuePosition}${waitTimeInfoSi}.\n\nURL: ${recoveryUrl}\n\nSLT-MOBITEL`,
+      ta: `வாடிக்கையாளர்\n\nடோக்கன் ${tokenDisplay} - ${details.outletName}. நிலை ${details.queuePosition}${waitTimeInfoTa}.\n\nURL: ${recoveryUrl}\n\nSLT-MOBITEL`
     }
+
+    console.log(`[SLT SMS TOKEN-CONFIRM] Message (${messages[language].length} chars): ${messages[language].substring(0, 150)}...`)
 
     return this.sendSMS({
       to: mobileNumber,

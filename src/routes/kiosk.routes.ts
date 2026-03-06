@@ -1,6 +1,8 @@
 import { Router } from "express"
 import { prisma, broadcast } from "../server"
 import * as jwt from "jsonwebtoken"
+import sltSmsService from "../services/sltSmsService"
+import { getLastDailyReset } from "../utils/resetWindow"
 
 const router = Router()
 
@@ -178,21 +180,19 @@ router.post("/tokens", async (req: any, res: any) => {
     }
 
     // Get next token number for this outlet
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-
+    const lastReset = getLastDailyReset()
     const lastToken = await prisma.token.findFirst({
       where: {
         outletId: outletId,
-        createdAt: { gte: today }
+        createdAt: { gte: lastReset }
       },
       orderBy: { tokenNumber: 'desc' }
     })
 
-    const tokenNumber = lastToken ? lastToken.tokenNumber + 1 : 1
+    const tokenNumber = (lastToken?.tokenNumber || 0) + 1
 
     // Create the token
-    const token = await prisma.token.create({
+    const tokenData = await prisma.token.create({
       data: {
         tokenNumber,
         customerId: customer.id,
@@ -203,23 +203,77 @@ router.post("/tokens", async (req: any, res: any) => {
         outletId: outletId
       },
       include: {
-        customer: {
-          select: {
-            name: true,
-            mobileNumber: true
-          }
-        },
-        outlet: {
-          select: {
-            name: true,
-            location: true
-          }
-        }
+        customer: true,
+        outlet: true
       }
     })
 
     // Broadcast new token to officers queue system
-    broadcast({ type: 'NEW_TOKEN', data: token })
+    broadcast({ type: 'NEW_TOKEN', data: tokenData })
+
+    // Calculate queue position and estimated wait time
+    const queuePosition = await prisma.token.count({
+      where: {
+        outletId: tokenData.outletId,
+        status: "waiting",
+        tokenNumber: { lt: tokenData.tokenNumber },
+        createdAt: { gte: lastReset },
+      },
+    }) + 1
+
+    const estimatedWait = Math.max(1, queuePosition * 5) // 5 min per person, minimum 1 min
+
+    // Send token confirmation SMS to customer (critical for kiosk users without smartphones)
+    try {
+      const firstName = tokenData.customer.name.split(' ')[0]
+      const smsLanguage = Array.isArray(tokenData.preferredLanguages) && tokenData.preferredLanguages.length > 0
+        ? (tokenData.preferredLanguages[0] as 'en' | 'si' | 'ta')
+        : 'en'
+
+      // Build tracking URL
+      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+      let baseUrl = origins[0] || ''
+      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+      if (vercelUrl) {
+        baseUrl = vercelUrl
+      } else if (process.env.NODE_ENV === 'production') {
+        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
+      }
+
+      const shortId = tokenData.id.substring(0, 8)
+      const trackingUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+
+      // Fetch service names for SMS
+      const services = await prisma.service.findMany({
+        where: { code: { in: serviceTypes } },
+        select: { title: true }
+      })
+      const serviceNames = services.map(s => s.title).join(", ") || "Service"
+
+      console.log(`[KIOSK] About to send token confirmation SMS to ${tokenData.customer.mobileNumber} for token #${tokenData.tokenNumber} (language: ${smsLanguage})`)
+
+      const smsResult = await sltSmsService.sendTokenConfirmation(tokenData.customer.mobileNumber, {
+        firstName,
+        tokenNumber: tokenData.tokenNumber,
+        queuePosition,
+        outletName: tokenData.outlet?.name || 'SLT Office',
+        trackingUrl,
+        recoveryUrl: trackingUrl,
+        services: serviceNames,
+        estimatedWaitMinutes: estimatedWait
+      }, smsLanguage)
+
+      if (smsResult.success) {
+        console.log(`✓ Token confirmation SMS sent to ${tokenData.customer.mobileNumber} via SLT (KIOSK)`)
+      } else {
+        console.error(`✗ Token confirmation SMS failed (SLT):`, smsResult.error)
+      }
+    } catch (smsError) {
+      console.error('[KIOSK] Token confirmation SMS exception:', smsError)
+      // Continue execution even if SMS fails
+    }
+
+    const token = tokenData
 
     const response = {
       success: true,
@@ -247,14 +301,13 @@ router.post("/tokens", async (req: any, res: any) => {
 router.get("/queue-status", async (req: any, res: any) => {
   try {
     const { outletId } = req.kiosk
+    const lastReset = getLastDailyReset()
 
     const waitingCount = await prisma.token.count({
       where: {
         outletId,
         status: "waiting",
-        createdAt: {
-          gte: new Date(new Date().setHours(0, 0, 0, 0))
-        }
+        createdAt: { gte: lastReset }
       }
     })
 
@@ -262,9 +315,7 @@ router.get("/queue-status", async (req: any, res: any) => {
       where: {
         outletId,
         status: "serving",
-        createdAt: {
-          gte: new Date(new Date().setHours(0, 0, 0, 0))
-        }
+        createdAt: { gte: lastReset }
       }
     })
 
