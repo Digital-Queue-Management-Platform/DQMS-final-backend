@@ -31,6 +31,15 @@ const genOtp = () => Math.floor(1000 + Math.random() * 9000).toString()
 const FIVE_MIN = 1 * 60 * 1000
 const RESEND_WINDOW = 30 * 1000
 
+function normalizeLang(input: unknown): 'en' | 'si' | 'ta' {
+  if (typeof input !== 'string') return 'en'
+  const v = input.trim().toLowerCase()
+
+  if (['si', 'sinhala', 'sin', 'සිංහල', 'sinh'].includes(v)) return 'si'
+  if (['ta', 'tamil', 'tam', 'தமிழ்'].includes(v)) return 'ta'
+  return 'en'
+}
+
 function toE164(mobile: string): string {
   // Relaxed validation: Just normalize to 10 digits if starting with 0, or keep as is.
   const cleaned = (mobile || "").replace(/\D/g, "")
@@ -84,7 +93,7 @@ router.post("/registration/otp/start", async (req, res) => {
     otpStore.set(key, record)
 
     // Localize OTP message by language; fallback to English
-    const lang = (typeof preferredLanguage === 'string' ? preferredLanguage : 'en') as 'en' | 'si' | 'ta'
+    const lang = normalizeLang(preferredLanguage)
 
     // DEV mode takes precedence
     if (OTP_DEV_MODE) {
@@ -181,7 +190,7 @@ router.post("/otp/start", async (req, res) => {
     otpStore.set(key, record)
 
     // Localize OTP message by language; fallback to English
-    const lang = (typeof preferredLanguage === 'string' ? preferredLanguage : 'en') as 'en' | 'si' | 'ta'
+    const lang = normalizeLang(preferredLanguage)
 
     // DEV mode takes precedence
     if (OTP_DEV_MODE) {

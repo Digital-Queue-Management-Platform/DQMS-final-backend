@@ -287,8 +287,8 @@ class SLTSmsService {
     
     const messages = {
       en: `Dear Valued Customer\n\nWe're experiencing a delay in service. Your token number ${formattedToken} will be called shortly. We appreciate your patience.\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\nසේවාවේ ප්‍රමාදයක් ඇත. ඔබගේ ටෝකන් අංකය ${formattedToken} ඉක්මනින් ඇමතීමට යොදවනු ඇත. ඔබගේ ඉවසීම අගය කරමු.\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\nசேவையில் தாமதம் ஏற்பட்டுள்ளது. உங்கள் டோக்கன் எண் ${formattedToken} விரைவில் அழைக்கப்படும். உங்கள் பொறுமைக்கு நன்றி.\n\nSLT-MOBITEL`
+      si: `ගරු පාරිභෝගිකයා\n\nසේවාවේ ප්‍රමාදයක් ඇත. ඔබගේ ටෝකන් අංකය ${formattedToken} ඉක්මනින් කැඳවනු ලැබේ. ඔබගේ ඉවසීමට ස්තුතියි.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\nசேவையில் தாமதம் உள்ளது. உங்கள் டோக்கன் எண் ${formattedToken} விரைவில் அழைக்கப்படும். உங்கள் பொறுமைக்கு நன்றி.\n\nSLT-MOBITEL`
     }
 
     return this.sendSMS({
@@ -433,8 +433,8 @@ class SLTSmsService {
     
     const messages = {
       en: `Dear Valued Customer\n\nToken ${formattedToken} has been recalled.\n\nStatus: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\nටෝකන් ${formattedToken} නැවත ඇමතිණි.\n\nතත්වය: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\nடோக்கன் ${formattedToken} திரும்ப அழைக்கப்பட்டது.\n\nநிலை: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`
+      si: `ගරු පාරිභෝගිකයා\n\nටෝකන් ${formattedToken} නැවත කැඳවනු ලැබීය.\n\nතත්වය: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\nடோக்கன் ${formattedToken} மீண்டும் அழைக்கப்பட்டது.\n\nநிலை: ${details.recoveryUrl} -SLT\n\nSLT-MOBITEL`
     }
 
     console.log(`[SLT SMS RECALL] Message content (${messages[language].length} chars): "${messages[language]}"`)
@@ -473,11 +473,11 @@ class SLTSmsService {
         ? `Thank you! Service completed. Ref: ${details.refNumber}. Feedback: ${details.feedbackUrl} -SLT-MOBITEL`
         : `Thank you! Service completed. Ref: ${details.refNumber}. Feedback: ${details.feedbackUrl} -SLT-MOBITEL`,
       si: formattedToken
-        ? `ස්තුතියි! සේවාව සම්පූර්ණයි. Ref: ${details.refNumber}. ප්‍රතිපෝෂණ: ${details.feedbackUrl} -SLT-MOBITEL`
-        : `ස්තුතියි! සේවාව සම්පූර්ණයි. Ref: ${details.refNumber}. ප්‍රතිපෝෂණ: ${details.feedbackUrl} -SLT-MOBITEL`,
+        ? `ස්තුතියි! සේවාව සම්පූර්ණයි. Ref: ${details.refNumber}. Feedback: ${details.feedbackUrl} -SLT-MOBITEL`
+        : `ස්තුතියි! සේවාව සම්පූර්ණයි. Ref: ${details.refNumber}. Feedback: ${details.feedbackUrl} -SLT-MOBITEL`,
       ta: formattedToken
-        ? `நன்றி! சேவை முடிந்தது. Ref: ${details.refNumber}. கருத்து: ${details.feedbackUrl} -SLT-MOBITEL`
-        : `நன்றி! சேவை முடிந்தது. Ref: ${details.refNumber}. கருத்து: ${details.feedbackUrl} -SLT-MOBITEL`
+        ? `நன்றி! சேவை முடிந்தது. Ref: ${details.refNumber}. Feedback: ${details.feedbackUrl} -SLT-MOBITEL`
+        : `நன்றி! சேவை முடிந்தது. Ref: ${details.refNumber}. Feedback: ${details.feedbackUrl} -SLT-MOBITEL`
     }
 
     console.log(`[SLT SMS COMPLETE] Message content (${messages[language].length} chars): "${messages[language]}"`)
