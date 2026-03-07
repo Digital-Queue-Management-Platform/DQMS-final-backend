@@ -897,6 +897,17 @@ router.post("/complete-service", async (req, res) => {
         const shortRef = serviceCase.refNumber.split('/').pop()?.substring(0, 8) || 'ref'
         const feedbackUrl = baseUrl ? `${baseUrl}/f?r=${shortRef}` : `/f?r=${shortRef}`
 
+        // Detect customer language
+        let customerLang: 'en' | 'si' | 'ta' = 'en'
+        const prefs = (token as any).preferredLanguages
+        if (Array.isArray(prefs) && prefs.length > 0) {
+          const firstPref = String(prefs[0]).toLowerCase()
+          if (['en', 'si', 'ta'].includes(firstPref)) customerLang = firstPref as 'en' | 'si' | 'ta'
+        } else if (typeof prefs === 'string') {
+          if (prefs.includes('si')) customerLang = 'si'
+          else if (prefs.includes('ta')) customerLang = 'ta'
+        }
+
         await sltSmsService.sendServiceCompletion(token.customer.mobileNumber, {
           firstName,
           tokenNumber: token.tokenNumber,
@@ -904,7 +915,7 @@ router.post("/complete-service", async (req, res) => {
           services,
           feedbackUrl,
           outletName: token.outlet?.name || 'SLT Office'
-        })
+        }, customerLang)
         console.log(`✓ Service completion SMS sent to ${token.customer.mobileNumber}`)
       } catch (smsError) {
         console.error('SMS sending failed:', smsError)
@@ -1100,16 +1111,18 @@ router.post("/transfer-token", async (req, res) => {
         } catch { }
       }
 
+      const formattedToken = result.updatedToken.tokenNumber.toString().padStart(3, '0')
+      const outlet = result.updatedToken.outlet?.name || "SLT Office"
       const messages = {
         en: targetCounterNumber
-          ? `SLT DQMS: Dear ${firstName}, your token #${result.updatedToken.tokenNumber} is transferred to Counter #${targetCounterNumber} for ${serviceNames}. Please proceed there.`
-          : `SLT DQMS: Dear ${firstName}, your token #${result.updatedToken.tokenNumber} is transferred for ${serviceNames}. Please proceed to the next available counter.`,
+          ? `Dear Valued Customer\n\nYour token number ${formattedToken} at ${outlet} is transferred to Counter ${targetCounterNumber} for ${serviceNames}. Please proceed there.\n\nSLT-MOBITEL`
+          : `Dear Valued Customer\n\nYour token number ${formattedToken} at ${outlet} is transferred for ${serviceNames}. Please proceed to the next available counter.\n\nSLT-MOBITEL`,
         si: targetCounterNumber
-          ? `SLT DQMS: ${firstName}, ඔබගේ ටෝකන් #${result.updatedToken.tokenNumber} ${serviceNames} සඳහා කවුටර අංක ${targetCounterNumber} වෙත මාරු කරන ලදී. කරුණාකර එතැනට පැමිණෙන්න.`
-          : `SLT DQMS: ${firstName}, ඔබගේ ටෝකන් #${result.updatedToken.tokenNumber} ${serviceNames} සඳහා මාරු කරන ලදී. කරුණාකර ඊළඟ ලබ්‍ධ කවුටරට පැමිණෙන්න.`,
+          ? `ගරු පාරිභෝගිකයා\n\n${outlet} හි ඔබගේ ටෝකන් අංකය ${formattedToken} ${serviceNames} සඳහා කවුන්ටර් ${targetCounterNumber} වෙත මාරු කරන ලදී. කරුණාකර එතැනට පැමිණෙන්න.\n\nSLT-MOBITEL`
+          : `ගරු පාරිභෝගිකයා\n\n${outlet} හි ඔබගේ ටෝකන් අංකය ${formattedToken} ${serviceNames} සඳහා මාරු කරන ලදී. කරුණාකර ඊළඟ පවතින කවුන්ටරය වෙත පැමිණෙන්න.\n\nSLT-MOBITEL`,
         ta: targetCounterNumber
-          ? `SLT DQMS: ${firstName}, உங்கள் டோக்கன் #${result.updatedToken.tokenNumber} கவுண்டர் #${targetCounterNumber} க்கு ${serviceNames} க்காக மாற்றப்பட்டது. தயவுசெய்து அங்கு செல்லவும்.`
-          : `SLT DQMS: ${firstName}, உங்கள் டோக்கன் #${result.updatedToken.tokenNumber} ${serviceNames} க்காக மாற்றப்பட்டது. தயவுசெய்து அதிக திறந்த கவுண்டரக்கு செல்லவும்.`
+          ? `அன்பு வாடிக்கையாளரே\n\n${outlet} இல் உங்கள் டோக்கன் எண் ${formattedToken} கவுண்டர் ${targetCounterNumber} க்கு ${serviceNames} க்காக மாற்றப்பட்டது. தயவுசெய்து அங்கு செல்லவும்.\n\nSLT-MOBITEL`
+          : `அன்பு வாடிக்கையாளரே\n\n${outlet} இல் உங்கள் டோக்கன் எண் ${formattedToken} ${serviceNames} க்காக மாற்றப்பட்டது. தயவுசெய்து அடுத்த கவுண்டருக்கு செல்லவும்.\n\nSLT-MOBITEL`
       }
 
       console.log(`[Transfer-SMS] Sending ${lang} message to ${result.updatedToken.customer.mobileNumber}`)

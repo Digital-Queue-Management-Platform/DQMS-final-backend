@@ -118,17 +118,24 @@ class SLTSmsService {
       })
 
       // Check response - SLT API typically returns status in response
+      console.log(`[SLT SMS] Response status: ${response.status}, data:`, JSON.stringify(response.data))
+
       if (response.status === 200) {
+        // Some SLT APIs return success: false inside a 200 response
+        if (response.data && response.data.error) {
+          console.error(`[SLT SMS] Error reported in 200 OK:`, response.data.error)
+          return { success: false, error: response.data.error }
+        }
         console.log(`[SLT SMS] Message sent successfully to ${normalizedMobile}`)
         return {
           success: true,
           messageId: response.data?.messageId || Date.now().toString()
         }
       } else {
-        console.error(`[SLT SMS] Failed to send message:`, response.data)
+        console.error(`[SLT SMS] Server returned error status ${response.status}:`, response.data)
         return {
           success: false,
-          error: response.data?.error || 'Failed to send SMS'
+          error: response.data?.error || `Server error ${response.status}`
         }
       }
     } catch (error: any) {
@@ -467,21 +474,38 @@ class SLTSmsService {
     // Format token number to 3 digits if provided
     const formattedToken = details.tokenNumber ? details.tokenNumber.toString().padStart(3, '0') : null
 
-    const messages = {
-      en: `Dear Valued Customer\n\nThank you for visiting! Service for token ${formattedToken} at ${details.outletName} is completed. Ref: ${details.refNumber}.\nTrack Status: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\nපැමිණීම ගැන ස්තුතියි! ${details.outletName} හි ටෝකන් ${formattedToken} සඳහා සේවාව අවසන්. Ref: ${details.refNumber}.\nතත්ත්වය පරීක්ෂා කරන්න: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\nவருகைக்கு நன்றி! ${details.outletName} இல் டோக்கன் ${formattedToken} க்கான சேவை முடிந்தது. Ref: ${details.refNumber}.\nநிலை: ${details.feedbackUrl}\n\nSLT-MOBITEL`
+    const buildFullMessages = () => ({
+      en: `Dear Valued Customer\n\nThank you for visiting! Service for token ${formattedToken} at ${details.outletName} is completed. Ref: ${details.refNumber}.\nRate our service: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\nපැමිණීම ගැන ස්තුතියි! ${details.outletName} හි ටෝකන් ${formattedToken} සඳහා සේවාව අවසන්. Ref: ${details.refNumber}.\nඔබගේ අදහස් දක්වන්න: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\nவருகைக்கு நன்றி! ${details.outletName} இல் டோக்கன் ${formattedToken} க்கான சேவை முடிந்தது. குறிப்பு: ${details.refNumber}.\nஉங்கள் கருத்து: ${details.feedbackUrl}\n\nSLT-MOBITEL`
+    })
+
+    const buildCompactMessages = () => ({
+      en: `Dear Valued Customer\n\nService ${formattedToken} at ${details.outletName} is completed. Ref: ${details.refNumber.split('/').pop()}.\nRate us: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ටෝකන් ${formattedToken} සේවාව අවසන්. Ref: ${details.refNumber.split('/').pop()}.\nඅදහස් දක්වන්න: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் டோக்கன் ${formattedToken} சேவை முடிந்தது. Ref: ${details.refNumber.split('/').pop()}.\nகருத்துரை: ${details.feedbackUrl}\n\nSLT-MOBITEL`
+    })
+
+    const fullMessages = buildFullMessages()
+    let finalMessage = fullMessages[language]
+
+    if (finalMessage.length > 160) {
+      console.warn(`[SLT SMS COMPLETE] Message too long (${finalMessage.length}), trying compact version`)
+      const compactMessages = buildCompactMessages()
+      if (compactMessages[language].length < finalMessage.length) {
+        finalMessage = compactMessages[language]
+      }
     }
 
-    console.log(`[SLT SMS COMPLETE] Message content (${messages[language].length} chars): "${messages[language]}"`)
+    console.log(`[SLT SMS COMPLETE] Final message (${finalMessage.length} chars): "${finalMessage}"`)
 
-    if (messages[language].length > 160) {
-      console.warn(`[SLT SMS COMPLETE] WARNING: Message exceeds 160 chars (${messages[language].length}), might be split or rejected`)
+    if (finalMessage.length > 160) {
+      console.error(`[SLT SMS COMPLETE] CRITICAL: Even compact message exceeds 160 chars (${finalMessage.length}). Might fail.`)
     }
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: finalMessage
     })
   }
 
