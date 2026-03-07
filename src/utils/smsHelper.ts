@@ -40,7 +40,7 @@ class UnifiedSmsHelper {
     const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || ""
     const FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || ""
     const MSG_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || ""
-    
+
     return !!(ACCOUNT_SID && AUTH_TOKEN && (MSG_SERVICE_SID || FROM_NUMBER))
   }
 
@@ -132,9 +132,9 @@ class UnifiedSmsHelper {
     }
 
     // No provider configured
-    return { 
-      success: false, 
-      error: 'No SMS provider configured. Please configure SLT_SMS or TWILIO credentials.' 
+    return {
+      success: false,
+      error: 'No SMS provider configured. Please configure SLT_SMS or TWILIO credentials.'
     }
   }
 
@@ -143,9 +143,9 @@ class UnifiedSmsHelper {
    */
   async sendOTP(mobileNumber: string, otpCode: string, language: 'en' | 'si' | 'ta' = 'en'): Promise<SendSMSResult> {
     const otpMessages = {
-      en: `Your DQMS verification code is ${otpCode}. It expires in 5 minutes.`,
-      si: `ඔබගේ DQMS සත්‍යාපන කේතය ${otpCode}. මිනිත්තු 5කින් කල් ඉකුත් වේ.`,
-      ta: `உங்கள் DQMS சரிபார்ப்பு குறியீடு ${otpCode}. இது 5 நிமிடங்களில் காலாவதியாகிறது.`
+      en: `Dear Valued Customer\n\nYour verification code is ${otpCode}. Valid for 5 minutes.\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\nඔබගේ සත්‍යාපන කේතය ${otpCode}. මිනිත්තු 5ක් සඳහා වලංගුයි.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\nஉங்கள் சரிபார்ப்பு குறியீடு ${otpCode}. 5 நிமிடங்களுக்கு செல்லுபடியாகும்.\n\nSLT-MOBITEL`
     }
 
     return this.sendSMS({
@@ -169,9 +169,9 @@ class UnifiedSmsHelper {
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SendSMSResult> {
     const messages = {
-      en: `Dear ${details.name}, your appointment at ${details.outletName} is confirmed for ${details.dateTime}. Services: ${details.services}. -DQMS`,
-      si: `${details.name}, ${details.outletName} හි ඔබගේ හමුව ${details.dateTime} සඳහා තහවුරු කර ඇත. සේවාවන්: ${details.services}. -DQMS`,
-      ta: `${details.name}, ${details.outletName} இல் உங்கள் சந்திப்பு ${details.dateTime} அன்று உறுதிப்படுத்தப்பட்டது. சேவைகள்: ${details.services}. -DQMS`
+      en: `Dear Valued Customer\n\nYour appointment at ${details.outletName} is confirmed for ${details.dateTime}.\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ හමුව ${details.dateTime} සඳහා තහවුරු කර ඇත.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் சந்திப்பு ${details.dateTime} அன்று உறுதிப்படுத்தப்பட்டது.\n\nSLT-MOBITEL`
     }
 
     return this.sendSMS({
@@ -190,10 +190,11 @@ class UnifiedSmsHelper {
     counterNumber: number,
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SendSMSResult> {
+    const formattedToken = tokenNumber.toString().padStart(3, '0')
     const messages = {
-      en: `Token #${tokenNumber}: Please proceed to Counter ${counterNumber}. -DQMS`,
-      si: `ටෝකන් #${tokenNumber}: කරුණාකර කවුන්ටර් ${counterNumber} වෙත යන්න. -DQMS`,
-      ta: `டோக்கன் #${tokenNumber}: கவுண்டர் ${counterNumber} க்கு செல்லவும். -DQMS`
+      en: `Dear Valued Customer\n\nYour token number ${formattedToken} is now being called. Please proceed to Counter ${counterNumber}.\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\nඔබගේ ටෝකන් අංකය ${formattedToken} සඳහා දැන් කැඳවනු ලැබේ. කරුණාකර කවුන්ටර් ${counterNumber} වෙත පැමිණෙන්න.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\nஉங்கள் டோக்கன் எண் ${formattedToken} தற்போது அழைக்கப்படுகிறது. தயவுசெய்து கவுண்டர் ${counterNumber} க்கு செல்லவும்.\n\nSLT-MOBITEL`
     }
 
     return this.sendSMS({
@@ -213,13 +214,15 @@ class UnifiedSmsHelper {
       tokenNumber: number
       outletName: string
       estimatedWait: number
+      position?: number
     },
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SendSMSResult> {
+    const formattedToken = details.tokenNumber.toString().padStart(3, '0')
     const messages = {
-      en: `Welcome ${details.name}! Your token #${details.tokenNumber} at ${details.outletName}. Est. wait: ${details.estimatedWait} min. -DQMS`,
-      si: `සාදරයෙන් පිළිගනිමු ${details.name}! ඔබගේ ටෝකන් #${details.tokenNumber} - ${details.outletName}. ඇස්තමේන්තු් පොරොත්තුව: ${details.estimatedWait} මිනි. -DQMS`,
-      ta: `வரவேற்கிறோம் ${details.name}! உங்கள் டோக்கன் #${details.tokenNumber} - ${details.outletName}. மதிப்பீட்டு காத்திருப்பு: ${details.estimatedWait} நிமி. -DQMS`
+      en: `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active. You are currently in position ${details.position || 1}.\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} ශාඛාවේ ඔබගේ ටෝකන් අංකය ${formattedToken} දැන් සක්‍රීයයි. ඔබ දැන් පෝලිමේ ${details.position || 1} වන ස්ථානයේ සිටී.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} இப்போது செயலில் உள்ளது. நீங்கள் தற்போது வரிசையில் ${details.position || 1} வது இடத்தில் உள்ளீர்கள்.\n\nSLT-MOBITEL`
     }
 
     return this.sendSMS({
