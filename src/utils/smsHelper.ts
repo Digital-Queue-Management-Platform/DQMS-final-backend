@@ -246,9 +246,9 @@ class UnifiedSmsHelper {
   ): Promise<SendSMSResult> {
     const formattedToken = details.tokenNumber.toString().padStart(3, '0')
     const messages = {
-      en: `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active. You are currently in position ${details.position || 1}.\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} ශාඛාවේ ඔබගේ ටෝකන් අංකය ${formattedToken} දැන් සක්‍රීයයි. ඔබ දැන් පෝලිමේ ${details.position || 1} වන ස්ථානයේ සිටී.\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} இப்போது செயலில் உள்ளது. நீங்கள் தற்போது வரிசையில் ${details.position || 1} வது இடத்தில் உள்ளீர்கள்.\n\nSLT-MOBITEL`
+      en: `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active (Queue Position: ${details.position || 1}).\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} ශාඛාවේ ඔබගේ ටෝකන් අංකය ${formattedToken} දැන් සක්‍රීයයි (පෝලිමේ ස්ථානය: ${details.position || 1}).\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} இப்போது செயலில் உள்ளது (வரிசை நிலை: ${details.position || 1}).\n\nSLT-MOBITEL`
     }
 
     return this.sendSMS({

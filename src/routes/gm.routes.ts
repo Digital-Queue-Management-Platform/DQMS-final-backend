@@ -2,6 +2,8 @@ import { Router } from "express"
 import { prisma } from "../server"
 import * as jwt from "jsonwebtoken"
 import otpService from "../services/otpService"
+import emailService from "../services/emailService"
+import sltSmsService from "../services/sltSmsService"
 
 const router = Router()
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
@@ -26,7 +28,7 @@ router.post("/request-otp", async (req, res) => {
         const { mobileNumber } = req.body
         if (!mobileNumber) return res.status(400).json({ error: "Mobile number is required" })
 
-        const gm = await (prisma as any).gM.findFirst({ 
+        const gm = await (prisma as any).gM.findFirst({
             where: { mobileNumber, isActive: true },
             select: { id: true, name: true }
         })
@@ -247,6 +249,27 @@ router.post("/dgms", async (req, res) => {
         const dgm = await (prisma as any).dGM.create({
             data: { name, mobileNumber, email: email || null, gmId: auth.gmId, regionIds, isActive: true }
         })
+
+        // Send notifications
+        const loginUrl = "https://digital-queue-management-platform.vercel.app/dgm/login"
+
+        // Email
+        if (email) {
+            emailService.sendStaffWelcomeEmail({
+                name,
+                email,
+                mobileNumber,
+                role: "DGM",
+                loginUrl
+            }).catch(err => console.error("DGM welcome email failed:", err))
+        }
+
+        // SMS
+        sltSmsService.sendStaffWelcomeSMS(mobileNumber, {
+            name,
+            role: "DGM",
+            loginUrl
+        }).catch(err => console.error("DGM welcome SMS failed:", err))
 
         res.status(201).json({ success: true, dgm })
     } catch (err) {

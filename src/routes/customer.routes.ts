@@ -842,7 +842,7 @@ function getStatusMessage(status: string, queuePosition: number, estimatedWait: 
     case 'waiting':
       return queuePosition === 1
         ? 'You are next in line!'
-        : `You are position ${queuePosition} in queue. Estimated wait: ${estimatedWait} minutes.`
+        : `You are position ${queuePosition} in the queue.`
     case 'in_service':
       return 'You are currently being served.'
     case 'completed':

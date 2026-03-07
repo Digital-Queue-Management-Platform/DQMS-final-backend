@@ -2,6 +2,8 @@ import { Router } from "express"
 import { prisma, broadcast } from "../server"
 import * as jwt from "jsonwebtoken"
 import otpService from "../services/otpService"
+import emailService from "../services/emailService"
+import sltSmsService from "../services/sltSmsService"
 
 const router = Router()
 
@@ -34,8 +36,8 @@ router.post("/request-otp", async (req, res) => {
       return res.status(500).json({ error: result.message })
     }
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: result.message,
       managerName: teleshopManager.name
     })
@@ -412,6 +414,28 @@ router.post("/officers", async (req: any, res) => {
         outlet: true
       }
     })
+
+    // Send notifications
+    const loginUrl = "https://digital-queue-management-platform.vercel.app/officer/login"
+
+    // Email (if email is provided in body)
+    if (req.body.email) {
+      emailService.sendStaffWelcomeEmail({
+        name,
+        email: req.body.email,
+        mobileNumber,
+        role: "Customer Service Officer",
+        outletName: officer.outlet?.name,
+        loginUrl
+      }).catch(err => console.error("Officer welcome email failed:", err))
+    }
+
+    // SMS
+    sltSmsService.sendStaffWelcomeSMS(mobileNumber, {
+      name,
+      role: "Customer Service Officer",
+      loginUrl
+    }).catch(err => console.error("Officer welcome SMS failed:", err))
 
     res.json({ success: true, officer })
   } catch (error: any) {

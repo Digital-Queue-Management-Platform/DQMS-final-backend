@@ -650,7 +650,8 @@ router.post("/recall-token", async (req, res) => {
         firstName,
         tokenNumber: recalled.tokenNumber,
         outletName: recalled.outlet?.name || 'SLT Office',
-        recoveryUrl
+        recoveryUrl,
+        counterNumber: recalled.counterNumber || undefined
       })
       console.log(`✓ Recall SMS sent to customer ${recalled.customer.mobileNumber} for token #${recalled.tokenNumber}`)
     } catch (smsError) {
@@ -1111,26 +1112,30 @@ router.post("/transfer-token", async (req, res) => {
         } catch { }
       }
 
-      const formattedToken = result.updatedToken.tokenNumber.toString().padStart(3, '0')
-      const outlet = result.updatedToken.outlet?.name || "SLT Office"
-      const messages = {
-        en: targetCounterNumber
-          ? `Dear Valued Customer\n\nYour token number ${formattedToken} at ${outlet} is transferred to Counter ${targetCounterNumber} for ${serviceNames}. Please proceed there.\n\nSLT-MOBITEL`
-          : `Dear Valued Customer\n\nYour token number ${formattedToken} at ${outlet} is transferred for ${serviceNames}. Please proceed to the next available counter.\n\nSLT-MOBITEL`,
-        si: targetCounterNumber
-          ? `ගරු පාරිභෝගිකයා\n\n${outlet} හි ඔබගේ ටෝකන් අංකය ${formattedToken} ${serviceNames} සඳහා කවුන්ටර් ${targetCounterNumber} වෙත මාරු කරන ලදී. කරුණාකර එතැනට පැමිණෙන්න.\n\nSLT-MOBITEL`
-          : `ගරු පාරිභෝගිකයා\n\n${outlet} හි ඔබගේ ටෝකන් අංකය ${formattedToken} ${serviceNames} සඳහා මාරු කරන ලදී. කරුණාකර ඊළඟ පවතින කවුන්ටරය වෙත පැමිණෙන්න.\n\nSLT-MOBITEL`,
-        ta: targetCounterNumber
-          ? `அன்பு வாடிக்கையாளரே\n\n${outlet} இல் உங்கள் டோக்கன் எண் ${formattedToken} கவுண்டர் ${targetCounterNumber} க்கு ${serviceNames} க்காக மாற்றப்பட்டது. தயவுசெய்து அங்கு செல்லவும்.\n\nSLT-MOBITEL`
-          : `அன்பு வாடிக்கையாளரே\n\n${outlet} இல் உங்கள் டோக்கன் எண் ${formattedToken} ${serviceNames} க்காக மாற்றப்பட்டது. தயவுசெய்து அடுத்த கவுண்டருக்கு செல்லவும்.\n\nSLT-MOBITEL`
+      // Build recovery URL
+      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+      let baseUrl = origins[0] || ''
+
+      // Always prioritize Vercel URLs if available
+      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+      if (vercelUrl) {
+        baseUrl = vercelUrl
+      } else if (process.env.NODE_ENV === 'production') {
+        // In production, prefer any HTTPS URL over localhost
+        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
       }
 
-      console.log(`[Transfer-SMS] Sending ${lang} message to ${result.updatedToken.customer.mobileNumber}`)
+      const outlet = result.updatedToken.outlet?.name || "SLT Office"
+      const trackRef = `/t/${result.updatedToken.id.substring(0, 8)}`
+      const recoveryUrl = baseUrl ? `${baseUrl}${trackRef}` : trackRef
 
-      await sltSmsService.sendSMS({
-        to: result.updatedToken.customer.mobileNumber,
-        message: messages[lang] || messages.en
-      })
+      await sltSmsService.sendTokenTransfer(result.updatedToken.customer.mobileNumber, {
+        tokenNumber: result.updatedToken.tokenNumber,
+        outletName: outlet,
+        serviceNames: serviceNames,
+        targetCounterNumber: targetCounterNumber ? Number(targetCounterNumber) : undefined,
+        recoveryUrl
+      }, lang)
       console.log(`✓ [Transfer-SMS] Sent successfully to ${result.updatedToken.customer.mobileNumber}`)
     } catch (smsError) {
       console.error("[Transfer-SMS] SMS failed:", smsError)
