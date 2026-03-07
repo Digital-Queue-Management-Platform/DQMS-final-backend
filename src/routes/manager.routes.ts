@@ -6,6 +6,7 @@ import { generateSecurePassword } from "../utils/passwordGenerator"
 import otpService from "../services/otpService"
 import emailService from "../services/emailService"
 import sltSmsService from "../services/sltSmsService"
+import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
 
 const router = Router()
 
@@ -601,6 +602,12 @@ router.post("/officers", async (req, res) => {
   try {
     const { name, mobileNumber, outletId, counterNumber, isTraining, languages, assignedServices, services } = req.body
 
+    // Input validation
+    if (!name || !mobileNumber || !outletId) return res.status(400).json({ error: "name, mobileNumber, and outletId are required" })
+    if (!isValidName(name)) return res.status(400).json({ error: "Name must be between 2 and 100 characters" })
+    if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
+    if (req.body.email && !isValidEmail(req.body.email)) return res.status(400).json({ error: "Invalid email address format" })
+
     // Check for JWT token
     let token = req.cookies?.dq_manager_jwt
     if (!token) {
@@ -921,6 +928,9 @@ router.post("/teleshop-managers", async (req, res) => {
     if (!name || !mobileNumber || !email) {
       return res.status(400).json({ error: "Name, mobile number, and email are required" })
     }
+    if (!isValidName(name)) return res.status(400).json({ error: "Name must be between 2 and 100 characters" })
+    if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
+    if (!isValidEmail(email)) return res.status(400).json({ error: "Invalid email address format" })
 
     // Create teleshop manager
     const teleshopManager = await prisma.teleshopManager.create({

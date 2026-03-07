@@ -4,6 +4,7 @@ import * as jwt from "jsonwebtoken"
 import otpService from "../services/otpService"
 import emailService from "../services/emailService"
 import sltSmsService from "../services/sltSmsService"
+import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
 
 const router = Router()
 
@@ -370,6 +371,9 @@ router.post("/officers", async (req: any, res) => {
     if (!name || !mobileNumber || !outletId) {
       return res.status(400).json({ error: "Name, mobile number, and outlet ID are required" })
     }
+    if (!isValidName(name)) return res.status(400).json({ error: "Name must be between 2 and 100 characters" })
+    if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
+    if (req.body.email && !isValidEmail(req.body.email)) return res.status(400).json({ error: "Invalid email address format" })
 
     // Verify the outlet is in the teleshop manager's region
     const outlet = await prisma.outlet.findFirst({

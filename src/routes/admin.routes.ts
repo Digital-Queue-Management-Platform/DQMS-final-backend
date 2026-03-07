@@ -5,6 +5,7 @@ import { prisma } from "../server"
 import emailService from "../services/emailService"
 import sltSmsService from "../services/sltSmsService"
 import { generateSecurePassword } from "../utils/passwordGenerator"
+import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
 
 const router = Router()
 
@@ -398,7 +399,16 @@ router.get("/dashboard/realtime", async (req, res) => {
 router.post("/register-region", async (req, res) => {
   try {
     const { name, managerName, managerEmail, managerMobile } = req.body
-    if (!name) return res.status(400).json({ error: "Region name is required" })
+    if (!name || !name.trim()) return res.status(400).json({ error: "Region name is required" })
+    if (managerMobile && !isValidSLMobile(managerMobile)) {
+      return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
+    }
+    if (managerEmail && !isValidEmail(managerEmail)) {
+      return res.status(400).json({ error: "Invalid email address format" })
+    }
+    if (managerName && !isValidName(managerName)) {
+      return res.status(400).json({ error: "Manager name must be between 2 and 100 characters" })
+    }
 
     const region = await prisma.region.create({
       data: {
@@ -1213,6 +1223,9 @@ router.post("/gms", async (req, res) => {
   try {
     const { name, mobileNumber, email } = req.body
     if (!name || !mobileNumber) return res.status(400).json({ error: "name and mobileNumber are required" })
+    if (!isValidName(name)) return res.status(400).json({ error: "Name must be between 2 and 100 characters" })
+    if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
+    if (email && !isValidEmail(email)) return res.status(400).json({ error: "Invalid email address format" })
     const existing = await (prisma as any).gM.findFirst({ where: { mobileNumber } })
     if (existing) return res.status(400).json({ error: "A GM with this mobile number already exists" })
     const gm = await (prisma as any).gM.create({ data: { name, mobileNumber, email: email || null } })
@@ -1296,6 +1309,9 @@ router.post("/dgms", async (req, res) => {
   try {
     const { name, mobileNumber, email, gmId, regionIds } = req.body
     if (!name || !mobileNumber || !gmId) return res.status(400).json({ error: "name, mobileNumber, and gmId are required" })
+    if (!isValidName(name)) return res.status(400).json({ error: "Name must be between 2 and 100 characters" })
+    if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
+    if (email && !isValidEmail(email)) return res.status(400).json({ error: "Invalid email address format" })
     const existing = await (prisma as any).dGM.findFirst({ where: { mobileNumber } })
     if (existing) return res.status(400).json({ error: "A DGM with this mobile number already exists" })
     const gm = await (prisma as any).gM.findUnique({ where: { id: gmId } })

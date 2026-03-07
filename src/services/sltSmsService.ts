@@ -680,6 +680,7 @@ class SLTSmsService {
 
   /**
    * Send welcome SMS to newly registered staff member (GM, DGM, RTOM, Manager, Officer)
+   * IMPORTANT: SMS must be ≤160 chars for single-part delivery on SLT gateway.
    */
   async sendStaffWelcomeSMS(
     mobileNumber: string,
@@ -689,7 +690,28 @@ class SLTSmsService {
       loginUrl: string;
     }
   ): Promise<SMSResponse> {
-    const message = `SLT-MOBITEL DQMS: Welcome ${details.name}. Your account as ${details.role} is now active. Access your portal via secure OTP login at: ${details.loginUrl}`;
+    // Use first name only to save space
+    const firstName = details.name.split(' ')[0]
+
+    // Abbreviate long role names to keep message short
+    const roleAbbr: Record<string, string> = {
+      'Customer Service Officer': 'CSO',
+      'Teleshop Manager': 'Teleshop Mgr',
+      'General Manager': 'GM',
+      'Deputy General Manager': 'DGM',
+    }
+    const roleLabel = roleAbbr[details.role] || details.role
+
+    // Build a compact message that stays within 160 chars
+    // Format: "SLT DQMS: Hi [Name], your [Role] account is active. Login: [URL] - SLT-MOBITEL"
+    const message = `SLT DQMS: Hi ${firstName}, your ${roleLabel} account is active. Login: ${details.loginUrl} SLT-MOBITEL`
+
+    // Log warning if still too long
+    if (message.length > 160) {
+      console.warn(`[SLT SMS] Staff welcome SMS is ${message.length} chars (>160). May be split or rejected. Consider shortening the login URL.`)
+    } else {
+      console.log(`[SLT SMS] Staff welcome SMS: ${message.length} chars`)
+    }
 
     return this.sendSMS({
       to: mobileNumber,

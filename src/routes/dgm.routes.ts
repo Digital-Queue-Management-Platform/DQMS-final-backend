@@ -1,8 +1,9 @@
-import { Router } from "express"
-import { prisma } from "../server"
-import * as jwt from "jsonwebtoken"
-import emailService from "../services/emailService"
-import sltSmsService from "../services/sltSmsService"
+import { Router } from 'express'
+import * as jwt from 'jsonwebtoken'
+import { prisma } from '../server'
+import emailService from '../services/emailService'
+import sltSmsService from '../services/sltSmsService'
+import { isValidSLMobile, isValidEmail, isValidName } from '../utils/validators'
 import otpService from "../services/otpService"
 
 const router = Router()
@@ -255,6 +256,9 @@ router.post("/rtoms", async (req, res) => {
 
         const { regionId, name, mobileNumber, email } = req.body
         if (!regionId || !name || !mobileNumber) return res.status(400).json({ error: "regionId, name, and mobileNumber are required" })
+        if (!isValidName(name)) return res.status(400).json({ error: "Name must be between 2 and 100 characters" })
+        if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
+        if (email && !isValidEmail(email)) return res.status(400).json({ error: "Invalid email address format" })
 
         if (!dgm.regionIds.includes(regionId)) return res.status(403).json({ error: "Region not assigned to you" })
 
