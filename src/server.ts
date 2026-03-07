@@ -45,7 +45,10 @@ app.use(
     origin: (origin, callback) => {
       if (!origin) return callback(null, true)
       if (frontendOrigins.includes(origin)) return callback(null, true)
-      return callback(new Error("CORS not allowed"))
+
+      // Log the rejected origin to help find what's missing in FRONTEND_ORIGIN
+      logger.warn({ origin }, "CORS_NOT_ALLOWED")
+      return callback(new Error(`CORS not allowed for origin: ${origin}`))
     },
     credentials: true,
   })
