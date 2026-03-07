@@ -902,7 +902,8 @@ router.post("/complete-service", async (req, res) => {
           tokenNumber: token.tokenNumber,
           refNumber: serviceCase.refNumber,
           services,
-          feedbackUrl
+          feedbackUrl,
+          outletName: token.outlet?.name || 'SLT Office'
         })
         console.log(`✓ Service completion SMS sent to ${token.customer.mobileNumber}`)
       } catch (smsError) {

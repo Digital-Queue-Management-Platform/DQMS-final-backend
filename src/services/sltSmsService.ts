@@ -458,6 +458,7 @@ class SLTSmsService {
       refNumber: string
       services: string
       feedbackUrl: string
+      outletName: string
     },
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
@@ -467,9 +468,9 @@ class SLTSmsService {
     const formattedToken = details.tokenNumber ? details.tokenNumber.toString().padStart(3, '0') : null
 
     const messages = {
-      en: `Dear Valued Customer\n\nThank you! Service completed. Ref: ${details.refNumber}.\nFeedback: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\nස්තුතියි! සේවාව සම්පූර්ණයි. Ref: ${details.refNumber}.\nFeedback: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\nநன்றி! சேவை முடிந்தது. Ref: ${details.refNumber}.\nFeedback: ${details.feedbackUrl}\n\nSLT-MOBITEL`
+      en: `Dear Valued Customer\n\nThank you for visiting! Service for token ${formattedToken} at ${details.outletName} is completed. Ref: ${details.refNumber}.\nTrack Status: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\nපැමිණීම ගැන ස්තුතියි! ${details.outletName} හි ටෝකන් ${formattedToken} සඳහා සේවාව අවසන්. Ref: ${details.refNumber}.\nතත්ත්වය පරීක්ෂා කරන්න: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\nவருகைக்கு நன்றி! ${details.outletName} இல் டோக்கன் ${formattedToken} க்கான சேவை முடிந்தது. Ref: ${details.refNumber}.\nநிலை: ${details.feedbackUrl}\n\nSLT-MOBITEL`
     }
 
     console.log(`[SLT SMS COMPLETE] Message content (${messages[language].length} chars): "${messages[language]}"`)
@@ -530,12 +531,12 @@ class SLTSmsService {
     const hasTrackingUrl = !!details.trackingUrl
 
     const fullEnglishMessage = hasTrackingUrl
-      ? `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active. You are currently in position ${details.queuePosition} with an estimated wait time of ${details.estimatedWait || 5} minutes.\nRecovery URL: ${details.trackingUrl}\n\nSLT-MOBITEL`
+      ? `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active. You are currently in position ${details.queuePosition} with an estimated wait time of ${details.estimatedWait || 5} minutes.\nTrack live status: ${details.trackingUrl}\n\nSLT-MOBITEL`
       : `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active. You are currently in position ${details.queuePosition} with an estimated wait time of ${details.estimatedWait || 5} minutes.\n\nSLT-MOBITEL`
 
     const buildCompactEnglishMessage = () => {
       const waitSuffix = details.estimatedWait ? `. Wait ${details.estimatedWait} min` : ''
-      const statusSuffix = hasTrackingUrl ? `\nRecovery URL: ${details.trackingUrl}` : ''
+      const statusSuffix = hasTrackingUrl ? `\nTrack status: ${details.trackingUrl}` : ''
       const prefix = `Dear Valued Customer\n\nToken ${formattedToken} at `
       const suffix = ` active. Pos ${details.queuePosition}${waitSuffix}${statusSuffix}\n\nSLT-MOBITEL`
       const maxOutletLength = 160 - prefix.length - suffix.length
@@ -548,7 +549,7 @@ class SLTSmsService {
       if (compact.length <= 160) return compact
 
       if (hasTrackingUrl) {
-        const compactWithStatus = `Dear Valued Customer\n\nToken ${formattedToken} active. Pos ${details.queuePosition}${waitSuffix}.\nRecovery URL: ${details.trackingUrl}\n\nSLT-MOBITEL`
+        const compactWithStatus = `Dear Valued Customer\n\nToken ${formattedToken} active. Pos ${details.queuePosition}${waitSuffix}.\nTrack status: ${details.trackingUrl}\n\nSLT-MOBITEL`
         if (compactWithStatus.length <= 160) return compactWithStatus
       }
 
@@ -558,11 +559,11 @@ class SLTSmsService {
     const messages = {
       en: fullEnglishMessage.length <= 160 ? fullEnglishMessage : buildCompactEnglishMessage(),
       si: hasTrackingUrl
-        ? `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${formattedToken} දැන් සක්‍රීයයි. ඔබ දැනට ${details.queuePosition} ස්ථානයේ සිටින අතර ඇස්තමේන්තුගත පොරොත්තු කාලය විනාඩි ${details.estimatedWait || 5} කි.\nRecovery URL: ${details.trackingUrl}\n\nSLT-MOBITEL`
+        ? `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${formattedToken} දැන් සක්‍රීයයි. ඔබ දැනට ${details.queuePosition} ස්ථානයේ සිටින අතර ඇස්තමේන්තුගත පොරොත්තු කාලය විනාඩි ${details.estimatedWait || 5} කි.\n\nතත්ත්වය පරීක්ෂා කරන්න: ${details.trackingUrl}\n\nSLT-MOBITEL`
         : `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${formattedToken} දැන් සක්‍රීයයි. ඔබ දැනට ${details.queuePosition} ස්ථානයේ සිටින අතර ඇස්තමේන්තුගත පොරොත්තු කාලය විනාඩි ${details.estimatedWait || 5} කි.\n\nSLT-MOBITEL`,
       ta: hasTrackingUrl
-        ? `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} இப்போது செயலில் உள்ளது. நீங்கள் தற்போது ${details.queuePosition} நிலையில் உள்ளீர்கள், மேலும் மதிப்பிடப்பட்ட காத்திருப்பு நேரம் ${details.estimatedWait || 5} நிமிடங்கள்.\nRecovery URL: ${details.trackingUrl}\n\nSLT-MOBITEL`
-        : `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} இப்போது செயலில் உள்ளது. நீங்கள் தற்போது ${details.queuePosition} நிலையில் உள்ளீர்கள், மேலும் மதிப்பிடப்பட்ட காத்திருப்பு நேரம் ${details.estimatedWait || 5} நிமிடங்கள்.\n\nSLT-MOBITEL`
+        ? `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} இப்போது செயலில் உள்ளது. நீங்கள் தற்போது வரிசையில் ${details.queuePosition} இடத்தில் உள்ளீர்கள், மேலும் மதிப்பிடப்பட்ட காத்திருப்பு நேரம் ${details.estimatedWait || 5} நிமிடங்கள்.\n\nநிலை: ${details.trackingUrl}\n\nSLT-MOBITEL`
+        : `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} இப்போது செயலில் உள்ளது. நீங்கள் தற்போது வரிசையில் ${details.queuePosition} இடத்தில் உள்ளீர்கள், மேலும் மதிப்பிடப்பட்ட காத்திருப்பு நேரம் ${details.estimatedWait || 5} நிமிடங்கள்.\n\nSLT-MOBITEL`
     }
 
     return this.sendSMS({

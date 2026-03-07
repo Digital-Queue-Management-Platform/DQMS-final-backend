@@ -255,7 +255,7 @@ router.post('/send-notification', async (req: Request, res: Response) => {
     try {
       const result = await smsHelper.sendSMS({
         to: mobileNumber,
-        body: `Dear Valued Customer\n\nYour SLT bill details:\nAmount Due: Rs. ${formattedAmount}\nDue Date: ${dueDateFormatted}\nSLT Account: ${sltNumber}\n\nSLT-MOBITEL`
+        body: `Dear Valued Customer\n\nYour SLT account ${sltNumber} has an outstanding balance of Rs. ${formattedAmount}. Please settle the bill by ${dueDateFormatted} to avoid service interruption.\n\nSLT-MOBITEL`
       });
 
       if (result.success) {
