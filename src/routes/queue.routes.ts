@@ -51,26 +51,28 @@ router.get("/outlet/:outletId", async (req, res) => {
       `
       appointmentTokenIdSet = new Set((appts || []).map((a: any) => a.tokenId).filter(Boolean) as string[])
     }
-    // Attach a non-schema helper flag for frontend rendering
-    const waitingWithFlags = waitingTokens.map((t: any) => ({
+    // Fetch last transfer logs for all waiting tokens to identify source officer
+    const transferLogs = await prisma.transferLog.findMany({
+      where: {
+        tokenId: { in: waitingTokenIds },
+        createdAt: { gte: lastReset },
+      },
+      orderBy: { createdAt: "desc" },
+    })
+
+    const lastTransferMap = new Map<string, string>()
+    transferLogs.forEach((log) => {
+      if (!lastTransferMap.has(log.tokenId)) {
+        lastTransferMap.set(log.tokenId, log.fromOfficerId)
+      }
+    })
+
+    // Attach non-schema helper flags for frontend rendering
+    const filteredWaitingTokens = waitingTokens.map((t: any) => ({
       ...t,
       fromAppointment: appointmentTokenIdSet.has(t.id),
+      lastTransferByOfficerId: lastTransferMap.get(t.id) || null,
     }))
-
-    // Optional officer-specific filtering: hide tokens this officer has transferred away.
-    const { officerId } = req.query
-    let filteredWaitingTokens = waitingWithFlags
-    if (officerId) {
-      const transferredFromOfficer = await prisma.transferLog.findMany({
-        where: {
-          fromOfficerId: String(officerId),
-          createdAt: { gte: lastReset },
-        },
-        select: { tokenId: true },
-      })
-      const transferredTokenIds = new Set(transferredFromOfficer.map((t) => t.tokenId))
-      filteredWaitingTokens = waitingWithFlags.filter((t: any) => !transferredTokenIds.has(t.id))
-    }
 
     const inServiceTokens = await prisma.token.findMany({
       where: {

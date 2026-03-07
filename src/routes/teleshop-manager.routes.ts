@@ -2,6 +2,9 @@ import { Router } from "express"
 import { prisma, broadcast } from "../server"
 import * as jwt from "jsonwebtoken"
 import otpService from "../services/otpService"
+import emailService from "../services/emailService"
+import sltSmsService from "../services/sltSmsService"
+import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
 
 const router = Router()
 
@@ -34,8 +37,8 @@ router.post("/request-otp", async (req, res) => {
       return res.status(500).json({ error: result.message })
     }
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: result.message,
       managerName: teleshopManager.name
     })
@@ -368,6 +371,9 @@ router.post("/officers", async (req: any, res) => {
     if (!name || !mobileNumber || !outletId) {
       return res.status(400).json({ error: "Name, mobile number, and outlet ID are required" })
     }
+    if (!isValidName(name)) return res.status(400).json({ error: "Name must be between 2 and 100 characters" })
+    if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
+    if (req.body.email && !isValidEmail(req.body.email)) return res.status(400).json({ error: "Invalid email address format" })
 
     // Verify the outlet is in the teleshop manager's region
     const outlet = await prisma.outlet.findFirst({
@@ -379,6 +385,12 @@ router.post("/officers", async (req: any, res) => {
 
     if (!outlet) {
       return res.status(403).json({ error: "Outlet not found in your region" })
+    }
+
+    // Check for duplicate mobile number across ALL officers system-wide
+    const duplicate = await prisma.officer.findUnique({ where: { mobileNumber } })
+    if (duplicate) {
+      return res.status(409).json({ error: `An officer with mobile number ${mobileNumber} is already registered in the system` })
     }
 
     // Create the officer
@@ -404,7 +416,7 @@ router.post("/officers", async (req: any, res) => {
       officerData.languages = languages
     }
 
-    console.log("Creating officer with data:", JSON.stringify(officerData, null, 2))
+
 
     const officer = await prisma.officer.create({
       data: officerData,
@@ -412,6 +424,28 @@ router.post("/officers", async (req: any, res) => {
         outlet: true
       }
     })
+
+    // Send notifications
+    const loginUrl = "https://digital-queue-management-platform.vercel.app/officer/login"
+
+    // Email (if email is provided in body)
+    if (req.body.email) {
+      emailService.sendStaffWelcomeEmail({
+        name,
+        email: req.body.email,
+        mobileNumber,
+        role: "Customer Service Officer",
+        outletName: officer.outlet?.name,
+        loginUrl
+      }).catch(err => console.error("Officer welcome email failed:", err))
+    }
+
+    // SMS
+    sltSmsService.sendStaffWelcomeSMS(mobileNumber, {
+      name,
+      role: "Customer Service Officer",
+      loginUrl
+    }).catch(err => console.error("Officer welcome SMS failed:", err))
 
     res.json({ success: true, officer })
   } catch (error: any) {

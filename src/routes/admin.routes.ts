@@ -3,7 +3,9 @@ import * as jwt from "jsonwebtoken"
 import * as bcrypt from "bcrypt"
 import { prisma } from "../server"
 import emailService from "../services/emailService"
+import sltSmsService from "../services/sltSmsService"
 import { generateSecurePassword } from "../utils/passwordGenerator"
+import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
 
 const router = Router()
 
@@ -396,12 +398,50 @@ router.get("/dashboard/realtime", async (req, res) => {
 // Register a region (name only — RTOM assigned later by DGM)
 router.post("/register-region", async (req, res) => {
   try {
-    const { name } = req.body
-    if (!name) return res.status(400).json({ error: "Region name is required" })
+    const { name, managerName, managerEmail, managerMobile } = req.body
+    if (!name || !name.trim()) return res.status(400).json({ error: "Region name is required" })
+    if (managerMobile && !isValidSLMobile(managerMobile)) {
+      return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
+    }
+    if (managerEmail && !isValidEmail(managerEmail)) {
+      return res.status(400).json({ error: "Invalid email address format" })
+    }
+    if (managerName && !isValidName(managerName)) {
+      return res.status(400).json({ error: "Manager name must be between 2 and 100 characters" })
+    }
 
     const region = await prisma.region.create({
-      data: { name } as any
+      data: {
+        name,
+        managerId: managerName,
+        managerEmail: managerEmail || null,
+        managerMobile: managerMobile || null
+      } as any
     })
+
+    // Send notifications if RTOM details are provided
+    if (managerMobile) {
+      const loginUrl = "https://digital-queue-management-platform.vercel.app/manager/login"
+
+      // Email
+      if (managerEmail) {
+        emailService.sendStaffWelcomeEmail({
+          name: managerName || "RTOM",
+          email: managerEmail,
+          mobileNumber: managerMobile,
+          role: "RTOM",
+          regionName: name,
+          loginUrl
+        }).catch(err => console.error("RTOM welcome email failed:", err))
+      }
+
+      // SMS
+      sltSmsService.sendStaffWelcomeSMS(managerMobile, {
+        name: managerName || "RTOM",
+        role: "RTOM",
+        loginUrl
+      }).catch(err => console.error("RTOM welcome SMS failed:", err))
+    }
 
     res.json({ success: true, region })
   } catch (error: any) {
@@ -1183,9 +1223,34 @@ router.post("/gms", async (req, res) => {
   try {
     const { name, mobileNumber, email } = req.body
     if (!name || !mobileNumber) return res.status(400).json({ error: "name and mobileNumber are required" })
+    if (!isValidName(name)) return res.status(400).json({ error: "Name must be between 2 and 100 characters" })
+    if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
+    if (email && !isValidEmail(email)) return res.status(400).json({ error: "Invalid email address format" })
     const existing = await (prisma as any).gM.findFirst({ where: { mobileNumber } })
     if (existing) return res.status(400).json({ error: "A GM with this mobile number already exists" })
     const gm = await (prisma as any).gM.create({ data: { name, mobileNumber, email: email || null } })
+
+    // Send notifications
+    const loginUrl = "https://digital-queue-management-platform.vercel.app/gm/login"
+
+    // Email
+    if (email) {
+      emailService.sendStaffWelcomeEmail({
+        name,
+        email,
+        mobileNumber,
+        role: "GM",
+        loginUrl
+      }).catch(err => console.error("GM welcome email failed:", err))
+    }
+
+    // SMS
+    sltSmsService.sendStaffWelcomeSMS(mobileNumber, {
+      name,
+      role: "GM",
+      loginUrl
+    }).catch(err => console.error("GM welcome SMS failed:", err))
+
     res.json({ success: true, gm })
   } catch (err) {
     console.error("Create GM error:", err)
@@ -1244,6 +1309,9 @@ router.post("/dgms", async (req, res) => {
   try {
     const { name, mobileNumber, email, gmId, regionIds } = req.body
     if (!name || !mobileNumber || !gmId) return res.status(400).json({ error: "name, mobileNumber, and gmId are required" })
+    if (!isValidName(name)) return res.status(400).json({ error: "Name must be between 2 and 100 characters" })
+    if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
+    if (email && !isValidEmail(email)) return res.status(400).json({ error: "Invalid email address format" })
     const existing = await (prisma as any).dGM.findFirst({ where: { mobileNumber } })
     if (existing) return res.status(400).json({ error: "A DGM with this mobile number already exists" })
     const gm = await (prisma as any).gM.findUnique({ where: { id: gmId } })
@@ -1261,6 +1329,28 @@ router.post("/dgms", async (req, res) => {
     }
 
     const dgm = await (prisma as any).dGM.create({ data: { name, mobileNumber, email: email || null, gmId, regionIds: ids } })
+
+    // Send notifications
+    const loginUrl = "https://digital-queue-management-platform.vercel.app/dgm/login"
+
+    // Email
+    if (email) {
+      emailService.sendStaffWelcomeEmail({
+        name,
+        email,
+        mobileNumber,
+        role: "DGM",
+        loginUrl
+      }).catch(err => console.error("DGM welcome email failed:", err))
+    }
+
+    // SMS
+    sltSmsService.sendStaffWelcomeSMS(mobileNumber, {
+      name,
+      role: "DGM",
+      loginUrl
+    }).catch(err => console.error("DGM welcome SMS failed:", err))
+
     res.json({ success: true, dgm })
   } catch (err) {
     console.error("Create DGM error:", err)

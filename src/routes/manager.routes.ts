@@ -4,6 +4,9 @@ import * as jwt from "jsonwebtoken"
 import * as bcrypt from "bcrypt"
 import { generateSecurePassword } from "../utils/passwordGenerator"
 import otpService from "../services/otpService"
+import emailService from "../services/emailService"
+import sltSmsService from "../services/sltSmsService"
+import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
 
 const router = Router()
 
@@ -37,8 +40,8 @@ router.post("/request-otp", async (req, res) => {
       return res.status(500).json({ error: result.message })
     }
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: result.message,
       managerName: region.managerId,
       regionName: region.name
@@ -599,6 +602,12 @@ router.post("/officers", async (req, res) => {
   try {
     const { name, mobileNumber, outletId, counterNumber, isTraining, languages, assignedServices, services } = req.body
 
+    // Input validation
+    if (!name || !mobileNumber || !outletId) return res.status(400).json({ error: "name, mobileNumber, and outletId are required" })
+    if (!isValidName(name)) return res.status(400).json({ error: "Name must be between 2 and 100 characters" })
+    if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
+    if (req.body.email && !isValidEmail(req.body.email)) return res.status(400).json({ error: "Invalid email address format" })
+
     // Check for JWT token
     let token = req.cookies?.dq_manager_jwt
     if (!token) {
@@ -646,6 +655,12 @@ router.post("/officers", async (req, res) => {
       return res.status(403).json({ error: "Outlet not found in your region" })
     }
 
+    // Check for duplicate mobile number across ALL officers system-wide
+    const duplicate = await prisma.officer.findUnique({ where: { mobileNumber } })
+    if (duplicate) {
+      return res.status(409).json({ error: `An officer with mobile number ${mobileNumber} is already registered in the system` })
+    }
+
     // Create the officer
     const officerData: any = {
       name,
@@ -673,7 +688,7 @@ router.post("/officers", async (req, res) => {
       officerData.languages = languages
     }
 
-    console.log("Creating officer with data:", JSON.stringify(officerData, null, 2))
+
 
     const officer = await prisma.officer.create({
       data: officerData,
@@ -681,6 +696,28 @@ router.post("/officers", async (req, res) => {
         outlet: true
       }
     })
+
+    // Send notifications
+    const loginUrl = "https://digital-queue-management-platform.vercel.app/officer/login"
+
+    // Email (if email is provided in body)
+    if (req.body.email) {
+      emailService.sendStaffWelcomeEmail({
+        name,
+        email: req.body.email,
+        mobileNumber,
+        role: "Customer Service Officer",
+        outletName: officer.outlet?.name,
+        loginUrl
+      }).catch(err => console.error("Officer welcome email failed:", err))
+    }
+
+    // SMS
+    sltSmsService.sendStaffWelcomeSMS(mobileNumber, {
+      name,
+      role: "Customer Service Officer",
+      loginUrl
+    }).catch(err => console.error("Officer welcome SMS failed:", err))
 
     res.json({ success: true, officer })
   } catch (error: any) {
@@ -897,6 +934,9 @@ router.post("/teleshop-managers", async (req, res) => {
     if (!name || !mobileNumber || !email) {
       return res.status(400).json({ error: "Name, mobile number, and email are required" })
     }
+    if (!isValidName(name)) return res.status(400).json({ error: "Name must be between 2 and 100 characters" })
+    if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
+    if (!isValidEmail(email)) return res.status(400).json({ error: "Invalid email address format" })
 
     // Create teleshop manager
     const teleshopManager = await prisma.teleshopManager.create({
@@ -911,26 +951,27 @@ router.post("/teleshop-managers", async (req, res) => {
       }
     })
 
-    // Send welcome email to the teleshop manager
-    try {
-      const emailService = require('../services/emailService').default
-      const emailSent = await emailService.sendTeleshopManagerWelcomeEmail({
-        managerName: teleshopManager.name,
-        managerEmail: teleshopManager.email!,
-        managerMobile: teleshopManager.mobileNumber,
-        regionName: region.name,
-        loginUrl: 'https://digital-queue-management-platform.vercel.app/teleshop-manager/login'
-      })
+    // Send notifications
+    const loginUrl = "https://digital-queue-management-platform.vercel.app/teleshop-manager/login"
 
-      if (emailSent) {
-        console.log('Welcome email sent successfully to teleshop manager:', teleshopManager.email)
-      } else {
-        console.error('Failed to send welcome email to teleshop manager:', teleshopManager.email)
-      }
-    } catch (emailError) {
-      console.error('Error sending welcome email:', emailError)
-      // Don't fail the teleshop manager creation if email fails
+    // Email
+    if (teleshopManager.email) {
+      emailService.sendStaffWelcomeEmail({
+        name: teleshopManager.name,
+        email: teleshopManager.email,
+        mobileNumber: teleshopManager.mobileNumber,
+        role: "Teleshop Manager",
+        regionName: region.name,
+        loginUrl
+      }).catch(err => console.error("Teleshop manager welcome email failed:", err))
     }
+
+    // SMS
+    sltSmsService.sendStaffWelcomeSMS(teleshopManager.mobileNumber, {
+      name: teleshopManager.name,
+      role: "Teleshop Manager",
+      loginUrl
+    }).catch(err => console.error("Teleshop manager welcome SMS failed:", err))
 
     res.json({ success: true, teleshopManager })
   } catch (error: any) {

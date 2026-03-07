@@ -118,6 +118,43 @@ router.post("/login", async (req, res) => {
   }
 })
 
+// Real-time duplicate check – called by frontend as user types
+// GET /officer/check?mobile=0771234567   → { taken: true|false, field: 'mobile' }
+// GET /officer/check?email=a@b.com       → { taken: true|false, field: 'email' }
+router.get("/check", async (req, res) => {
+  try {
+    const { mobile, email } = req.query as { mobile?: string; email?: string }
+
+    if (mobile) {
+      const existing = await prisma.officer.findUnique({ where: { mobileNumber: mobile } })
+      return res.json({
+        taken: !!existing,
+        field: 'mobile',
+        message: existing
+          ? `Mobile number ${mobile} is already registered to another officer`
+          : null
+      })
+    }
+
+    if (email) {
+      // Officers don't store email in the DB, but check across Teleshop Managers too
+      const existingManager = await prisma.teleshopManager.findFirst({ where: { email } })
+      return res.json({
+        taken: !!existingManager,
+        field: 'email',
+        message: existingManager
+          ? `Email address ${email} is already registered in the system`
+          : null
+      })
+    }
+
+    return res.status(400).json({ error: "Provide mobile or email query param" })
+  } catch (err) {
+    console.error("Officer check error:", err)
+    res.status(500).json({ error: "Check failed" })
+  }
+})
+
 // Register officer
 router.post("/register", async (req, res) => {
   try {
@@ -263,6 +300,7 @@ router.post("/next-token", async (req, res) => {
         where: {
           outletId: officer.outletId,
           status: 'waiting',
+          isTransferred: false,
           createdAt: { gte: lastReset },
         },
         orderBy: { tokenNumber: 'asc' },
@@ -299,6 +337,7 @@ router.post("/next-token", async (req, res) => {
         where: {
           outletId: officer.outletId,
           status: 'waiting',
+          isTransferred: false,
           counterNumber: officer.counterNumber && officer.counterNumber > 0 ? officer.counterNumber : undefined,
           serviceTypes: { hasSome: assignedServices },
           createdAt: { gte: lastReset },
@@ -317,6 +356,7 @@ router.post("/next-token", async (req, res) => {
           where: {
             outletId: officer.outletId,
             status: 'waiting',
+            isTransferred: false,
             counterNumber: null,
             serviceTypes: { hasSome: assignedServices },
             createdAt: { gte: lastReset },
@@ -362,8 +402,9 @@ router.post("/next-token", async (req, res) => {
     // Assign the selected token to the officer
     console.log(`Assigning token #${nextToken.tokenNumber} to officer ${officer.name}`)
 
-    const updatedToken = await prisma.token.update({
-      where: { id: nextToken.id },
+    // Atomic update to prevent race conditions (two officers calling same token)
+    const assignResult = await prisma.token.updateMany({
+      where: { id: nextToken.id, status: 'waiting' },
       data: {
         status: 'in_service',
         assignedTo: officerId,
@@ -371,8 +412,20 @@ router.post("/next-token", async (req, res) => {
         calledAt: new Date(),
         startedAt: new Date(),
       },
+    })
+
+    if (assignResult.count === 0) {
+      console.log(`Race condition avoided: Token #${nextToken.tokenNumber} was already called by another officer.`)
+      return res.status(409).json({ error: 'This token has already been called by another officer. Please click Next again.' })
+    }
+
+    // Fetch the updated token with includes for SMS and broadcast
+    const updatedToken = await prisma.token.findUnique({
+      where: { id: nextToken.id },
       include: { customer: true, officer: true, outlet: true },
     })
+
+    if (!updatedToken) return res.status(404).json({ error: 'Token lost after assignment' })
 
     await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
 
@@ -650,7 +703,8 @@ router.post("/recall-token", async (req, res) => {
         firstName,
         tokenNumber: recalled.tokenNumber,
         outletName: recalled.outlet?.name || 'SLT Office',
-        recoveryUrl
+        recoveryUrl,
+        counterNumber: recalled.counterNumber || undefined
       })
       console.log(`✓ Recall SMS sent to customer ${recalled.customer.mobileNumber} for token #${recalled.tokenNumber}`)
     } catch (smsError) {
@@ -670,6 +724,8 @@ router.post("/recall-token", async (req, res) => {
     res.status(500).json({ error: 'Failed to recall token' })
   }
 })
+
+
 
 // Set token as VIP/Priority
 router.post("/set-priority", async (req, res) => {
@@ -726,8 +782,9 @@ router.post("/call-token", async (req, res) => {
       return res.status(400).json({ error: 'Cannot call completed token' })
     }
 
-    const called = await prisma.token.update({
-      where: { id: tokenId },
+    // ATOMIC UPDATE: Ensure token is still waiting before calling it
+    const callResult = await prisma.token.updateMany({
+      where: { id: tokenId, status: 'waiting' },
       data: {
         status: 'in_service',
         assignedTo: officerId,
@@ -735,8 +792,18 @@ router.post("/call-token", async (req, res) => {
         calledAt: new Date(),
         startedAt: new Date(),
       },
+    })
+
+    if (callResult.count === 0) {
+      return res.status(409).json({ error: 'This token is no longer waiting. It may have been called, skipped, or cancelled.' })
+    }
+
+    const called = await prisma.token.findUnique({
+      where: { id: tokenId },
       include: { customer: true, officer: true, outlet: true },
     })
+
+    if (!called) return res.status(404).json({ error: 'Token lost after calling' })
 
     // Set officer to serving
     await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
@@ -893,16 +960,29 @@ router.post("/complete-service", async (req, res) => {
           baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
         }
 
-        // Build feedback URL - use first 8 chars of reference number for shorter URL
-        const shortRef = serviceCase.refNumber.split('/').pop()?.substring(0, 8) || 'ref'
-        const feedbackUrl = baseUrl ? `${baseUrl}/f?r=${shortRef}` : `/f?r=${shortRef}`
+        // Build feedback URL - use short alias to save space
+        const shortTokenId = token.id.substring(0, 8)
+        const feedbackUrl = baseUrl ? `${baseUrl}/f/${shortTokenId}` : `/f/${shortTokenId}`
+
+        // Detect customer language
+        let customerLang: 'en' | 'si' | 'ta' = 'en'
+        const prefs = (token as any).preferredLanguages
+        if (Array.isArray(prefs) && prefs.length > 0) {
+          const firstPref = String(prefs[0]).toLowerCase()
+          if (['en', 'si', 'ta'].includes(firstPref)) customerLang = firstPref as 'en' | 'si' | 'ta'
+        } else if (typeof prefs === 'string') {
+          if (prefs.includes('si')) customerLang = 'si'
+          else if (prefs.includes('ta')) customerLang = 'ta'
+        }
 
         await sltSmsService.sendServiceCompletion(token.customer.mobileNumber, {
           firstName,
+          tokenNumber: token.tokenNumber,
           refNumber: serviceCase.refNumber,
           services,
-          feedbackUrl
-        })
+          feedbackUrl,
+          outletName: token.outlet?.name || 'SLT Office'
+        }, customerLang)
         console.log(`✓ Service completion SMS sent to ${token.customer.mobileNumber}`)
       } catch (smsError) {
         console.error('SMS sending failed:', smsError)
@@ -1049,6 +1129,25 @@ router.post("/transfer-token", async (req, res) => {
       })
       console.log(`[Transfer-Tx] Step 3 (Officer) took ${Date.now() - step3Start}ms`)
 
+      // 4. Create ServiceCaseUpdate for audit trail/customer dashboard
+      const step4Start = Date.now()
+      console.log("[Transfer-Tx] Creating service case update for tracking...")
+      const sc = await tx.serviceCase.findFirst({ where: { tokenId: tokenId } })
+      if (sc) {
+        await tx.serviceCaseUpdate.create({
+          data: {
+            caseId: sc.id,
+            actorRole: "OFFICER",
+            actorId: officerId,
+            status: "transferred",
+            note: targetCounterNumber
+              ? `Token transferred to Counter ${targetCounterNumber}. ${notes || ""}`.trim()
+              : `Token transferred for further processing. ${notes || ""}`.trim()
+          }
+        })
+      }
+      console.log(`[Transfer-Tx] Step 4 (Case Update) took ${Date.now() - step4Start}ms`)
+
       return { updatedToken }
     }, {
       timeout: 20000 // Increase timeout to 20 seconds
@@ -1098,24 +1197,35 @@ router.post("/transfer-token", async (req, res) => {
         } catch { }
       }
 
-      const messages = {
-        en: targetCounterNumber
-          ? `SLT DQMS: Dear ${firstName}, your token #${result.updatedToken.tokenNumber} is transferred to Counter #${targetCounterNumber} for ${serviceNames}. Please proceed there.`
-          : `SLT DQMS: Dear ${firstName}, your token #${result.updatedToken.tokenNumber} is transferred for ${serviceNames}. Please proceed to the next available counter.`,
-        si: targetCounterNumber
-          ? `SLT DQMS: ${firstName}, ඔබගේ ටෝකන් #${result.updatedToken.tokenNumber} ${serviceNames} සඳහා කවුටර අංක ${targetCounterNumber} වෙත මාරු කරන ලදී. කරුණාකර එතැනට පැමිණෙන්න.`
-          : `SLT DQMS: ${firstName}, ඔබගේ ටෝකන් #${result.updatedToken.tokenNumber} ${serviceNames} සඳහා මාරු කරන ලදී. කරුණාකර ඊළඟ ලබ්‍ධ කවුටරට පැමිණෙන්න.`,
-        ta: targetCounterNumber
-          ? `SLT DQMS: ${firstName}, உங்கள் டோக்கன் #${result.updatedToken.tokenNumber} கவுண்டர் #${targetCounterNumber} க்கு ${serviceNames} க்காக மாற்றப்பட்டது. தயவுசெய்து அங்கு செல்லவும்.`
-          : `SLT DQMS: ${firstName}, உங்கள் டோக்கன் #${result.updatedToken.tokenNumber} ${serviceNames} க்காக மாற்றப்பட்டது. தயவுசெய்து அதிக திறந்த கவுண்டரக்கு செல்லவும்.`
+      // Build recovery URL
+      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+      let baseUrl = origins[0] || ''
+
+      // Always prioritize Vercel URLs if available
+      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+      if (vercelUrl) {
+        baseUrl = vercelUrl
+      } else if (process.env.NODE_ENV === 'production') {
+        // In production, prefer any HTTPS URL over localhost
+        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
       }
 
-      console.log(`[Transfer-SMS] Sending ${lang} message to ${result.updatedToken.customer.mobileNumber}`)
+      const outlet = result.updatedToken.outlet?.name || "SLT Office"
+      const trackRef = `/t/${result.updatedToken.id.substring(0, 8)}`
+      const recoveryUrl = baseUrl ? `${baseUrl}${trackRef}` : trackRef
 
-      await sltSmsService.sendSMS({
-        to: result.updatedToken.customer.mobileNumber,
-        message: messages[lang] || messages.en
-      })
+      // Fetch refNumber for tracking
+      const sc: any = await (prisma as any).serviceCase.findFirst({ where: { tokenId: result.updatedToken.id } })
+      const refNumber = sc?.refNumber || undefined
+
+      await sltSmsService.sendTokenTransfer(result.updatedToken.customer.mobileNumber, {
+        tokenNumber: result.updatedToken.tokenNumber,
+        outletName: outlet,
+        serviceNames: serviceNames,
+        targetCounterNumber: targetCounterNumber ? Number(targetCounterNumber) : undefined,
+        recoveryUrl,
+        refNumber
+      }, lang)
       console.log(`✓ [Transfer-SMS] Sent successfully to ${result.updatedToken.customer.mobileNumber}`)
     } catch (smsError) {
       console.error("[Transfer-SMS] SMS failed:", smsError)

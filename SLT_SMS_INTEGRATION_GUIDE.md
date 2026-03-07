@@ -11,7 +11,6 @@ The Digital Queue Management Platform (DQMP) now supports SMS notifications via 
 - ✅ **Token Notifications**: Alert customers when it's their turn
 - ✅ **Bill Notifications**: Send SLT bill payment reminders
 - ✅ **Multi-language Support**: English, Sinhala, and Tamil
-- ✅ **Fallback Support**: Use Twilio as fallback if SLT SMS fails
 - ✅ **Automatic Number Normalization**: Supports multiple Sri Lankan mobile number formats
 
 ## Prerequisites
@@ -48,7 +47,7 @@ SLT_SMS_ALIAS=SLTM QMS
 SLT_SMS_API_URL=http://127.0.0.1:9501/api_jsonrpc.php
 
 # SMS Provider Selection
-# Options: 'slt', 'twilio', or 'both' (both means try SLT first, fallback to Twilio)
+# Options: 'slt'
 SMS_PROVIDER=slt
 ```
 
@@ -56,9 +55,7 @@ SMS_PROVIDER=slt
 
 | Provider | Description |
 |----------|-------------|
-| `slt` | Use only SLT SMS Gateway |
-| `twilio` | Use only Twilio (existing setup) |
-| `both` | Try SLT first, fallback to Twilio if SLT fails |
+| `slt` | Use SLT SMS Gateway (Default) |
 
 ## Mobile Number Formats
 
@@ -175,7 +172,7 @@ The SLT SMS service is automatically integrated into the following workflows:
 
 When customers request an OTP:
 ```typescript
-// Automatically uses configured SMS provider (SLT or Twilio)
+// Automatically uses SLT SMS Gateway
 POST /api/customer/otp/start
 {
   "mobileNumber": "0771234567",
@@ -279,7 +276,6 @@ The system handles errors gracefully:
 1. **Invalid Mobile Number**: Returns error if number format is invalid
 2. **Missing Credentials**: Returns 503 if SLT SMS is not configured
 3. **API Failures**: Logs error and returns appropriate HTTP status
-4. **Fallback**: If `SMS_PROVIDER=both`, automatically tries Twilio if SLT fails
 
 ### Example Error Response
 ```json
@@ -357,7 +353,7 @@ backend/
 │   ├── routes/
 │   │   └── slt-sms.routes.ts      # SLT SMS API endpoints
 │   ├── utils/
-│   │   └── smsHelper.ts           # Unified SMS helper (SLT + Twilio)
+│   │   └── smsHelper.ts           # Unified SMS helper (SLT)
 │   └── server.ts                  # Route registration
 ```
 

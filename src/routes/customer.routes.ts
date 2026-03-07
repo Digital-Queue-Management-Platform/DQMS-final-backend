@@ -2,7 +2,6 @@ import { Router } from "express"
 import { prisma, broadcast } from "../server"
 import { getLastDailyReset } from "../utils/resetWindow"
 import * as jwt from "jsonwebtoken"
-import Twilio from "twilio"
 import smsHelper from "../utils/smsHelper"
 import sltSmsService from "../services/sltSmsService"
 
@@ -14,8 +13,6 @@ const QR_JWT_EXPIRES = process.env.QR_JWT_EXPIRES || "5m" // short-lived token
 // OTP verification config
 const OTP_JWT_SECRET = process.env.OTP_JWT_SECRET || "otp-dev-secret"
 const OTP_JWT_EXPIRES = process.env.OTP_JWT_EXPIRES || "10m"
-// Note: Do NOT read Twilio env vars at module-load time because imports may run before dotenv.config().
-// We'll read env and construct the client inside request handlers.
 
 // In-memory OTP store (mobile -> record)
 type OtpRecord = {
@@ -30,6 +27,15 @@ const now = () => Date.now()
 const genOtp = () => Math.floor(1000 + Math.random() * 9000).toString()
 const FIVE_MIN = 1 * 60 * 1000
 const RESEND_WINDOW = 30 * 1000
+
+function normalizeLang(input: unknown): 'en' | 'si' | 'ta' {
+  if (typeof input !== 'string') return 'en'
+  const v = input.trim().toLowerCase()
+
+  if (['si', 'sinhala', 'sin', 'සිංහල', 'sinh'].includes(v)) return 'si'
+  if (['ta', 'tamil', 'tam', 'தமிழ்'].includes(v)) return 'ta'
+  return 'en'
+}
 
 function toE164(mobile: string): string {
   // Relaxed validation: Just normalize to 10 digits if starting with 0, or keep as is.
@@ -84,7 +90,7 @@ router.post("/registration/otp/start", async (req, res) => {
     otpStore.set(key, record)
 
     // Localize OTP message by language; fallback to English
-    const lang = (typeof preferredLanguage === 'string' ? preferredLanguage : 'en') as 'en' | 'si' | 'ta'
+    const lang = normalizeLang(preferredLanguage)
 
     // DEV mode takes precedence
     if (OTP_DEV_MODE) {
@@ -181,7 +187,7 @@ router.post("/otp/start", async (req, res) => {
     otpStore.set(key, record)
 
     // Localize OTP message by language; fallback to English
-    const lang = (typeof preferredLanguage === 'string' ? preferredLanguage : 'en') as 'en' | 'si' | 'ta'
+    const lang = normalizeLang(preferredLanguage)
 
     // DEV mode takes precedence
     if (OTP_DEV_MODE) {
@@ -471,11 +477,9 @@ router.post("/register", async (req, res) => {
 
     const estimatedWait = Math.max(1, queuePosition * 5) // 5 min per person, minimum 1 min
 
-    // Send token confirmation SMS with tracking URL
+    // Send token confirmation SMS
     try {
-      const firstName = token.customer.name.split(' ')[0]
-
-      // Build tracking URL
+      // Build tracking URL for customer lookup
       const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
       let baseUrl = origins[0] || ''
 
@@ -491,21 +495,18 @@ router.post("/register", async (req, res) => {
       const shortId = token.id.substring(0, 8)
       const trackingUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
 
-      // Fetch service names for SMS
-      const services = await prisma.service.findMany({
-        where: { code: { in: serviceTypes } },
-        select: { title: true }
-      });
-      const serviceNames = services.map(s => s.title).join(", ") || "Service";
+      // Pass customer's preferred language choice to the SMS service
+      const lang = Array.isArray(preferredLanguages) && preferredLanguages.length > 0
+        ? normalizeLang(preferredLanguages[0])
+        : normalizeLang(preferredLanguages);
 
       await sltSmsService.sendTokenConfirmation(token.customer.mobileNumber, {
-        firstName,
         tokenNumber: token.tokenNumber,
         queuePosition,
         outletName: token.outlet?.name || 'SLT Office',
         trackingUrl,
-        services: serviceNames
-      })
+        estimatedWait
+      }, lang)
       console.log(`✓ Token confirmation SMS sent to ${token.customer.mobileNumber}`)
     } catch (smsError) {
       console.error('Token confirmation SMS failed:', smsError)
@@ -579,6 +580,61 @@ router.get("/token/:tokenId", async (req, res) => {
   } catch (error) {
     console.error("Token fetch error:", error)
     res.status(500).json({ error: "Failed to fetch token" })
+  }
+})
+
+// Cancel a token by customer
+router.post("/token/:tokenId/cancel", async (req, res) => {
+  try {
+    const { tokenId } = req.params
+
+    const token = await prisma.token.findUnique({
+      where: { id: tokenId },
+    })
+
+    if (!token) {
+      return res.status(404).json({ error: "Token not found" })
+    }
+
+    // Only allow canceling if still waiting
+    if (token.status !== "waiting") {
+      return res.status(400).json({ error: "Only waiting tokens can be cancelled" })
+    }
+
+    const updatedToken = await prisma.token.update({
+      where: { id: tokenId },
+      data: { status: "cancelled" },
+      include: {
+        customer: true,
+        outlet: true,
+      }
+    })
+
+    // Broadcast update so officer dashboard and others refresh
+    broadcast({ type: "TOKEN_CANCELLED", data: updatedToken })
+
+    // Send Cancellation SMS
+    try {
+      const preferredLangs = Array.isArray(updatedToken.preferredLanguages) ? updatedToken.preferredLanguages : []
+      const lang = preferredLangs.length > 0 ? normalizeLang(preferredLangs[0]) : 'en'
+
+      await smsHelper.sendTokenCancellation(updatedToken.customer.mobileNumber, {
+        tokenNumber: updatedToken.tokenNumber,
+        outletName: updatedToken.outlet.name
+      }, lang)
+      console.log(`✓ Cancellation SMS sent to ${updatedToken.customer.mobileNumber} for token #${updatedToken.tokenNumber}`)
+    } catch (smsErr) {
+      console.error("Failed to send cancellation SMS:", smsErr)
+    }
+
+    res.json({
+      success: true,
+      message: "Token cancelled successfully",
+      token: updatedToken
+    })
+  } catch (error) {
+    console.error("Token cancel error:", error)
+    res.status(500).json({ error: "Failed to cancel token" })
   }
 })
 
@@ -838,7 +894,7 @@ function getStatusMessage(status: string, queuePosition: number, estimatedWait: 
     case 'waiting':
       return queuePosition === 1
         ? 'You are next in line!'
-        : `You are position ${queuePosition} in queue. Estimated wait: ${estimatedWait} minutes.`
+        : `You are position ${queuePosition} in the queue.`
     case 'in_service':
       return 'You are currently being served.'
     case 'completed':

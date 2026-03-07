@@ -1,7 +1,9 @@
-import { Router } from "express"
-import { prisma } from "../server"
-import * as jwt from "jsonwebtoken"
-import emailService from "../services/emailService"
+import { Router } from 'express'
+import * as jwt from 'jsonwebtoken'
+import { prisma } from '../server'
+import emailService from '../services/emailService'
+import sltSmsService from '../services/sltSmsService'
+import { isValidSLMobile, isValidEmail, isValidName } from '../utils/validators'
 import otpService from "../services/otpService"
 
 const router = Router()
@@ -27,7 +29,7 @@ router.post("/request-otp", async (req, res) => {
         const { mobileNumber } = req.body
         if (!mobileNumber) return res.status(400).json({ error: "Mobile number is required" })
 
-        const dgm = await (prisma as any).dGM.findFirst({ 
+        const dgm = await (prisma as any).dGM.findFirst({
             where: { mobileNumber, isActive: true },
             select: { id: true, name: true }
         })
@@ -254,6 +256,9 @@ router.post("/rtoms", async (req, res) => {
 
         const { regionId, name, mobileNumber, email } = req.body
         if (!regionId || !name || !mobileNumber) return res.status(400).json({ error: "regionId, name, and mobileNumber are required" })
+        if (!isValidName(name)) return res.status(400).json({ error: "Name must be between 2 and 100 characters" })
+        if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
+        if (email && !isValidEmail(email)) return res.status(400).json({ error: "Invalid email address format" })
 
         if (!dgm.regionIds.includes(regionId)) return res.status(403).json({ error: "Region not assigned to you" })
 
@@ -267,21 +272,27 @@ router.post("/rtoms", async (req, res) => {
             select: { id: true, name: true, managerId: true, managerMobile: true, managerEmail: true }
         })
 
-        // Send welcome email to the new RTOM if they have an email
+        // Send notifications
+        const loginUrl = "https://digital-queue-management-platform.vercel.app/manager/login"
+
+        // Email
         if (email) {
-            try {
-                await emailService.sendManagerWelcomeEmail({
-                    managerName: name,
-                    managerEmail: email,
-                    managerMobile: mobileNumber,
-                    regionName: region.name,
-                    loginUrl: "https://digital-queue-management-platform.vercel.app/manager/login"
-                })
-                console.log(`Welcome email sent to RTOM ${name} (${email}) for region ${region.name}`)
-            } catch (emailErr) {
-                console.error("Failed to send RTOM welcome email (non-fatal):", emailErr)
-            }
+            emailService.sendStaffWelcomeEmail({
+                name,
+                email,
+                mobileNumber,
+                role: "RTOM",
+                regionName: region.name,
+                loginUrl
+            }).catch(err => console.error("RTOM welcome email failed:", err))
         }
+
+        // SMS
+        sltSmsService.sendStaffWelcomeSMS(mobileNumber, {
+            name,
+            role: "RTOM",
+            loginUrl
+        }).catch(err => console.error("RTOM welcome SMS failed:", err))
 
         res.status(201).json({ success: true, region })
     } catch (err) {
