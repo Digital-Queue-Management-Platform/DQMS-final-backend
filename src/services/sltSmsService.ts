@@ -102,7 +102,11 @@ class SLTSmsService {
         }
       }
 
-      console.log(`[SLT SMS] Sending SMS to ${normalizedMobile}`)
+      // Detect if message contains Unicode characters (non-ASCII)
+      const isUnicode = /[^\x00-\x7F]/.test(params.message)
+      const messageType = isUnicode ? 2 : 0
+
+      console.log(`[SLT SMS] Sending SMS to ${normalizedMobile}. Unicode: ${isUnicode}, Type: ${messageType}`)
 
       // Send request to SLT SMS API using GET with query parameters
       const response = await this.axiosInstance.get('', {
@@ -113,7 +117,7 @@ class SLTSmsService {
           user: this.config.username,
           password: this.config.password,
           dr: 1,  // Delivery report
-          type: 0  // Message type
+          type: messageType  // 0 for Text, 2 for Unicode
         }
       })
 
