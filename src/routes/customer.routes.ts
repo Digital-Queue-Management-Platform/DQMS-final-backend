@@ -613,6 +613,20 @@ router.post("/token/:tokenId/cancel", async (req, res) => {
     // Broadcast update so officer dashboard and others refresh
     broadcast({ type: "TOKEN_CANCELLED", data: updatedToken })
 
+    // Send Cancellation SMS
+    try {
+      const preferredLangs = Array.isArray(updatedToken.preferredLanguages) ? updatedToken.preferredLanguages : []
+      const lang = preferredLangs.length > 0 ? normalizeLang(preferredLangs[0]) : 'en'
+
+      await smsHelper.sendTokenCancellation(updatedToken.customer.mobileNumber, {
+        tokenNumber: updatedToken.tokenNumber,
+        outletName: updatedToken.outlet.name
+      }, lang)
+      console.log(`✓ Cancellation SMS sent to ${updatedToken.customer.mobileNumber} for token #${updatedToken.tokenNumber}`)
+    } catch (smsErr) {
+      console.error("Failed to send cancellation SMS:", smsErr)
+    }
+
     res.json({
       success: true,
       message: "Token cancelled successfully",

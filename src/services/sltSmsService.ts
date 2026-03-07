@@ -790,6 +790,30 @@ class SLTSmsService {
   }
 
   /**
+   * Send token cancellation notification
+   */
+  async sendTokenCancellation(
+    mobileNumber: string,
+    details: {
+      tokenNumber: number
+      outletName: string
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SMSResponse> {
+    const formattedToken = details.tokenNumber.toString().padStart(3, '0')
+    const messages = {
+      en: `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} has been cancelled successfully. Thank you for choosing SLT-MOBITEL.\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${formattedToken} සාර්ථකව අවලංගු කර ඇත. SLT-MOBITEL තෝරා ගැනීම ගැන ස්තුතියි.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} வெற்றிகரமாக ரத்து செய்யப்பட்டது. SLT-MOBITEL ஐத் தேர்ந்தெடுத்தமைக்கு நன்றி.\n\nSLT-MOBITEL`
+    }
+
+    return this.sendSMS({
+      to: mobileNumber,
+      message: (messages as any)[language] || messages.en
+    })
+  }
+
+  /**
    * Check service availability
    */
   isConfigured(): boolean {

@@ -181,6 +181,21 @@ class UnifiedSmsHelper {
       language
     })
   }
+
+  /**
+   * Send token cancellation confirmation
+   */
+  async sendTokenCancellation(
+    mobileNumber: string,
+    details: {
+      tokenNumber: number
+      outletName: string
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SendSMSResult> {
+    const result = await sltSmsService.sendTokenCancellation(mobileNumber, details, language)
+    return { success: result.success, provider: 'slt', error: result.error, messageId: result.messageId }
+  }
 }
 
 // Export singleton instance
