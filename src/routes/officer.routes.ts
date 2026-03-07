@@ -402,8 +402,9 @@ router.post("/next-token", async (req, res) => {
     // Assign the selected token to the officer
     console.log(`Assigning token #${nextToken.tokenNumber} to officer ${officer.name}`)
 
-    const updatedToken = await prisma.token.update({
-      where: { id: nextToken.id },
+    // Atomic update to prevent race conditions (two officers calling same token)
+    const assignResult = await prisma.token.updateMany({
+      where: { id: nextToken.id, status: 'waiting' },
       data: {
         status: 'in_service',
         assignedTo: officerId,
@@ -411,8 +412,20 @@ router.post("/next-token", async (req, res) => {
         calledAt: new Date(),
         startedAt: new Date(),
       },
+    })
+
+    if (assignResult.count === 0) {
+      console.log(`Race condition avoided: Token #${nextToken.tokenNumber} was already called by another officer.`)
+      return res.status(409).json({ error: 'This token has already been called by another officer. Please click Next again.' })
+    }
+
+    // Fetch the updated token with includes for SMS and broadcast
+    const updatedToken = await prisma.token.findUnique({
+      where: { id: nextToken.id },
       include: { customer: true, officer: true, outlet: true },
     })
+
+    if (!updatedToken) return res.status(404).json({ error: 'Token lost after assignment' })
 
     await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
 
@@ -769,8 +782,9 @@ router.post("/call-token", async (req, res) => {
       return res.status(400).json({ error: 'Cannot call completed token' })
     }
 
-    const called = await prisma.token.update({
-      where: { id: tokenId },
+    // ATOMIC UPDATE: Ensure token is still waiting before calling it
+    const callResult = await prisma.token.updateMany({
+      where: { id: tokenId, status: 'waiting' },
       data: {
         status: 'in_service',
         assignedTo: officerId,
@@ -778,8 +792,18 @@ router.post("/call-token", async (req, res) => {
         calledAt: new Date(),
         startedAt: new Date(),
       },
+    })
+
+    if (callResult.count === 0) {
+      return res.status(409).json({ error: 'This token is no longer waiting. It may have been called, skipped, or cancelled.' })
+    }
+
+    const called = await prisma.token.findUnique({
+      where: { id: tokenId },
       include: { customer: true, officer: true, outlet: true },
     })
+
+    if (!called) return res.status(404).json({ error: 'Token lost after calling' })
 
     // Set officer to serving
     await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
