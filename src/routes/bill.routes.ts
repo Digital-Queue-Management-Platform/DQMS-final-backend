@@ -241,7 +241,7 @@ router.get('/all', async (req: Request, res: Response) => {
 // POST /api/bills/send-notification - Send bill details via SMS to customer's mobile
 router.post('/send-notification', async (req: Request, res: Response) => {
   try {
-    const { mobileNumber, accountName, billAmount, dueDate, sltNumber } = req.body;
+    const { mobileNumber, accountName, billAmount, dueDate, sltNumber, language = 'en' } = req.body;
 
     if (!mobileNumber || !accountName || billAmount === undefined) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -253,10 +253,12 @@ router.post('/send-notification', async (req: Request, res: Response) => {
 
     // Try to send SMS notification using unified SMS helper
     try {
-      const result = await smsHelper.sendSMS({
-        to: mobileNumber,
-        body: `Dear Valued Customer\n\nYour SLT account ${sltNumber} has an outstanding balance of Rs. ${formattedAmount}. Please settle the bill by ${dueDateFormatted} to avoid service interruption.\n\nSLT-MOBITEL`
-      });
+      const result = await smsHelper.sendBillNotification(mobileNumber, {
+        accountName,
+        amount: formattedAmount,
+        dueDate: dueDateFormatted,
+        accountNumber: sltNumber
+      }, language as 'en' | 'si' | 'ta');
 
       if (result.success) {
         console.log(`[BILL][SMS] Sent bill notification via ${result.provider} to ${mobileNumber}`);

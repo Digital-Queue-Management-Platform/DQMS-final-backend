@@ -338,13 +338,18 @@ class SLTSmsService {
       amount: string
       dueDate: string
       accountNumber: string
-    }
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
-    const message = `Dear Valued Customer\n\nYour SLT bill details:\nAmount Due: Rs. ${billDetails.amount}\nDue Date: ${billDetails.dueDate}\nSLT Account: ${billDetails.accountNumber}\n\nSLT-MOBITEL`
+    const messages = {
+      en: `Dear Valued Customer\n\nYour SLT account ${billDetails.accountNumber} has an outstanding balance of Rs. ${billDetails.amount}. Please settle the bill by ${billDetails.dueDate} to avoid service interruption.\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\nඔබගේ SLT ගිණුම ${billDetails.accountNumber} හි හිඟ ශේෂය රු. ${billDetails.amount} කි. සේවා බාධාවන් වළක්වා ගැනීමට කරුණාකර ${billDetails.dueDate} දිනට පෙර බිල්පත ගෙවන්න.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\nஉங்கள் SLT கணக்கு ${billDetails.accountNumber} இல் ரூ. ${billDetails.amount} நிலுவைத் தொகை உள்ளது. சேவைத் தடையைத் தவிர்க்க தயவுசெய்து ${billDetails.dueDate} க்குள் கட்டணத்தைச் செலுத்தவும்.\n\nSLT-MOBITEL`
+    }
 
     return this.sendSMS({
       to: mobileNumber,
-      message: message
+      message: messages[language]
     })
   }
 

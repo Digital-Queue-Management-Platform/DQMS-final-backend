@@ -205,6 +205,32 @@ class UnifiedSmsHelper {
   }
 
   /**
+   * Send bill payment notification
+   */
+  async sendBillNotification(
+    mobileNumber: string,
+    details: {
+      accountName: string
+      amount: string
+      dueDate: string
+      accountNumber: string
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SendSMSResult> {
+    const messages = {
+      en: `Dear Valued Customer\n\nYour SLT account ${details.accountNumber} has an outstanding balance of Rs. ${details.amount}. Please settle the bill by ${details.dueDate} to avoid service interruption.\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\nඔබගේ SLT ගිණුම ${details.accountNumber} හි හිඟ ශේෂය රු. ${details.amount} කි. සේවා බාධාවන් වළක්වා ගැනීමට කරුණාකර ${details.dueDate} දිනට පෙර බිල්පත ගෙවන්න.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\nஉங்கள் SLT கணக்கு ${details.accountNumber} இல் ரூ. ${details.amount} நிலுவைத் தொகை உள்ளது. சேவைத் தடையைத் தவிர்க்க தயவுசெய்து ${details.dueDate} க்குள் கட்டணத்தைச் செலுத்தவும்.\n\nSLT-MOBITEL`
+    }
+
+    return this.sendSMS({
+      to: mobileNumber,
+      body: messages[language],
+      language
+    })
+  }
+
+  /**
    * Send registration confirmation
    */
   async sendRegistrationConfirmation(

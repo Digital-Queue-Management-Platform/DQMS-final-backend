@@ -498,13 +498,18 @@ router.post("/register", async (req, res) => {
       const shortId = token.id.substring(0, 8)
       const trackingUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
 
+      // Pass customer's preferred language choice to the SMS service
+      const lang = Array.isArray(preferredLanguages) && preferredLanguages.length > 0
+        ? normalizeLang(preferredLanguages[0])
+        : normalizeLang(preferredLanguages);
+
       await sltSmsService.sendTokenConfirmation(token.customer.mobileNumber, {
         tokenNumber: token.tokenNumber,
         queuePosition,
         outletName: token.outlet?.name || 'SLT Office',
         trackingUrl,
         estimatedWait
-      })
+      }, lang)
       console.log(`✓ Token confirmation SMS sent to ${token.customer.mobileNumber}`)
     } catch (smsError) {
       console.error('Token confirmation SMS failed:', smsError)
