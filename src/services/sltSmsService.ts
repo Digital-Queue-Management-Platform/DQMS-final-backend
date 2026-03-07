@@ -76,6 +76,19 @@ class SLTSmsService {
   }
 
   /**
+   * Convert string to UTF-16BE hex format for Unicode SMS
+   * SMS gateways (like SLT) require this for messages with type=2 (Unicode/DCS=8)
+   */
+  private toHexUnicode(str: string): string {
+    let hex = ""
+    for (let i = 0; i < str.length; i++) {
+      // Get the 16-bit code unit, convert to hex, pad to 4 digits, uppercase
+      hex += str.charCodeAt(i).toString(16).padStart(4, '0').toUpperCase()
+    }
+    return hex
+  }
+
+  /**
    * Send SMS using SLT SMS Gateway
    * Based on SLT SMSC REST API
    */
@@ -106,6 +119,11 @@ class SLTSmsService {
       const isUnicode = /[^\x00-\x7F]/.test(params.message)
       const messageType = isUnicode ? 2 : 0
 
+      // For Unicode messages, some gateways (like SLT) require HEX encoding of UTF-16BE
+      const processedMessage = isUnicode
+        ? this.toHexUnicode(params.message)
+        : params.message
+
       console.log(`[SLT SMS] Sending SMS to ${normalizedMobile}. Unicode: ${isUnicode}, Type: ${messageType}`)
 
       // Send request to SLT SMS API using GET with query parameters
@@ -113,7 +131,7 @@ class SLTSmsService {
         params: {
           src: this.config.smsAlias,
           dst: normalizedMobile,
-          msg: params.message,
+          msg: processedMessage,
           user: this.config.username,
           password: this.config.password,
           dr: 1,  // Delivery report
