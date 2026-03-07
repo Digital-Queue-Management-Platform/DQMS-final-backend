@@ -1,7 +1,6 @@
-import Twilio from 'twilio'
 import sltSmsService from '../services/sltSmsService'
 
-export type SMSProvider = 'twilio' | 'slt' | 'both'
+export type SMSProvider = 'slt'
 
 interface SendSMSOptions {
   to: string
@@ -17,33 +16,9 @@ interface SendSMSResult {
 }
 
 /**
- * Unified SMS helper that supports multiple SMS providers
- * Can use Twilio, SLT SMS, or both (with fallback)
+ * Unified SMS helper that supports SLT SMS gateway
  */
 class UnifiedSmsHelper {
-  /**
-   * Get the configured SMS provider from environment
-   */
-  getProvider(): SMSProvider {
-    const provider = (process.env.SMS_PROVIDER || 'twilio').toLowerCase()
-    if (provider === 'slt' || provider === 'both') {
-      return provider as SMSProvider
-    }
-    return 'twilio'
-  }
-
-  /**
-   * Check if Twilio is configured
-   */
-  isTwilioConfigured(): boolean {
-    const ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || ""
-    const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || ""
-    const FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || ""
-    const MSG_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || ""
-
-    return !!(ACCOUNT_SID && AUTH_TOKEN && (MSG_SERVICE_SID || FROM_NUMBER))
-  }
-
   /**
    * Check if SLT SMS is configured
    */
@@ -52,11 +27,10 @@ class UnifiedSmsHelper {
   }
 
   /**
-   * Send SMS using configured provider(s)
+   * Send SMS using SLT SMS provider
    */
   async sendSMS(options: SendSMSOptions): Promise<SendSMSResult> {
-    const { to, body, language = 'en' } = options
-    const provider = this.getProvider()
+    const { to, body } = options
 
     // Development mode check
     const OTP_DEV_MODE = process.env.OTP_DEV_MODE === "true"
@@ -65,76 +39,26 @@ class UnifiedSmsHelper {
       return { success: true, provider: 'dev' }
     }
 
-    // Try SLT SMS first if configured
-    if (provider === 'slt' || provider === 'both') {
-      if (this.isSltConfigured()) {
-        try {
-          const result = await sltSmsService.sendSMS({ to, message: body })
-          if (result.success) {
-            console.log(`[SMS] Sent via SLT SMS to ${to}`)
-            return { success: true, provider: 'slt', messageId: result.messageId }
-          } else {
-            console.warn(`[SMS] SLT SMS failed: ${result.error}`)
-            // If 'slt' only, return the error
-            if (provider === 'slt') {
-              return { success: false, provider: 'slt', error: result.error }
-            }
-            // If 'both', continue to try Twilio as fallback
-          }
-        } catch (error: any) {
-          console.error('[SMS] SLT SMS error:', error.message)
-          if (provider === 'slt') {
-            return { success: false, provider: 'slt', error: error.message }
-          }
-          // Continue to Twilio fallback for 'both'
+    if (this.isSltConfigured()) {
+      try {
+        const result = await sltSmsService.sendSMS({ to, message: body })
+        if (result.success) {
+          console.log(`[SMS] Sent via SLT SMS to ${to}`)
+          return { success: true, provider: 'slt', messageId: result.messageId }
+        } else {
+          console.warn(`[SMS] SLT SMS failed: ${result.error}`)
+          return { success: false, provider: 'slt', error: result.error }
         }
-      }
-    }
-
-    // Try Twilio as primary or fallback
-    if (provider === 'twilio' || provider === 'both') {
-      if (this.isTwilioConfigured()) {
-        try {
-          const ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID!
-          const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN!
-          const FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || ""
-          const MSG_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || ""
-
-          const twilioClient = Twilio(ACCOUNT_SID, AUTH_TOKEN)
-
-          // Normalize phone number to E.164 format
-          let normalizedTo = to
-          if (!to.startsWith('+')) {
-            if (to.startsWith('94')) {
-              normalizedTo = '+' + to
-            } else if (to.startsWith('0')) {
-              normalizedTo = '+94' + to.substring(1)
-            } else if (to.length === 9) {
-              normalizedTo = '+94' + to
-            }
-          }
-
-          const params: any = { to: normalizedTo, body }
-          if (MSG_SERVICE_SID) {
-            params.messagingServiceSid = MSG_SERVICE_SID
-          } else if (FROM_NUMBER) {
-            params.from = FROM_NUMBER
-          }
-
-          const message = await twilioClient.messages.create(params)
-          console.log(`[SMS] Sent via Twilio to ${normalizedTo}`)
-          return { success: true, provider: 'twilio', messageId: message.sid }
-        } catch (error: any) {
-          console.error('[SMS] Twilio error:', error.message)
-          return { success: false, provider: 'twilio', error: error.message }
-        }
+      } catch (error: any) {
+        console.error('[SMS] SLT SMS error:', error.message)
+        return { success: false, provider: 'slt', error: error.message }
       }
     }
 
     // No provider configured
     return {
       success: false,
-      error: 'No SMS provider configured. Please configure SLT_SMS or TWILIO credentials.'
+      error: 'SLT SMS provider not configured properly.'
     }
   }
 

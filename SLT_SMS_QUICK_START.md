@@ -9,9 +9,8 @@
    - Pre-built message templates for common use cases
 
 ### 2. **Unified SMS Helper** (`src/utils/smsHelper.ts`)
-   - Supports both SLT SMS and Twilio
-   - Automatic fallback mechanism
-   - Configurable provider selection
+   - Exclusively uses the SLT SMS Gateway
+   - Centralized management for all system notifications
 
 ### 3. **API Routes** (`src/routes/slt-sms.routes.ts`)
    - `/api/slt-sms/test` - Send test SMS
@@ -88,9 +87,7 @@ Change `SMS_PROVIDER` in `.env`:
 
 | Value | Behavior |
 |-------|----------|
-| `slt` | Use only SLT SMS |
-| `twilio` | Use only Twilio |
-| `both` | Try SLT first, fallback to Twilio |
+| `slt` | Use SLT SMS Gateway (Default) |
 
 ## 📊 Monitoring
 
@@ -104,7 +101,6 @@ Change `SMS_PROVIDER` in `.env`:
 
 ### Common Log Patterns
 - ✅ `[SMS] Sent via slt` → SLT SMS used successfully
-- ✅ `[SMS] Sent via twilio` → Twilio used (fallback or provider choice)
 - ❌ `[SLT SMS] Failed to send message` → Check credentials/connectivity
 
 ## ⚠️ Important Notes
@@ -163,7 +159,7 @@ See [SLT_SMS_INTEGRATION_GUIDE.md](./SLT_SMS_INTEGRATION_GUIDE.md) for complete 
 - `src/routes/bill.routes.ts` - Updated to use SMS helper
 - `.env` - Added SLT SMS credentials
 - `.env.example` - Added SLT SMS template
-- `package.json` - Added test script
+- `package.json` - Added test script and removed Twilio dependency
 
 ## ✨ Ready to Use!
 

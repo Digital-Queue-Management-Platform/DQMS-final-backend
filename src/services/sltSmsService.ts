@@ -493,42 +493,66 @@ class SLTSmsService {
     // Format token number to 3 digits if provided
     const formattedToken = details.tokenNumber ? details.tokenNumber.toString().padStart(3, '0') : null
 
-    const buildFullMessages = () => ({
-      en: `Dear Valued Customer\n\nThank you for visiting! Service for token ${formattedToken} at ${details.outletName} is completed. Ref: ${details.refNumber}.\nRate our service: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\nපැමිණීම ගැන ස්තුතියි! ${details.outletName} හි ටෝකන් ${formattedToken} සඳහා සේවාව අවසන්. Ref: ${details.refNumber}.\nඔබගේ අදහස් දක්වන්න: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\nவருகைக்கு நன்றி! ${details.outletName} இல் டோக்கன் ${formattedToken} க்கான சேவை முடிந்தது. குறிப்பு: ${details.refNumber}.\nஉங்கள் கருத்து: ${details.feedbackUrl}\n\nSLT-MOBITEL`
-    })
+    const fullMessages = {
+      en: this.buildServiceCompletionFull(details, formattedToken, 'en'),
+      si: this.buildServiceCompletionFull(details, formattedToken, 'si'),
+      ta: this.buildServiceCompletionFull(details, formattedToken, 'ta')
+    }
 
-    const buildCompactMessages = () => ({
-      en: `Dear Valued Customer\n\nService ${formattedToken} at ${details.outletName} is completed. Ref: ${details.refNumber.split('/').pop()}.\nRate us: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ටෝකන් ${formattedToken} සේවාව අවසන්. Ref: ${details.refNumber.split('/').pop()}.\nඅදහස් දක්වන්න: ${details.feedbackUrl}\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் டோக்கன் ${formattedToken} சேவை முடிந்தது. Ref: ${details.refNumber.split('/').pop()}.\nகருத்துரை: ${details.feedbackUrl}\n\nSLT-MOBITEL`
-    })
+    const compactMessages = {
+      en: this.buildServiceCompletionCompact(details, formattedToken, 'en'),
+      si: this.buildServiceCompletionCompact(details, formattedToken, 'si'),
+      ta: this.buildServiceCompletionCompact(details, formattedToken, 'ta')
+    }
 
-    const fullMessages = buildFullMessages()
-    const isUnicode = /[^\x00-\x7F]/.test(fullMessages.en + fullMessages.si + fullMessages.ta)
+    const targetMessage = (fullMessages as any)[language] || fullMessages.en
+    const isUnicode = /[^\x00-\x7F]/.test(targetMessage)
     const limit = isUnicode ? 70 : 160
 
-    let finalMessage = fullMessages[language]
+    let finalMessage = targetMessage
 
     if (finalMessage.length > limit) {
-      console.warn(`[SLT SMS COMPLETE] Message too long (${finalMessage.length}), limit is ${limit}. Trying compact version.`)
-      const compactMessages = buildCompactMessages()
-      if (compactMessages[language].length < finalMessage.length) {
-        finalMessage = compactMessages[language]
+      console.warn(`[SLT SMS COMPLETE] Full message too long (${finalMessage.length}), limit ${limit}. Trying compact version.`)
+      const compactMsg = (compactMessages as any)[language] || compactMessages.en
+      if (compactMsg.length < finalMessage.length) {
+        finalMessage = compactMsg
       }
     }
 
     console.log(`[SLT SMS COMPLETE] Final message (${finalMessage.length} chars, Unicode: ${isUnicode}): "${finalMessage}"`)
 
     if (finalMessage.length > limit) {
-      console.error(`[SLT SMS COMPLETE] CRITICAL: Even compact message exceeds ${limit} chars (${finalMessage.length}). Might be truncated or rejected.`)
+      console.warn(`[SLT SMS COMPLETE] Warning: Even compact version exceeds ${limit} chars (${finalMessage.length}).`)
     }
 
     return this.sendSMS({
       to: mobileNumber,
       message: finalMessage
     })
+  }
+
+  // Refined helpers for completion messages
+  private buildServiceCompletionFull(details: any, token: string | null, language: string) {
+    const fullRef = details.refNumber || token
+    const outlet = details.outletName.replace(' SLT', '').replace(' HQ', '').replace('Office', '')
+
+    const messages = {
+      en: `SLT-MOBITEL DQMS: Dear Valued Customer, token ${token} at ${outlet} is completed. Ref: ${fullRef}. Rate us: ${details.feedbackUrl} SLT-MOBITEL`,
+      si: `SLT-MOBITEL DQMS: ගරු පාරිභෝගිකයාණනි, ${outlet} හි ඔබගේ ටෝකන් ${token} අවසන්. යොමුව: ${fullRef}. අදහස්: ${details.feedbackUrl} SLT-MOBITEL`,
+      ta: `SLT-MOBITEL DQMS: அன்புமிகு வாடிக்கையாளரே, ${outlet} இல் உங்களின் டோக்கன் ${token} முடிந்தது. குறிப்பு: ${fullRef}. கருத்து: ${details.feedbackUrl} SLT-MOBITEL`
+    }
+    return (messages as any)[language] || messages.en
+  }
+
+  private buildServiceCompletionCompact(details: any, token: string | null, language: string) {
+    const ref = details.refNumber.split('/').pop() || token
+
+    const messages = {
+      en: `SLT-MOBITEL DQMS: Token ${token} is done. Ref: ${ref}. Rate us: ${details.feedbackUrl} SLT-MOBITEL`,
+      si: `SLT-MOBITEL DQMS: ටෝකන් ${token} අවසන්. Ref: ${ref}. අදහස්: ${details.feedbackUrl} SLT-MOBITEL`,
+      ta: `SLT-MOBITEL DQMS: டோக்கன் ${token} முடிந்தது. Ref: ${ref}. கருத்து: ${details.feedbackUrl} SLT-MOBITEL`
+    }
+    return (messages as any)[language] || messages.en
   }
 
   /**
@@ -547,7 +571,7 @@ class SLTSmsService {
     const messages = {
       en: `Dear Valued Customer\n\nYour registration code for ${details.outletName} is ${details.otpCode}. Valid for 5 minutes.\n\nSLT-MOBITEL`,
       si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} සඳහා ඔබගේ ලියාපදිංචි කේතය ${details.otpCode}. මිනිත්තු 5 සඳහා වලංගුයි.\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} க்கான உங்கள் பதிவு குறியீடு ${details.otpCode}. 5 நிமிடங்களுக்கு செல்லுபடியாகும்.\n\nSLT-MOBITEL`
+      ta: `அன்பு වාடிக்கையாளரே\n\n${details.outletName} க்கான உங்கள் பதிவு குறியீடு ${details.otpCode}. 5 நிமிடங்களுக்கு செல்லுபடியாகும்.\n\nSLT-MOBITEL`
     }
 
     return this.sendSMS({
@@ -656,25 +680,71 @@ class SLTSmsService {
       serviceNames: string
       targetCounterNumber?: number
       recoveryUrl?: string
+      refNumber?: string
     },
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
+    console.log(`[SLT SMS TRANSFER] Preparing transfer SMS for token #${details.tokenNumber} to ${mobileNumber}`)
+
     const formattedToken = details.tokenNumber.toString().padStart(3, '0')
-    const messages = {
-      en: details.targetCounterNumber
-        ? `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is transferred to Counter ${details.targetCounterNumber} for ${details.serviceNames}. Please proceed there.\n\nSLT-MOBITEL`
-        : `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is transferred for ${details.serviceNames}. Please proceed to the next available counter.\n\nSLT-MOBITEL`,
-      si: details.targetCounterNumber
-        ? `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${formattedToken} ${details.serviceNames} සඳහා කවුන්ටර් ${details.targetCounterNumber} වෙත මාරු කරන ලදී. කරුණාකර එතැනට පැමිණෙන්න.\n\nSLT-MOBITEL`
-        : `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${formattedToken} ${details.serviceNames} සඳහා මාරු කරන ලදී. කරුණාකර ඊළඟ පවතින කවුන්ටරය වෙත පැමිණෙන්න.\n\nSLT-MOBITEL`,
-      ta: details.targetCounterNumber
-        ? `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} கவுண்டர் ${details.targetCounterNumber} க்கு ${details.serviceNames} க்காக மாற்றப்பட்டது. தயவுசெய்து அங்கு செல்லவும்.\n\nSLT-MOBITEL`
-        : `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} ${details.serviceNames} க்காக மாற்றப்பட்டது. தயவுசெய்து அடுத்த கவுண்டருக்கு செல்லவும்.\n\nSLT-MOBITEL`
+    const refSuffix = details.refNumber ? ` Ref: ${details.refNumber.split('/').pop()}` : ""
+    const trackSuffix = details.recoveryUrl ? ` Track: ${details.recoveryUrl}` : ""
+
+    const buildFullMessages = () => {
+      const trackPart = details.recoveryUrl ? `\nTrack: ${details.recoveryUrl}` : ""
+      return {
+        en: details.targetCounterNumber
+          ? `SLT-MOBITEL DQMS: Dear Valued Customer, your token ${formattedToken} at ${details.outletName} has been transferred to Counter ${details.targetCounterNumber} for ${details.serviceNames}. Please proceed for further assistance.${trackPart}\n\nSLT-MOBITEL`
+          : `SLT-MOBITEL DQMS: Dear Valued Customer, your token ${formattedToken} at ${details.outletName} has been transferred for ${details.serviceNames}. Please wait for your turn.${trackPart}\n\nSLT-MOBITEL`,
+        si: details.targetCounterNumber
+          ? `SLT-MOBITEL DQMS: පාරිභෝගිකයාණනි, ඔබගේ ටෝකන් අංකය ${formattedToken}, ${details.outletName} හිදී කවුන්ටර් ${details.targetCounterNumber} වෙත මාරු කරන ලදී (${details.serviceNames}). කරුණාකර නව කවුන්ටරය වෙත පැමිණෙන්න.${trackPart}\n\nSLT-MOBITEL`
+          : `SLT-MOBITEL DQMS: පාරිභෝගිකයාණනි, ඔබගේ ටෝකන් ${formattedToken}, ${details.outletName} හිදී ${details.serviceNames} සඳහා මාරු කරන ලදී. කරුණාකර ඊළඟ කවුන්ටරය තෙක් රැඳී සිටින්න.${trackPart}\n\nSLT-MOBITEL`,
+        ta: details.targetCounterNumber
+          ? `SLT-MOBITEL DQMS: அன்புமிகு வாடிக்கையாளரே, உங்களின் டோக்கன் எண் ${formattedToken}, ${details.outletName} இல் கவுண்டர் ${details.targetCounterNumber} க்கு மாற்றப்பட்டுள்ளது (${details.serviceNames}). தயவுசெய்து புதிய கவுண்டருக்குச் செல்லவும்.${trackPart}\n\nSLT-MOBITEL`
+          : `SLT-MOBITEL DQMS: அன்புமிகு வாடிக்கையாளரே, உங்களின் டோக்கன் எண் ${formattedToken}, ${details.outletName} இல் ${details.serviceNames} க்காக மாற்றப்பட்டுள்ளது. தயவுசெய்து அடுத்த கவுண்டருக்காக காத்திருக்கவும்.${trackPart}\n\nSLT-MOBITEL`
+      }
+    }
+
+    const buildCompactMessages = () => {
+      const trackOnly = details.recoveryUrl ? `\nTrack: ${details.recoveryUrl}` : ""
+      return {
+        en: details.targetCounterNumber
+          ? `SLT-MOBITEL DQMS: Token ${formattedToken} transferred to Counter ${details.targetCounterNumber} for ${details.serviceNames}.${trackOnly}\n\nSLT-MOBITEL`
+          : `SLT-MOBITEL DQMS: Token ${formattedToken} transferred for ${details.serviceNames}.${trackOnly}\n\nSLT-MOBITEL`,
+        si: details.targetCounterNumber
+          ? `SLT-MOBITEL DQMS: ටෝකන් ${formattedToken}, කවුන්ටර් ${details.targetCounterNumber} වෙත මාරු කරන ලදී.${trackOnly}\n\nSLT-MOBITEL`
+          : `SLT-MOBITEL DQMS: ටෝකන් ${formattedToken} මාරු කරන ලදී.${trackOnly}\n\nSLT-MOBITEL`,
+        ta: details.targetCounterNumber
+          ? `SLT-MOBITEL DQMS: டோக்கன் ${formattedToken} கவுண்டர் ${details.targetCounterNumber} க்கு மாற்றப்பட்டது.${trackOnly}\n\nSLT-MOBITEL`
+          : `SLT-MOBITEL DQMS: டோக்கன் ${formattedToken} மாற்றப்பட்டது.${trackOnly}\n\nSLT-MOBITEL`
+      }
+    }
+
+    const fullMessages = buildFullMessages()
+    const targetMessage = fullMessages[language] || fullMessages.en
+    const isUnicode = /[^\x00-\x7F]/.test(targetMessage)
+    const limit = isUnicode ? 70 : 160
+
+    let finalMessage = targetMessage
+
+    if (finalMessage.length > limit) {
+      console.warn(`[SLT SMS TRANSFER] Full message too long (${finalMessage.length}), limit ${limit}. Trying compact version.`)
+      const compactMessages = buildCompactMessages()
+      const compactMessage = compactMessages[language] || compactMessages.en
+      if (compactMessage.length < finalMessage.length) {
+        finalMessage = compactMessage
+      }
+    }
+
+    console.log(`[SLT SMS TRANSFER] Final message (${finalMessage.length} chars, Unicode: ${isUnicode}): "${finalMessage}"`)
+
+    if (finalMessage.length > limit) {
+      console.warn(`[SLT SMS TRANSFER] Warning: Even compact message exceeds ${limit} chars (${finalMessage.length}).`)
     }
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: finalMessage
     })
   }
 
@@ -703,7 +773,7 @@ class SLTSmsService {
     const roleLabel = roleAbbr[details.role] || details.role
 
     // Build a compact message that stays within 160 chars
-    // Format: "SLT DQMS: Hi [Name], your [Role] account is active. Login: [URL] - SLT-MOBITEL"
+    // Format: "SLT DQMS: Hi [Name], your [Role] account is active. Login: [URL] SLT-MOBITEL"
     const message = `SLT DQMS: Hi ${firstName}, your ${roleLabel} account is active. Login: ${details.loginUrl} SLT-MOBITEL`
 
     // Log warning if still too long

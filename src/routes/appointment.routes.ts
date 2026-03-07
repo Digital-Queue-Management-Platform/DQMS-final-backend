@@ -1,23 +1,12 @@
 import { Router } from "express"
 import { prisma } from "../server"
 import * as jwt from "jsonwebtoken"
-import Twilio from "twilio"
 import smsHelper from "../utils/smsHelper"
 
 const router = Router()
 
 // Reuse OTP JWT for booking verification (resolved at request time for safety)
 const getOtpJwtSecret = () => process.env.OTP_JWT_SECRET || "otp-dev-secret"
-
-// Twilio configuration (read at request time to avoid early-evaluation issues)
-const twilioConfig = () => {
-  const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || ""
-  const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || ""
-  const TWILIO_FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || ""
-  const TWILIO_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || ""
-  const client = (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) ? Twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) : null
-  return { client, TWILIO_FROM_NUMBER, TWILIO_MESSAGING_SERVICE_SID }
-}
 
 function toE164(mobile: string): string {
   const cleaned = (mobile || "").replace(/\D/g, "")

@@ -20,7 +20,6 @@ import managerRoutes from "./routes/manager.routes"
 import teleshopManagerRoutes from "./routes/teleshop-manager.routes"
 import appointmentRoutes from "./routes/appointment.routes"
 import ipSpeakerRoutes from "./routes/ip-speaker.routes"
-import twilioRoutes from "./routes/twilio.routes"
 import serviceCaseRoutes from "./routes/service-case.routes"
 import gmRoutes from "./routes/gm.routes"
 import dgmRoutes from "./routes/dgm.routes"
@@ -122,7 +121,6 @@ app.use("/api/manager", managerRoutes)
 app.use("/api/teleshop-manager", teleshopManagerRoutes)
 app.use("/api/ip-speaker", ipSpeakerRoutes)
 app.use("/api/appointment", appointmentRoutes)
-app.use("/api/twilio", twilioRoutes)
 app.use("/api/service-case", serviceCaseRoutes)
 app.use("/api/kiosk", kioskRoutes)
 app.use("/api/bills", billRoutes)

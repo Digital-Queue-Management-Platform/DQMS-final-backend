@@ -2,7 +2,6 @@ import { Router } from "express"
 import { prisma, broadcast } from "../server"
 import { getLastDailyReset } from "../utils/resetWindow"
 import * as jwt from "jsonwebtoken"
-import Twilio from "twilio"
 import smsHelper from "../utils/smsHelper"
 import sltSmsService from "../services/sltSmsService"
 
@@ -14,8 +13,6 @@ const QR_JWT_EXPIRES = process.env.QR_JWT_EXPIRES || "5m" // short-lived token
 // OTP verification config
 const OTP_JWT_SECRET = process.env.OTP_JWT_SECRET || "otp-dev-secret"
 const OTP_JWT_EXPIRES = process.env.OTP_JWT_EXPIRES || "10m"
-// Note: Do NOT read Twilio env vars at module-load time because imports may run before dotenv.config().
-// We'll read env and construct the client inside request handlers.
 
 // In-memory OTP store (mobile -> record)
 type OtpRecord = {

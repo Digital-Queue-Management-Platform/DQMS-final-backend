@@ -709,6 +709,8 @@ router.post("/recall-token", async (req, res) => {
   }
 })
 
+
+
 // Set token as VIP/Priority
 router.post("/set-priority", async (req, res) => {
   try {
@@ -931,9 +933,9 @@ router.post("/complete-service", async (req, res) => {
           baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
         }
 
-        // Build feedback URL - use first 8 chars of reference number for shorter URL
-        const shortRef = serviceCase.refNumber.split('/').pop()?.substring(0, 8) || 'ref'
-        const feedbackUrl = baseUrl ? `${baseUrl}/f?r=${shortRef}` : `/f?r=${shortRef}`
+        // Build feedback URL - use short alias to save space
+        const shortTokenId = token.id.substring(0, 8)
+        const feedbackUrl = baseUrl ? `${baseUrl}/f/${shortTokenId}` : `/f/${shortTokenId}`
 
         // Detect customer language
         let customerLang: 'en' | 'si' | 'ta' = 'en'
@@ -1100,6 +1102,25 @@ router.post("/transfer-token", async (req, res) => {
       })
       console.log(`[Transfer-Tx] Step 3 (Officer) took ${Date.now() - step3Start}ms`)
 
+      // 4. Create ServiceCaseUpdate for audit trail/customer dashboard
+      const step4Start = Date.now()
+      console.log("[Transfer-Tx] Creating service case update for tracking...")
+      const sc = await tx.serviceCase.findFirst({ where: { tokenId: tokenId } })
+      if (sc) {
+        await tx.serviceCaseUpdate.create({
+          data: {
+            caseId: sc.id,
+            actorRole: "OFFICER",
+            actorId: officerId,
+            status: "transferred",
+            note: targetCounterNumber
+              ? `Token transferred to Counter ${targetCounterNumber}. ${notes || ""}`.trim()
+              : `Token transferred for further processing. ${notes || ""}`.trim()
+          }
+        })
+      }
+      console.log(`[Transfer-Tx] Step 4 (Case Update) took ${Date.now() - step4Start}ms`)
+
       return { updatedToken }
     }, {
       timeout: 20000 // Increase timeout to 20 seconds
@@ -1166,12 +1187,17 @@ router.post("/transfer-token", async (req, res) => {
       const trackRef = `/t/${result.updatedToken.id.substring(0, 8)}`
       const recoveryUrl = baseUrl ? `${baseUrl}${trackRef}` : trackRef
 
+      // Fetch refNumber for tracking
+      const sc: any = await (prisma as any).serviceCase.findFirst({ where: { tokenId: result.updatedToken.id } })
+      const refNumber = sc?.refNumber || undefined
+
       await sltSmsService.sendTokenTransfer(result.updatedToken.customer.mobileNumber, {
         tokenNumber: result.updatedToken.tokenNumber,
         outletName: outlet,
         serviceNames: serviceNames,
         targetCounterNumber: targetCounterNumber ? Number(targetCounterNumber) : undefined,
-        recoveryUrl
+        recoveryUrl,
+        refNumber
       }, lang)
       console.log(`✓ [Transfer-SMS] Sent successfully to ${result.updatedToken.customer.mobileNumber}`)
     } catch (smsError) {
