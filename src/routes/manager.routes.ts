@@ -688,7 +688,7 @@ router.post("/officers", async (req, res) => {
       officerData.languages = languages
     }
 
-    console.log("Creating officer with data:", JSON.stringify(officerData, null, 2))
+
 
     const officer = await prisma.officer.create({
       data: officerData,

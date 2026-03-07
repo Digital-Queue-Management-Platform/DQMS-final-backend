@@ -118,6 +118,43 @@ router.post("/login", async (req, res) => {
   }
 })
 
+// Real-time duplicate check – called by frontend as user types
+// GET /officer/check?mobile=0771234567   → { taken: true|false, field: 'mobile' }
+// GET /officer/check?email=a@b.com       → { taken: true|false, field: 'email' }
+router.get("/check", async (req, res) => {
+  try {
+    const { mobile, email } = req.query as { mobile?: string; email?: string }
+
+    if (mobile) {
+      const existing = await prisma.officer.findUnique({ where: { mobileNumber: mobile } })
+      return res.json({
+        taken: !!existing,
+        field: 'mobile',
+        message: existing
+          ? `Mobile number ${mobile} is already registered to another officer`
+          : null
+      })
+    }
+
+    if (email) {
+      // Officers don't store email in the DB, but check across Teleshop Managers too
+      const existingManager = await prisma.teleshopManager.findFirst({ where: { email } })
+      return res.json({
+        taken: !!existingManager,
+        field: 'email',
+        message: existingManager
+          ? `Email address ${email} is already registered in the system`
+          : null
+      })
+    }
+
+    return res.status(400).json({ error: "Provide mobile or email query param" })
+  } catch (err) {
+    console.error("Officer check error:", err)
+    res.status(500).json({ error: "Check failed" })
+  }
+})
+
 // Register officer
 router.post("/register", async (req, res) => {
   try {
