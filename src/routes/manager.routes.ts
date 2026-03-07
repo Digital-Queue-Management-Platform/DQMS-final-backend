@@ -655,6 +655,12 @@ router.post("/officers", async (req, res) => {
       return res.status(403).json({ error: "Outlet not found in your region" })
     }
 
+    // Check for duplicate mobile number across ALL officers system-wide
+    const duplicate = await prisma.officer.findUnique({ where: { mobileNumber } })
+    if (duplicate) {
+      return res.status(409).json({ error: `An officer with mobile number ${mobileNumber} is already registered in the system` })
+    }
+
     // Create the officer
     const officerData: any = {
       name,
