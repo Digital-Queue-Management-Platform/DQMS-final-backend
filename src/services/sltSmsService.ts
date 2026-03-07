@@ -448,7 +448,7 @@ class SLTSmsService {
     const messages = {
       en: `Dear Valued Customer\n\nToken ${formattedToken} has been recalled.\n\nSLT-MOBITEL`,
       si: `ගරු පාරිභෝගිකයා\n\nටෝකන් ${formattedToken} නැවත කැඳවනු ලැබීය.\n\nSLT-MOBITEL`,
-      ta: `அன்பு වාடிக்கையாளரே\n\nடோக்கன் ${formattedToken} மீண்டும் அழைக்கப்பட்டது.\n\nSLT-MOBITEL`
+      ta: `அன்பு வாடிக்கையாளரே\n\nடோக்கன் ${formattedToken} மீண்டும் அழைக்கப்பட்டது.\n\nSLT-MOBITEL`
     }
 
     console.log(`[SLT SMS RECALL] Message content (${messages[language].length} chars): "${messages[language]}"`)
@@ -496,20 +496,23 @@ class SLTSmsService {
     })
 
     const fullMessages = buildFullMessages()
+    const isUnicode = /[^\x00-\x7F]/.test(fullMessages.en + fullMessages.si + fullMessages.ta)
+    const limit = isUnicode ? 70 : 160
+
     let finalMessage = fullMessages[language]
 
-    if (finalMessage.length > 160) {
-      console.warn(`[SLT SMS COMPLETE] Message too long (${finalMessage.length}), trying compact version`)
+    if (finalMessage.length > limit) {
+      console.warn(`[SLT SMS COMPLETE] Message too long (${finalMessage.length}), limit is ${limit}. Trying compact version.`)
       const compactMessages = buildCompactMessages()
       if (compactMessages[language].length < finalMessage.length) {
         finalMessage = compactMessages[language]
       }
     }
 
-    console.log(`[SLT SMS COMPLETE] Final message (${finalMessage.length} chars): "${finalMessage}"`)
+    console.log(`[SLT SMS COMPLETE] Final message (${finalMessage.length} chars, Unicode: ${isUnicode}): "${finalMessage}"`)
 
-    if (finalMessage.length > 160) {
-      console.error(`[SLT SMS COMPLETE] CRITICAL: Even compact message exceeds 160 chars (${finalMessage.length}). Might fail.`)
+    if (finalMessage.length > limit) {
+      console.error(`[SLT SMS COMPLETE] CRITICAL: Even compact message exceeds ${limit} chars (${finalMessage.length}). Might be truncated or rejected.`)
     }
 
     return this.sendSMS({
