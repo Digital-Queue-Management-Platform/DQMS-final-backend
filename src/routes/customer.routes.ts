@@ -583,6 +583,47 @@ router.get("/token/:tokenId", async (req, res) => {
   }
 })
 
+// Cancel a token by customer
+router.post("/token/:tokenId/cancel", async (req, res) => {
+  try {
+    const { tokenId } = req.params
+
+    const token = await prisma.token.findUnique({
+      where: { id: tokenId },
+    })
+
+    if (!token) {
+      return res.status(404).json({ error: "Token not found" })
+    }
+
+    // Only allow canceling if still waiting
+    if (token.status !== "waiting") {
+      return res.status(400).json({ error: "Only waiting tokens can be cancelled" })
+    }
+
+    const updatedToken = await prisma.token.update({
+      where: { id: tokenId },
+      data: { status: "cancelled" },
+      include: {
+        customer: true,
+        outlet: true,
+      }
+    })
+
+    // Broadcast update so officer dashboard and others refresh
+    broadcast({ type: "TOKEN_CANCELLED", data: updatedToken })
+
+    res.json({
+      success: true,
+      message: "Token cancelled successfully",
+      token: updatedToken
+    })
+  } catch (error) {
+    console.error("Token cancel error:", error)
+    res.status(500).json({ error: "Failed to cancel token" })
+  }
+})
+
 // Customer lookup by mobile number - for recovery scenarios  
 router.post("/lookup", async (req, res) => {
   try {

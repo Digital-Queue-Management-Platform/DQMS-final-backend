@@ -129,7 +129,7 @@ app.use("/api/gm", gmRoutes)
 app.use("/api/dgm", dgmRoutes)
 
 // Public: Branch closed status check (no auth required)
-// Checks: Saturday ≥ 12:30 PM | mercantile holiday | active closure notice
+// Checks: mercantile holiday | active closure notice managed via UI
 app.get("/api/branch-status/:outletId", async (req, res) => {
   try {
     const { outletId } = req.params
@@ -139,17 +139,8 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
       return res.status(400).json({ error: "Invalid 'at' date provided" })
     }
 
-    // 1. Saturday after 12:30 PM rule (day 6 = Saturday)
-    const dayOfWeek = now.getDay()
-    const hours = now.getHours()
-    const minutes = now.getMinutes()
-    if (dayOfWeek === 6 && (hours > 12 || (hours === 12 && minutes >= 30))) {
-      return res.json({
-        isClosed: true,
-        reason: "Branch closes on Saturdays after 12:30 PM",
-        activeNotice: null
-      })
-    }
+    // Saturday after 12:30 PM rule REMOVED as requested.
+    // Closures should now be managed via the 'Closure Notices' page by officers.
 
     // 2. Mercantile holiday check
     const todayStart = new Date(now)

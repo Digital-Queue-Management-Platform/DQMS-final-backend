@@ -300,6 +300,7 @@ router.post("/next-token", async (req, res) => {
         where: {
           outletId: officer.outletId,
           status: 'waiting',
+          isTransferred: false,
           createdAt: { gte: lastReset },
         },
         orderBy: { tokenNumber: 'asc' },
@@ -336,6 +337,7 @@ router.post("/next-token", async (req, res) => {
         where: {
           outletId: officer.outletId,
           status: 'waiting',
+          isTransferred: false,
           counterNumber: officer.counterNumber && officer.counterNumber > 0 ? officer.counterNumber : undefined,
           serviceTypes: { hasSome: assignedServices },
           createdAt: { gte: lastReset },
@@ -354,6 +356,7 @@ router.post("/next-token", async (req, res) => {
           where: {
             outletId: officer.outletId,
             status: 'waiting',
+            isTransferred: false,
             counterNumber: null,
             serviceTypes: { hasSome: assignedServices },
             createdAt: { gte: lastReset },
