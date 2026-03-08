@@ -156,7 +156,7 @@ jobs:
 
             sudo docker run --rm --env-file /tmp/docker.env "$DOCKER_IMAGE" sh -c "
               npx prisma migrate resolve --rolled-back 20260308062000_add_recurring_closure_notices 2>&1 || true
-              npx prisma migrate deploy --skip-advisory-lock
+              npx prisma migrate deploy
             "
 
             # Start new container (prisma migrate deploy in CMD will be a no-op now)
