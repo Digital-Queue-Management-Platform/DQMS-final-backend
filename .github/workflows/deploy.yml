@@ -144,6 +144,11 @@ jobs:
             # Run database migrations immediately
             echo "Running database migrations..."
             sleep 3
+
+            # Resolve any failed migrations that no longer exist locally (P3009 fix)
+            # This marks them as rolled-back so deploy can proceed
+            sudo docker compose exec -T backend npx prisma migrate resolve --rolled-back 20260308062000_add_recurring_closure_notices 2>/dev/null || true
+
             sudo docker compose exec -T backend npx prisma migrate deploy || true
 
             # Quick health check (30 seconds max)
