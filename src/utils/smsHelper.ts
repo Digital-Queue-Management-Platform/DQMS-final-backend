@@ -99,8 +99,8 @@ class UnifiedSmsHelper {
 
     return this.sendSMS({
       to: mobileNumber,
-      body: messages[language],
-      language
+      body: messages.en,
+      language: 'en'
     })
   }
 
@@ -122,8 +122,8 @@ class UnifiedSmsHelper {
 
     return this.sendSMS({
       to: mobileNumber,
-      body: messages[language],
-      language
+      body: messages.en,
+      language: 'en'
     })
   }
 
@@ -148,8 +148,8 @@ class UnifiedSmsHelper {
 
     return this.sendSMS({
       to: mobileNumber,
-      body: messages[language],
-      language
+      body: messages.en,
+      language: 'en'
     })
   }
 
@@ -176,8 +176,8 @@ class UnifiedSmsHelper {
 
     return this.sendSMS({
       to: mobileNumber,
-      body: messages[language],
-      language
+      body: messages.en,
+      language: 'en'
     })
   }
 

@@ -207,11 +207,12 @@ class SLTSmsService {
         : `SLT DQMS: ${firstName ? `${firstName},` : ''} உங்கள் குறியீடு ${otpCode}. 5 நிமிடம்.\n\nSLT-MOBITEL`
     }
 
-    console.log(`[SLT SMS DEBUG] Sending OTP to ${mobileNumber}, userName: "${userName}", firstName: "${firstName}", userType: "${userType}", message: "${otpMessages[language]}" (${otpMessages[language].length} chars)`)
+    const selectedOtpMsg = this.selectMessageForSMS(otpMessages, language)
+    console.log(`[SLT SMS DEBUG] Sending OTP to ${mobileNumber}, userName: "${userName}", firstName: "${firstName}", userType: "${userType}", message: "${selectedOtpMsg}" (${selectedOtpMsg.length} chars)`)
 
     return this.sendSMS({
       to: mobileNumber,
-      message: otpMessages[language]
+      message: selectedOtpMsg
     })
   }
 
@@ -236,7 +237,7 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: this.selectMessageForSMS(messages, language)
     })
   }
 
@@ -269,7 +270,7 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: this.selectMessageForSMS(messages, language)
     })
   }
 
@@ -296,7 +297,7 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: this.selectMessageForSMS(messages, language)
     })
   }
 
@@ -322,7 +323,7 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: this.selectMessageForSMS(messages, language)
     })
   }
 
@@ -346,7 +347,7 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: this.selectMessageForSMS(messages, language)
     })
   }
 
@@ -371,7 +372,7 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: this.selectMessageForSMS(messages, language)
     })
   }
 
@@ -400,11 +401,12 @@ class SLTSmsService {
       ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} தற்போது அழைக்கப்படுகிறது. தயவுசெய்து கவுண்டர் ${details.counterNumber} க்கு செல்லவும்.\n\nSLT-MOBITEL`
     }
 
-    console.log(`[SLT SMS CALL] Message content (${messages[language].length} chars): ${messages[language]}`)
+    const selectedCallMsg = this.selectMessageForSMS(messages, language)
+    console.log(`[SLT SMS CALL] Message content (${selectedCallMsg.length} chars): ${selectedCallMsg}`)
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: selectedCallMsg
     })
   }
 
@@ -432,11 +434,12 @@ class SLTSmsService {
       ta: `அன்பு வாடிக்கையாளரே\n\nநீங்கள் அங்கு இல்லாததால் ${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} தவிர்க்கப்பட்டது. மீண்டும் அழைக்கப்பட தயவுசெய்து கவுண்டருக்கு வரவும்.\n\nSLT-MOBITEL`
     }
 
-    console.log(`[SLT SMS SKIP] Message content (${messages[language].length} chars): "${messages[language]}"`)
+    const selectedSkipMsg = this.selectMessageForSMS(messages, language)
+    console.log(`[SLT SMS SKIP] Message content (${selectedSkipMsg.length} chars): "${selectedSkipMsg}"`)
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: selectedSkipMsg
     })
   }
 
@@ -465,11 +468,12 @@ class SLTSmsService {
       ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} மீண்டும் அழைக்கப்படுகிறது. தயவுசெய்து உடனடியாக கவுண்டர் ${details.counterNumber || ''} க்கு செல்லவும்.\n\nSLT-MOBITEL`
     }
 
-    console.log(`[SLT SMS RECALL] Message content (${messages[language].length} chars): "${messages[language]}"`)
+    const selectedRecallMsg = this.selectMessageForSMS(messages, language)
+    console.log(`[SLT SMS RECALL] Message content (${selectedRecallMsg.length} chars): "${selectedRecallMsg}"`)
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: selectedRecallMsg
     })
   }
 
@@ -505,24 +509,21 @@ class SLTSmsService {
       ta: this.buildServiceCompletionCompact(details, formattedToken, 'ta')
     }
 
-    const targetMessage = (fullMessages as any)[language] || fullMessages.en
-    const isUnicode = /[^\x00-\x7F]/.test(targetMessage)
-    const limit = isUnicode ? 70 : 160
+    // Always use English: Unicode (Sinhala/Tamil) multi-part SMS is not reliably
+    // delivered by the SLT gateway (same limitation as OTP messages).
+    let finalMessage = fullMessages.en
 
-    let finalMessage = targetMessage
-
-    if (finalMessage.length > limit) {
-      console.warn(`[SLT SMS COMPLETE] Full message too long (${finalMessage.length}), limit ${limit}. Trying compact version.`)
-      const compactMsg = (compactMessages as any)[language] || compactMessages.en
-      if (compactMsg.length < finalMessage.length) {
-        finalMessage = compactMsg
+    if (finalMessage.length > 160) {
+      console.warn(`[SLT SMS COMPLETE] Full message too long (${finalMessage.length}), trying compact version.`)
+      if (compactMessages.en.length < finalMessage.length) {
+        finalMessage = compactMessages.en
       }
     }
 
-    console.log(`[SLT SMS COMPLETE] Final message (${finalMessage.length} chars, Unicode: ${isUnicode}): "${finalMessage}"`)
+    console.log(`[SLT SMS COMPLETE] Final message (${finalMessage.length} chars): "${finalMessage}"`)
 
-    if (finalMessage.length > limit) {
-      console.warn(`[SLT SMS COMPLETE] Warning: Even compact version exceeds ${limit} chars (${finalMessage.length}).`)
+    if (finalMessage.length > 160) {
+      console.warn(`[SLT SMS COMPLETE] Warning: Even compact version exceeds 160 chars (${finalMessage.length}).`)
     }
 
     return this.sendSMS({
@@ -636,7 +637,7 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: this.selectMessageForSMS(messages, language)
     })
   }
 
@@ -664,7 +665,7 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: this.selectMessageForSMS(messages, language)
     })
   }
 
@@ -720,25 +721,22 @@ class SLTSmsService {
     }
 
     const fullMessages = buildFullMessages()
-    const targetMessage = fullMessages[language] || fullMessages.en
-    const isUnicode = /[^\x00-\x7F]/.test(targetMessage)
-    const limit = isUnicode ? 70 : 160
+    // Always use English: Unicode (Sinhala/Tamil) multi-part SMS is not reliably
+    // delivered by the SLT gateway (same limitation as OTP messages).
+    let finalMessage = fullMessages.en
 
-    let finalMessage = targetMessage
-
-    if (finalMessage.length > limit) {
-      console.warn(`[SLT SMS TRANSFER] Full message too long (${finalMessage.length}), limit ${limit}. Trying compact version.`)
+    if (finalMessage.length > 160) {
+      console.warn(`[SLT SMS TRANSFER] Full message too long (${finalMessage.length}), trying compact version.`)
       const compactMessages = buildCompactMessages()
-      const compactMessage = compactMessages[language] || compactMessages.en
-      if (compactMessage.length < finalMessage.length) {
-        finalMessage = compactMessage
+      if (compactMessages.en.length < finalMessage.length) {
+        finalMessage = compactMessages.en
       }
     }
 
-    console.log(`[SLT SMS TRANSFER] Final message (${finalMessage.length} chars, Unicode: ${isUnicode}): "${finalMessage}"`)
+    console.log(`[SLT SMS TRANSFER] Final message (${finalMessage.length} chars): "${finalMessage}"`)
 
-    if (finalMessage.length > limit) {
-      console.warn(`[SLT SMS TRANSFER] Warning: Even compact message exceeds ${limit} chars (${finalMessage.length}).`)
+    if (finalMessage.length > 160) {
+      console.warn(`[SLT SMS TRANSFER] Warning: Even compact message exceeds 160 chars (${finalMessage.length}).`)
     }
 
     return this.sendSMS({
@@ -808,8 +806,28 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: (messages as any)[language] || messages.en
+      message: this.selectMessageForSMS(messages, language)
     })
+  }
+
+  /**
+   * Select the appropriate message for SMS delivery.
+   * Falls back to English when the target language produces a Unicode message
+   * that exceeds the 70-character single-segment limit, because the SLT gateway
+   * does not reliably deliver multi-part Unicode SMS.
+   */
+  private selectMessageForSMS(
+    messages: { en: string; si: string; ta: string },
+    language: 'en' | 'si' | 'ta'
+  ): string {
+    if (language === 'en') return messages.en
+    const candidate = messages[language]
+    const isUnicode = /[^\x00-\x7F]/.test(candidate)
+    if (isUnicode && candidate.length > 70) {
+      console.warn(`[SLT SMS] ${language.toUpperCase()} message (${candidate.length} chars) exceeds single-segment Unicode limit (70). Falling back to English.`)
+      return messages.en
+    }
+    return candidate
   }
 
   /**
