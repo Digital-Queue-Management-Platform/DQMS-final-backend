@@ -138,18 +138,17 @@ jobs:
             sudo fuser -k 3010/tcp || true
             sleep 2
 
-            # Start new container
+            # Run migrations in a temporary container BEFORE starting the main container.
+            # This avoids the P3009 race condition where the main container's CMD
+            # (prisma migrate deploy) competes with the resolve step.
+            echo "Running pre-start database migrations..."
+            sudo docker run --rm --env-file .env "$DOCKER_IMAGE" sh -c "
+              npx prisma migrate resolve --rolled-back 20260308062000_add_recurring_closure_notices 2>&1 || true
+              npx prisma migrate deploy
+            "
+
+            # Start new container (prisma migrate deploy in CMD will be a no-op now)
             sudo docker compose up -d --no-deps backend
-
-            # Run database migrations immediately
-            echo "Running database migrations..."
-            sleep 3
-
-            # Resolve any failed migrations that no longer exist locally (P3009 fix)
-            # This marks them as rolled-back so deploy can proceed
-            sudo docker compose exec -T backend npx prisma migrate resolve --rolled-back 20260308062000_add_recurring_closure_notices 2>/dev/null || true
-
-            sudo docker compose exec -T backend npx prisma migrate deploy || true
 
             # Quick health check (30 seconds max)
             echo "Verifying deployment (30s max)..."
