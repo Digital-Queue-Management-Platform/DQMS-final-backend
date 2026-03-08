@@ -568,15 +568,14 @@ class SLTSmsService {
     },
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
-    const messages = {
-      en: `Dear Valued Customer\n\nYour registration code for ${details.outletName} is ${details.otpCode}. Valid for 5 minutes.\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} සඳහා ඔබගේ ලියාපදිංචි කේතය ${details.otpCode}. මිනිත්තු 5 සඳහා වලංගුයි.\n\nSLT-MOBITEL`,
-      ta: `அன்பு වාடிக்கையாளரே\n\n${details.outletName} க்கான உங்கள் பதிவு குறியீடு ${details.otpCode}. 5 நிமிடங்களுக்கு செல்லுபடியாகும்.\n\nSLT-MOBITEL`
-    }
+    // Always send OTP in English (plain ASCII) regardless of preferred language.
+    // Unicode SMS (Sinhala/Tamil) is limited to 70 chars per segment and many gateways
+    // do not reliably deliver multi-part Unicode SMS, causing OTPs to be silently lost.
+    const message = `Dear Valued Customer\n\nYour registration code for ${details.outletName} is ${details.otpCode}. Valid for 5 minutes.\n\nSLT-MOBITEL`
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message
     })
   }
 

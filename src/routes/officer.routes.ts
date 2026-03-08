@@ -451,13 +451,23 @@ router.post("/next-token", async (req, res) => {
 
       console.log(`[NEXT-TOKEN] About to send SMS to ${updatedToken.customer.mobileNumber} for token #${updatedToken.tokenNumber}`)
 
+      const _prefs = (updatedToken as any).preferredLanguages
+      let customerLang: 'en' | 'si' | 'ta' = 'en'
+      if (Array.isArray(_prefs) && _prefs.length > 0) {
+        const fp = String(_prefs[0]).toLowerCase()
+        if (['en', 'si', 'ta'].includes(fp)) customerLang = fp as 'en' | 'si' | 'ta'
+      } else if (typeof _prefs === 'string') {
+        if (_prefs.includes('si')) customerLang = 'si'
+        else if (_prefs.includes('ta')) customerLang = 'ta'
+      }
+
       await sltSmsService.sendCustomerCalled(updatedToken.customer.mobileNumber, {
         firstName,
         tokenNumber: updatedToken.tokenNumber,
         counterNumber: officer.counterNumber || 0,
         outletName: updatedToken.outlet?.name || 'SLT Office',
         recoveryUrl
-      })
+      }, customerLang)
       console.log(`✓ Next-token SMS sent to customer ${updatedToken.customer.mobileNumber} for token #${updatedToken.tokenNumber}`)
     } catch (smsError) {
       console.error('Next-token SMS sending failed:', smsError)
@@ -629,12 +639,22 @@ router.post("/skip-token", async (req, res) => {
       const shortId = skipped.id.substring(0, 8)
       const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
 
+      const _skipPrefs = (skipped as any).preferredLanguages
+      let customerLang: 'en' | 'si' | 'ta' = 'en'
+      if (Array.isArray(_skipPrefs) && _skipPrefs.length > 0) {
+        const fp = String(_skipPrefs[0]).toLowerCase()
+        if (['en', 'si', 'ta'].includes(fp)) customerLang = fp as 'en' | 'si' | 'ta'
+      } else if (typeof _skipPrefs === 'string') {
+        if (_skipPrefs.includes('si')) customerLang = 'si'
+        else if (_skipPrefs.includes('ta')) customerLang = 'ta'
+      }
+
       await sltSmsService.sendCustomerSkipped(skipped.customer.mobileNumber, {
         firstName,
         tokenNumber: skipped.tokenNumber,
         outletName: skipped.outlet?.name || 'SLT Office',
         recoveryUrl
-      })
+      }, customerLang)
       console.log(`✓ Skip SMS sent to customer ${skipped.customer.mobileNumber} for token #${skipped.tokenNumber}`)
     } catch (smsError) {
       console.error('Skip SMS sending failed:', smsError)
@@ -699,13 +719,23 @@ router.post("/recall-token", async (req, res) => {
       const shortId = recalled.id.substring(0, 8)
       const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
 
+      const _recallPrefs = (recalled as any).preferredLanguages
+      let customerLang: 'en' | 'si' | 'ta' = 'en'
+      if (Array.isArray(_recallPrefs) && _recallPrefs.length > 0) {
+        const fp = String(_recallPrefs[0]).toLowerCase()
+        if (['en', 'si', 'ta'].includes(fp)) customerLang = fp as 'en' | 'si' | 'ta'
+      } else if (typeof _recallPrefs === 'string') {
+        if (_recallPrefs.includes('si')) customerLang = 'si'
+        else if (_recallPrefs.includes('ta')) customerLang = 'ta'
+      }
+
       await sltSmsService.sendCustomerRecalled(recalled.customer.mobileNumber, {
         firstName,
         tokenNumber: recalled.tokenNumber,
         outletName: recalled.outlet?.name || 'SLT Office',
         recoveryUrl,
         counterNumber: recalled.counterNumber || undefined
-      })
+      }, customerLang)
       console.log(`✓ Recall SMS sent to customer ${recalled.customer.mobileNumber} for token #${recalled.tokenNumber}`)
     } catch (smsError) {
       console.error('Recall SMS sending failed:', smsError)
@@ -830,13 +860,23 @@ router.post("/call-token", async (req, res) => {
 
       console.log(`[CALL-TOKEN] About to send SMS to ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
 
+      const _callPrefs = (called as any).preferredLanguages
+      let customerLang: 'en' | 'si' | 'ta' = 'en'
+      if (Array.isArray(_callPrefs) && _callPrefs.length > 0) {
+        const fp = String(_callPrefs[0]).toLowerCase()
+        if (['en', 'si', 'ta'].includes(fp)) customerLang = fp as 'en' | 'si' | 'ta'
+      } else if (typeof _callPrefs === 'string') {
+        if (_callPrefs.includes('si')) customerLang = 'si'
+        else if (_callPrefs.includes('ta')) customerLang = 'ta'
+      }
+
       await sltSmsService.sendCustomerCalled(called.customer.mobileNumber, {
         firstName,
         tokenNumber: called.tokenNumber,
         counterNumber: officer.counterNumber || 0,
         outletName: called.outlet?.name || 'SLT Office',
         recoveryUrl
-      })
+      }, customerLang)
       console.log(`✓ Call-to-counter SMS sent to customer ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
     } catch (smsError) {
       console.error('Call-to-counter SMS sending failed:', smsError)
