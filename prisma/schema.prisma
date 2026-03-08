@@ -351,18 +351,26 @@ model DGM {
 }
 
 model ClosureNotice {
-  id          String   @id @default(uuid())
-  outletId    String
-  title       String
-  message     String
-  startsAt    DateTime
-  endsAt      DateTime
-  createdBy   String
-  createdById String
-  createdAt   DateTime @default(now())
-  outlet      Outlet   @relation(fields: [outletId], references: [id])
+  id                 String    @id @default(uuid())
+  outletId           String
+  title              String
+  message            String
+  startsAt           DateTime
+  endsAt             DateTime
+  createdBy          String
+  createdById        String
+  createdAt          DateTime  @default(now())
+  noticeType         String    @default("closure")
+  isRecurring        Boolean   @default(false)
+  recurringType      String?
+  recurringDays      String[]  @default([])
+  recurringEndDate   DateTime?
+  recurringStartTime String?
+  recurringEndTime   String?
+  outlet             Outlet    @relation(fields: [outletId], references: [id])
 
   @@index([outletId, endsAt])
+  @@index([isRecurring, recurringType])
 }
 
 model MercantileHoliday {

@@ -128,8 +128,41 @@ app.use("/api/slt-sms", sltSmsRoutes)
 app.use("/api/gm", gmRoutes)
 app.use("/api/dgm", dgmRoutes)
 
+// Helper: parse "HH:MM" string to total minutes
+function parseTimeToMinutes(t: string): number {
+  const [h, m] = t.split(":").map(Number)
+  return (h || 0) * 60 + (m || 0)
+}
+
+// Helper: check if a recurring closure notice is active right now
+function isRecurringNoticeActive(notice: any, now: Date): boolean {
+  if (!notice.isRecurring || notice.recurringType !== "weekly") return false
+  if (notice.recurringEndDate && new Date(notice.recurringEndDate) < now) return false
+
+  const dayNames = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
+  const todayName = dayNames[now.getDay()]
+  const days: string[] = Array.isArray(notice.recurringDays) ? notice.recurringDays : []
+  if (!days.includes(todayName)) return false
+
+  const nowMinutes = now.getHours() * 60 + now.getMinutes()
+
+  // Prefer explicit recurringStartTime / recurringEndTime fields (e.g. "12:30", "23:59")
+  if (notice.recurringStartTime && notice.recurringEndTime) {
+    const startMinutes = parseTimeToMinutes(notice.recurringStartTime)
+    const endMinutes = parseTimeToMinutes(notice.recurringEndTime)
+    return nowMinutes >= startMinutes && nowMinutes <= endMinutes
+  }
+
+  // Fall back to hour/minute from startsAt / endsAt datetime fields
+  const startTemplate = new Date(notice.startsAt)
+  const endTemplate = new Date(notice.endsAt)
+  const startMinutes = startTemplate.getHours() * 60 + startTemplate.getMinutes()
+  const endMinutes = endTemplate.getHours() * 60 + endTemplate.getMinutes()
+  return nowMinutes >= startMinutes && nowMinutes <= endMinutes
+}
+
 // Public: Branch closed status check (no auth required)
-// Checks: mercantile holiday | active closure notice managed via UI
+// Checks: mercantile holiday | active closure notice (blocking) | recurring closure notice
 app.get("/api/branch-status/:outletId", async (req, res) => {
   try {
     const { outletId } = req.params
@@ -139,10 +172,7 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
       return res.status(400).json({ error: "Invalid 'at' date provided" })
     }
 
-    // Saturday after 12:30 PM rule REMOVED as requested.
-    // Closures should now be managed via the 'Closure Notices' page by officers.
-
-    // 2. Mercantile holiday check
+    // 1. Mercantile holiday check
     const todayStart = new Date(now)
     todayStart.setHours(0, 0, 0, 0)
     const todayEnd = new Date(now)
@@ -152,52 +182,120 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
     for (const holiday of holidays) {
       const hDate = new Date(holiday.date)
       if (holiday.isRecurring) {
-        // Match month and day only, any year
         if (hDate.getMonth() === now.getMonth() && hDate.getDate() === now.getDate()) {
-          return res.json({
-            isClosed: true,
-            reason: `Mercantile Holiday: ${holiday.name}`,
-            activeNotice: null
-          })
+          return res.json({ isClosed: true, reason: `Mercantile Holiday: ${holiday.name}`, activeNotice: null, standardNotice: null })
         }
       } else {
-        // Exact date match
         if (hDate >= todayStart && hDate <= todayEnd) {
-          return res.json({
-            isClosed: true,
-            reason: `Mercantile Holiday: ${holiday.name}`,
-            activeNotice: null
-          })
+          return res.json({ isClosed: true, reason: `Mercantile Holiday: ${holiday.name}`, activeNotice: null, standardNotice: null })
         }
       }
     }
 
-    // 3. Active closure notice for this outlet
-    const activeNotice = await (prisma as any).closureNotice.findFirst({
+    // 2. Active one-time CLOSURE notices for this outlet (noticeType = "closure" or legacy null)
+    const activeOneTime = await (prisma as any).closureNotice.findFirst({
       where: {
         outletId,
+        isRecurring: false,
         startsAt: { lte: now },
-        endsAt: { gte: now }
+        endsAt: { gte: now },
+        noticeType: "closure"
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: "desc" }
     })
-
-    if (activeNotice) {
+    if (activeOneTime) {
       return res.json({
         isClosed: true,
-        reason: activeNotice.title,
-        activeNotice: {
-          title: activeNotice.title,
-          message: activeNotice.message
-        }
+        reason: activeOneTime.title,
+        activeNotice: { title: activeOneTime.title, message: activeOneTime.message },
+        standardNotice: null
       })
     }
 
-    res.set('Cache-Control', 'no-store')
-    res.json({ isClosed: false, reason: null, activeNotice: null })
+    // 3. Recurring CLOSURE notices for this outlet
+    const recurringNotices = await (prisma as any).closureNotice.findMany({
+      where: {
+        outletId,
+        isRecurring: true,
+        noticeType: "closure"
+      }
+    })
+    for (const rn of recurringNotices) {
+      if (isRecurringNoticeActive(rn, now)) {
+        return res.json({
+          isClosed: true,
+          reason: rn.title,
+          activeNotice: { title: rn.title, message: rn.message },
+          standardNotice: null
+        })
+      }
+    }
+
+    // 4. Active standard (dismissible) notices — branch is NOT closed, but show info banner
+    let standardNotice: { title: string; message: string } | null = null
+
+    const activeStandardOneTime = await (prisma as any).closureNotice.findFirst({
+      where: {
+        outletId,
+        noticeType: "standard",
+        isRecurring: false,
+        startsAt: { lte: now },
+        endsAt: { gte: now }
+      },
+      orderBy: { createdAt: "desc" }
+    })
+    if (activeStandardOneTime) {
+      standardNotice = { title: activeStandardOneTime.title, message: activeStandardOneTime.message }
+    } else {
+      const recurringStandard = await (prisma as any).closureNotice.findMany({
+        where: { outletId, noticeType: "standard", isRecurring: true }
+      })
+      for (const rs of recurringStandard) {
+        if (isRecurringNoticeActive(rs, now)) {
+          standardNotice = { title: rs.title, message: rs.message }
+          break
+        }
+      }
+    }
+
+    res.set("Cache-Control", "no-store")
+    res.json({ isClosed: false, reason: null, activeNotice: null, standardNotice })
   } catch (err) {
     logger.error({ err }, "Branch-status check error")
     res.status(500).json({ error: "Failed to check branch status" })
+  }
+})
+
+// Public: Active standard (dismissable) notices for an outlet
+app.get("/api/outlet-notices/:outletId", async (req, res) => {
+  try {
+    const { outletId } = req.params
+    const now = new Date()
+
+    // Fetch active one-time standard notices
+    const oneTime = await (prisma as any).closureNotice.findMany({
+      where: {
+        outletId,
+        noticeType: "standard",
+        isRecurring: false,
+        startsAt: { lte: now },
+        endsAt: { gte: now }
+      },
+      orderBy: { createdAt: "desc" }
+    })
+
+    // Fetch recurring standard notices and filter by current time
+    const recurring = await (prisma as any).closureNotice.findMany({
+      where: { outletId, noticeType: "standard", isRecurring: true }
+    })
+    const activeRecurring = recurring.filter((n: any) => isRecurringNoticeActive(n, now))
+
+    const notices = [...oneTime, ...activeRecurring]
+    res.set("Cache-Control", "no-store")
+    res.json({ notices })
+  } catch (err) {
+    logger.error({ err }, "Outlet-notices check error")
+    res.status(500).json({ error: "Failed to fetch outlet notices" })
   }
 })
 
