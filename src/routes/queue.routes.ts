@@ -175,11 +175,15 @@ router.get('/regions', async (req, res) => {
 })
 
 // Services CRUD
-// Get all services (including inactive ones for admin management)
+// Get services — by default returns only active services (for customers).
+// Pass ?all=true to return all services including inactive (for admin management).
 router.get('/services', async (req, res) => {
   try {
-    const services = await prisma.$queryRaw`SELECT * FROM "Service" ORDER BY "order" ASC, "createdAt" ASC`
-    res.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=120')
+    const showAll = req.query.all === 'true'
+    const services = showAll
+      ? await prisma.$queryRaw`SELECT * FROM "Service" ORDER BY "order" ASC, "createdAt" ASC`
+      : await prisma.$queryRaw`SELECT * FROM "Service" WHERE "isActive" = true ORDER BY "order" ASC, "createdAt" ASC`
+    res.set('Cache-Control', 'no-store')
     res.json(services)
   } catch (error) {
     console.error('Services fetch error:', error)
