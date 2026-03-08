@@ -2513,17 +2513,18 @@ router.post("/closure-notices", async (req, res) => {
     })
     if (!region) return res.status(404).json({ error: "Manager not found" })
 
-    const { outletId, title, message, startsAt, endsAt } = req.body
+    const { outletId, title, message, startsAt, endsAt, noticeType, isRecurring, recurringType, recurringDays, recurringEndDate } = req.body
     if (!outletId || !title || !message || !startsAt || !endsAt) {
       return res.status(400).json({ error: "outletId, title, message, startsAt, and endsAt are required" })
     }
     if (!(region.outlets as any[]).some((o: any) => o.id === outletId)) {
       return res.status(403).json({ error: "Outlet not in your region" })
     }
-    if (new Date(startsAt) >= new Date(endsAt)) {
+    if (!isRecurring && new Date(startsAt) >= new Date(endsAt)) {
       return res.status(400).json({ error: "endsAt must be after startsAt" })
     }
 
+    const type = noticeType === "standard" ? "standard" : "closure"
     const notice = await (prisma as any).closureNotice.create({
       data: {
         outletId,
@@ -2532,13 +2533,54 @@ router.post("/closure-notices", async (req, res) => {
         startsAt: new Date(startsAt),
         endsAt: new Date(endsAt),
         createdBy: "rtom_manager",
-        createdById: payload.managerId || payload.mobileNumber || "unknown"
+        createdById: payload.managerId || payload.mobileNumber || "unknown",
+        noticeType: type,
+        isRecurring: Boolean(isRecurring),
+        recurringType: isRecurring ? (recurringType || "weekly") : null,
+        recurringDays: isRecurring && Array.isArray(recurringDays) ? recurringDays : [],
+        recurringEndDate: recurringEndDate ? new Date(recurringEndDate) : null
       }
     })
     res.json({ success: true, notice })
   } catch (error) {
     console.error("RTOM create closure notice error:", error)
     res.status(500).json({ error: "Failed to create closure notice" })
+  }
+})
+
+// Update a closure notice (must belong to outlet in RTOM's region)
+router.put("/closure-notices/:noticeId", async (req, res) => {
+  try {
+    const payload = getManagerPayload(req)
+    if (!payload) return res.status(401).json({ error: "RTOM authentication required" })
+    const region = await prisma.region.findFirst({
+      where: payload.mobileNumber ? { managerMobile: payload.mobileNumber } : { managerEmail: payload.email },
+      include: { outlets: true }
+    })
+    if (!region) return res.status(404).json({ error: "Manager not found" })
+    const { noticeId } = req.params
+    const outletIds = (region.outlets as any[]).map((o: any) => o.id)
+    const existing = await (prisma as any).closureNotice.findFirst({ where: { id: noticeId, outletId: { in: outletIds } } })
+    if (!existing) return res.status(404).json({ error: "Notice not found or not in your region" })
+    const { title, message, startsAt, endsAt, noticeType, isRecurring, recurringType, recurringDays, recurringEndDate } = req.body
+    const type = noticeType === "standard" ? "standard" : "closure"
+    const updated = await (prisma as any).closureNotice.update({
+      where: { id: noticeId },
+      data: {
+        title, message,
+        startsAt: new Date(startsAt),
+        endsAt: new Date(endsAt),
+        noticeType: type,
+        isRecurring: Boolean(isRecurring),
+        recurringType: isRecurring ? (recurringType || "weekly") : null,
+        recurringDays: isRecurring && Array.isArray(recurringDays) ? recurringDays : [],
+        recurringEndDate: recurringEndDate ? new Date(recurringEndDate) : null,
+      }
+    })
+    res.json({ success: true, notice: updated })
+  } catch (error) {
+    console.error("RTOM update closure notice error:", error)
+    res.status(500).json({ error: "Failed to update closure notice" })
   }
 })
 

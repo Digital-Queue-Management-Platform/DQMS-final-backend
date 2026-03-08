@@ -174,21 +174,65 @@ router.post("/closure-notices", async (req, res) => {
         const dgm = await (prisma as any).dGM.findUnique({ where: { id: auth.dgmId } })
         if (!dgm) return res.status(404).json({ error: "DGM not found" })
 
-        const { outletId, title, message, startsAt, endsAt } = req.body
+        const { outletId, title, message, startsAt, endsAt, noticeType, isRecurring, recurringType, recurringDays, recurringEndDate } = req.body
         if (!outletId || !title || !message || !startsAt || !endsAt)
             return res.status(400).json({ error: "outletId, title, message, startsAt, and endsAt are required" })
 
         const outlet = await prisma.outlet.findFirst({ where: { id: outletId, regionId: { in: dgm.regionIds } } })
         if (!outlet) return res.status(403).json({ error: "Outlet not in your regions" })
 
+        const type = noticeType === "standard" ? "standard" : "closure"
         const notice = await (prisma as any).closureNotice.create({
-            data: { outletId, title, message, startsAt: new Date(startsAt), endsAt: new Date(endsAt), createdBy: "dgm", createdById: auth.dgmId }
+            data: {
+                outletId, title, message,
+                startsAt: new Date(startsAt), endsAt: new Date(endsAt),
+                createdBy: "dgm", createdById: auth.dgmId,
+                noticeType: type,
+                isRecurring: Boolean(isRecurring),
+                recurringType: isRecurring ? (recurringType || "weekly") : null,
+                recurringDays: isRecurring && Array.isArray(recurringDays) ? recurringDays : [],
+                recurringEndDate: recurringEndDate ? new Date(recurringEndDate) : null
+            }
         })
 
         res.json({ success: true, notice })
     } catch (err) {
         console.error("DGM create closure notice error:", err)
         res.status(500).json({ error: "Failed to create closure notice" })
+    }
+})
+
+// PUT /closure-notices/:id
+router.put("/closure-notices/:id", async (req, res) => {
+    try {
+        const auth = verifyDGMToken(req)
+        if (!auth) return res.status(401).json({ error: "DGM authentication required" })
+        const dgm = await (prisma as any).dGM.findUnique({ where: { id: auth.dgmId } })
+        if (!dgm) return res.status(404).json({ error: "DGM not found" })
+        const outlets = await prisma.outlet.findMany({ where: { regionId: { in: dgm.regionIds } }, select: { id: true } })
+        const outletIds = outlets.map((o: any) => o.id)
+        const notice = await (prisma as any).closureNotice.findUnique({ where: { id: req.params.id } })
+        if (!notice) return res.status(404).json({ error: "Notice not found" })
+        if (!outletIds.includes(notice.outletId)) return res.status(403).json({ error: "Not authorized" })
+        const { title, message, startsAt, endsAt, noticeType, isRecurring, recurringType, recurringDays, recurringEndDate } = req.body
+        const type = noticeType === "standard" ? "standard" : "closure"
+        const updated = await (prisma as any).closureNotice.update({
+            where: { id: req.params.id },
+            data: {
+                title, message,
+                startsAt: new Date(startsAt),
+                endsAt: new Date(endsAt),
+                noticeType: type,
+                isRecurring: Boolean(isRecurring),
+                recurringType: isRecurring ? (recurringType || "weekly") : null,
+                recurringDays: isRecurring && Array.isArray(recurringDays) ? recurringDays : [],
+                recurringEndDate: recurringEndDate ? new Date(recurringEndDate) : null,
+            }
+        })
+        res.json({ success: true, notice: updated })
+    } catch (err) {
+        console.error("DGM update closure notice error:", err)
+        res.status(500).json({ error: "Failed to update closure notice" })
     }
 })
 

@@ -138,13 +138,22 @@ jobs:
             sudo fuser -k 3010/tcp || true
             sleep 2
 
-            # Start new container
-            sudo docker compose up -d --no-deps backend
+            # Run migrations in a temporary container BEFORE starting the main container.
+            # This avoids the P3009 race condition where the main container's CMD
+            # (prisma migrate deploy) competes with the resolve step.
+            echo "Running pre-start database migrations..."
+            # Docker --env-file does NOT strip surrounding quotes from values.
+            # Strip single/double quotes from all values so Docker reads them correctly.
+            grep -v '^#' .env | grep -v '^$' | \
+              sed "s/^\([A-Za-z_][A-Za-z0-9_]*\)='\(.*\)'$/\1=\2/" | \
+              sed 's/^\([A-Za-z_][A-Za-z0-9_]*\)="\(.*\)"$/\1=\2/' > /tmp/docker.env
+            sudo docker run --rm --env-file /tmp/docker.env "$DOCKER_IMAGE" sh -c "
+              npx prisma migrate resolve --rolled-back 20260308062000_add_recurring_closure_notices 2>&1 || true
+              npx prisma migrate deploy
+            "
 
-            # Run database migrations immediately
-            echo "Running database migrations..."
-            sleep 3
-            sudo docker compose exec -T backend npx prisma migrate deploy || true
+            # Start new container (prisma migrate deploy in CMD will be a no-op now)
+            sudo docker compose up -d --no-deps backend
 
             # Quick health check (30 seconds max)
             echo "Verifying deployment (30s max)..."

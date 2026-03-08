@@ -534,23 +534,23 @@ class SLTSmsService {
   // Refined helpers for completion messages
   private buildServiceCompletionFull(details: any, token: string | null, language: string) {
     const fullRef = details.refNumber || token
-    const outlet = details.outletName.replace(' SLT', '').replace(' HQ', '').replace('Office', '')
 
     const messages = {
-      en: `SLT-MOBITEL DQMS: Dear Valued Customer, token ${token} at ${outlet} is completed. Ref: ${fullRef}. Rate us: ${details.feedbackUrl} SLT-MOBITEL`,
-      si: `SLT-MOBITEL DQMS: ගරු පාරිභෝගිකයාණනි, ${outlet} හි ඔබගේ ටෝකන් ${token} අවසන්. යොමුව: ${fullRef}. අදහස්: ${details.feedbackUrl} SLT-MOBITEL`,
-      ta: `SLT-MOBITEL DQMS: அன்புமிகு வாடிக்கையாளரே, ${outlet} இல் உங்களின் டோக்கன் ${token} முடிந்தது. குறிப்பு: ${fullRef}. கருத்து: ${details.feedbackUrl} SLT-MOBITEL`
+      en: `Dear Valued Customer\n\nYour token number ${token} at ${details.outletName} has been served. Track your service by Ref: ${fullRef}.\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${token} සේවා අවසන් විය. Ref: ${fullRef}.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${token} சேவை முடிந்தது. Ref: ${fullRef}.\n\nSLT-MOBITEL`
     }
     return (messages as any)[language] || messages.en
   }
 
   private buildServiceCompletionCompact(details: any, token: string | null, language: string) {
-    const ref = details.refNumber.split('/').pop() || token
+    const ref = details.refNumber || token
+    const outlet = details.outletName.replace(/\s*(SLT|Mobitel|Office)\s*/gi, '').trim()
 
     const messages = {
-      en: `SLT-MOBITEL DQMS: Token ${token} is done. Ref: ${ref}. Rate us: ${details.feedbackUrl} SLT-MOBITEL`,
-      si: `SLT-MOBITEL DQMS: ටෝකන් ${token} අවසන්. Ref: ${ref}. අදහස්: ${details.feedbackUrl} SLT-MOBITEL`,
-      ta: `SLT-MOBITEL DQMS: டோக்கன் ${token} முடிந்தது. Ref: ${ref}. கருத்து: ${details.feedbackUrl} SLT-MOBITEL`
+      en: `Dear Valued Customer\n\nToken ${token} at ${outlet} served. Ref: ${ref}.\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\n${outlet} හි ටෝකන් ${token} සේවා අවසන්. Ref: ${ref}.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${outlet} இல் டோக்கன் ${token} முடிந்தது. Ref: ${ref}.\n\nSLT-MOBITEL`
     }
     return (messages as any)[language] || messages.en
   }

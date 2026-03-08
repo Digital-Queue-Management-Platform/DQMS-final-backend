@@ -1486,13 +1486,14 @@ router.post("/closure-notices", async (req: any, res) => {
     if (!tm.branchId) {
       return res.status(400).json({ error: "You are not assigned to any outlet" })
     }
-    const { title, message, startsAt, endsAt } = req.body
+    const { title, message, startsAt, endsAt, noticeType, isRecurring, recurringType, recurringDays, recurringEndDate } = req.body
     if (!title || !message || !startsAt || !endsAt) {
       return res.status(400).json({ error: "title, message, startsAt, and endsAt are required" })
     }
-    if (new Date(startsAt) >= new Date(endsAt)) {
+    if (!isRecurring && new Date(startsAt) >= new Date(endsAt)) {
       return res.status(400).json({ error: "endsAt must be after startsAt" })
     }
+    const type = noticeType === "standard" ? "standard" : "closure"
     const notice = await (prisma as any).closureNotice.create({
       data: {
         outletId: tm.branchId,
@@ -1501,13 +1502,48 @@ router.post("/closure-notices", async (req: any, res) => {
         startsAt: new Date(startsAt),
         endsAt: new Date(endsAt),
         createdBy: "teleshop_manager",
-        createdById: tm.id
+        createdById: tm.id,
+        noticeType: type,
+        isRecurring: Boolean(isRecurring),
+        recurringType: isRecurring ? (recurringType || "weekly") : null,
+        recurringDays: isRecurring && Array.isArray(recurringDays) ? recurringDays : [],
+        recurringEndDate: recurringEndDate ? new Date(recurringEndDate) : null
       }
     })
     res.json({ success: true, notice })
   } catch (error) {
     console.error("Create closure notice error:", error)
     res.status(500).json({ error: "Failed to create closure notice" })
+  }
+})
+
+// Update a closure notice (must belong to TM's branch)
+router.put("/closure-notices/:noticeId", async (req: any, res) => {
+  try {
+    const tm = req.teleshopManager
+    const { noticeId } = req.params
+    if (!tm.branchId) return res.status(400).json({ error: "You are not assigned to any outlet" })
+    const existing = await (prisma as any).closureNotice.findFirst({ where: { id: noticeId, outletId: tm.branchId } })
+    if (!existing) return res.status(404).json({ error: "Notice not found or not at your outlet" })
+    const { title, message, startsAt, endsAt, noticeType, isRecurring, recurringType, recurringDays, recurringEndDate } = req.body
+    const type = noticeType === "standard" ? "standard" : "closure"
+    const updated = await (prisma as any).closureNotice.update({
+      where: { id: noticeId },
+      data: {
+        title, message,
+        startsAt: new Date(startsAt),
+        endsAt: new Date(endsAt),
+        noticeType: type,
+        isRecurring: Boolean(isRecurring),
+        recurringType: isRecurring ? (recurringType || "weekly") : null,
+        recurringDays: isRecurring && Array.isArray(recurringDays) ? recurringDays : [],
+        recurringEndDate: recurringEndDate ? new Date(recurringEndDate) : null,
+      }
+    })
+    res.json({ success: true, notice: updated })
+  } catch (error) {
+    console.error("Update closure notice error:", error)
+    res.status(500).json({ error: "Failed to update closure notice" })
   }
 })
 
