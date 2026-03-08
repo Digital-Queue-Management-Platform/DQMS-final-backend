@@ -154,10 +154,27 @@ jobs:
             echo "DIRECT_URL=$DIRECT_URL" >> /tmp/docker.env
             echo "DIRECT_URL=$DIRECT_URL" >> .env
 
-            sudo docker run --rm --env-file /tmp/docker.env "$DOCKER_IMAGE" sh -c "
-              npx prisma migrate resolve --rolled-back 20260308062000_add_recurring_closure_notices 2>&1 || true
-              npx prisma migrate deploy
-            "
+            # Neon auto-suspends inactive branches; the advisory-lock query times out
+            # during cold-start. Retry up to 3 times (15s apart) to let the branch resume,
+            # and always pass --skip-advisory-lock so PgBouncer pooled endpoints also work.
+            MIGRATION_SUCCESS=false
+            for attempt in 1 2 3; do
+              echo "Migration attempt $attempt/3..."
+              if sudo docker run --rm --env-file /tmp/docker.env "$DOCKER_IMAGE" sh -c "
+                npx prisma migrate resolve --rolled-back 20260308062000_add_recurring_closure_notices 2>&1 || true
+                npx prisma migrate deploy --skip-advisory-lock
+              "; then
+                MIGRATION_SUCCESS=true
+                break
+              fi
+              echo "Migration attempt $attempt failed. Waiting 15s before retry..."
+              sleep 15
+            done
+
+            if [ "\$MIGRATION_SUCCESS" != "true" ]; then
+              echo "❌ All migration attempts failed!"
+              exit 1
+            fi
 
             # Start new container (prisma migrate deploy in CMD will be a no-op now)
             sudo docker compose up -d --no-deps backend

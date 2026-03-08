@@ -1307,5 +1307,183 @@ router.delete("/dgms/:dgmId", async (req, res) => {
   }
 })
 
+// GET /admin/backup — export all tables as a JSON backup file (all fields, all rows)
+router.get("/backup", async (req, res) => {
+  try {
+    const [
+      regions,
+      outlets,
+      officers,
+      customers,
+      tokens,
+      feedback,
+      completedServices,
+      services,
+      appointments,
+      breakLogs,
+      transferLogs,
+      serviceCases,
+      serviceCaseUpdates,
+      closureNotices,
+      managerQRTokens,
+      teleshopManagers,
+      gms,
+      dgms,
+      otps,
+      sltBills,
+      mercantileHolidays,
+      documents,
+      alerts,
+    ] = await Promise.all([
+      prisma.region.findMany(),
+      prisma.outlet.findMany(),
+      prisma.officer.findMany(),
+      prisma.customer.findMany(),
+      prisma.token.findMany(),
+      prisma.feedback.findMany(),
+      prisma.completedService.findMany(),
+      prisma.service.findMany(),
+      prisma.appointment.findMany(),
+      prisma.breakLog.findMany(),
+      prisma.transferLog.findMany(),
+      prisma.serviceCase.findMany(),
+      prisma.serviceCaseUpdate.findMany(),
+      prisma.closureNotice.findMany(),
+      prisma.managerQRToken.findMany(),
+      prisma.teleshopManager.findMany(),
+      (prisma as any).gM.findMany(),
+      (prisma as any).dGM.findMany(),
+      (prisma as any).oTP.findMany(),
+      (prisma as any).sltBill.findMany(),
+      (prisma as any).mercantileHoliday.findMany(),
+      prisma.document.findMany(),
+      prisma.alert.findMany(),
+    ])
+
+    const backup = {
+      exportedAt: new Date().toISOString(),
+      version: "1.0",
+      tables: {
+        regions,
+        outlets,
+        officers,
+        customers,
+        tokens,
+        feedback,
+        completedServices,
+        services,
+        appointments,
+        breakLogs,
+        transferLogs,
+        serviceCases,
+        serviceCaseUpdates,
+        closureNotices,
+        managerQRTokens,
+        teleshopManagers,
+        gms,
+        dgms,
+        otps,
+        sltBills,
+        mercantileHolidays,
+        documents,
+        alerts,
+      },
+      counts: {
+        regions: regions.length,
+        outlets: outlets.length,
+        officers: officers.length,
+        customers: customers.length,
+        tokens: tokens.length,
+        feedback: feedback.length,
+        completedServices: completedServices.length,
+        services: services.length,
+        appointments: appointments.length,
+        breakLogs: breakLogs.length,
+        transferLogs: transferLogs.length,
+        serviceCases: serviceCases.length,
+        serviceCaseUpdates: serviceCaseUpdates.length,
+        closureNotices: closureNotices.length,
+        managerQRTokens: managerQRTokens.length,
+        teleshopManagers: teleshopManagers.length,
+        gms: gms.length,
+        dgms: dgms.length,
+        otps: otps.length,
+        sltBills: sltBills.length,
+        mercantileHolidays: mercantileHolidays.length,
+        documents: documents.length,
+        alerts: alerts.length,
+      },
+    }
+
+    const filename = `dqmp-backup-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.json`
+    res.setHeader("Content-Type", "application/json")
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`)
+    res.send(JSON.stringify(backup, null, 2))
+  } catch (error) {
+    console.error("Backup error:", error)
+    res.status(500).json({ error: "Failed to generate backup" })
+  }
+})
+
+// POST /admin/restore — seed/restore all tables from a backup JSON file
+router.post("/restore", authenticateAdmin, async (req: any, res) => {
+  try {
+    const { tables } = req.body
+    if (!tables || typeof tables !== "object") {
+      return res.status(400).json({ error: "Invalid backup format: missing 'tables'" })
+    }
+
+    const results: Record<string, number> = {}
+
+    const ins = async (key: string, prismaCall: () => Promise<{ count: number }>) => {
+      const rows = (tables as any)[key]
+      if (!Array.isArray(rows) || rows.length === 0) return
+      const r = await prismaCall()
+      results[key] = r.count
+    }
+
+    // Level 0 — no FK dependencies
+    await ins("regions",            () => prisma.region.createMany({ data: tables.regions, skipDuplicates: true }))
+    await ins("services",           () => prisma.service.createMany({ data: tables.services, skipDuplicates: true }))
+    await ins("gms",                () => (prisma as any).gM.createMany({ data: tables.gms, skipDuplicates: true }))
+    await ins("customers",          () => prisma.customer.createMany({ data: tables.customers, skipDuplicates: true }))
+    await ins("otps",               () => (prisma as any).oTP.createMany({ data: tables.otps, skipDuplicates: true }))
+    await ins("sltBills",           () => (prisma as any).sltBill.createMany({ data: tables.sltBills, skipDuplicates: true }))
+    await ins("mercantileHolidays", () => (prisma as any).mercantileHoliday.createMany({ data: tables.mercantileHolidays, skipDuplicates: true }))
+    await ins("documents",          () => prisma.document.createMany({ data: tables.documents, skipDuplicates: true }))
+    await ins("alerts",             () => prisma.alert.createMany({ data: tables.alerts, skipDuplicates: true }))
+
+    // Level 1 — depends on regions
+    await ins("outlets", () => prisma.outlet.createMany({ data: tables.outlets, skipDuplicates: true }))
+
+    // Level 2 — depends on gms / outlets
+    await ins("dgms",             () => (prisma as any).dGM.createMany({ data: tables.dgms, skipDuplicates: true }))
+    await ins("officers",         () => prisma.officer.createMany({ data: tables.officers, skipDuplicates: true }))
+    await ins("teleshopManagers", () => prisma.teleshopManager.createMany({ data: tables.teleshopManagers, skipDuplicates: true }))
+    await ins("managerQRTokens",  () => prisma.managerQRToken.createMany({ data: tables.managerQRTokens, skipDuplicates: true }))
+    await ins("closureNotices",   () => prisma.closureNotice.createMany({ data: tables.closureNotices, skipDuplicates: true }))
+    await ins("appointments",     () => prisma.appointment.createMany({ data: tables.appointments, skipDuplicates: true }))
+
+    // Level 3 — depends on customers + outlets + officers(nullable)
+    await ins("tokens",    () => prisma.token.createMany({ data: tables.tokens, skipDuplicates: true }))
+    await ins("breakLogs", () => prisma.breakLog.createMany({ data: tables.breakLogs, skipDuplicates: true }))
+
+    // Level 4 — depends on tokens / officers / services
+    await ins("feedback",          () => prisma.feedback.createMany({ data: tables.feedback, skipDuplicates: true }))
+    await ins("completedServices", () => prisma.completedService.createMany({ data: tables.completedServices, skipDuplicates: true }))
+    await ins("transferLogs",      () => prisma.transferLog.createMany({ data: tables.transferLogs, skipDuplicates: true }))
+    await ins("serviceCases",      () => prisma.serviceCase.createMany({ data: tables.serviceCases, skipDuplicates: true }))
+
+    // Level 5 — depends on serviceCases
+    await ins("serviceCaseUpdates", () => prisma.serviceCaseUpdate.createMany({ data: tables.serviceCaseUpdates, skipDuplicates: true }))
+
+    const totalRestored = Object.values(results).reduce((a, b) => a + b, 0)
+    res.json({ success: true, restored: results, totalRestored })
+  } catch (error: any) {
+    console.error("Restore error:", error)
+    res.status(500).json({ error: "Restore failed: " + (error?.message || "Unknown error") })
+  }
+})
+
 export default router
 

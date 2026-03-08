@@ -58,7 +58,7 @@ app.use(
 )
 app.use(compression({ threshold: Number(process.env.COMPRESS_THRESHOLD || 1024) }))
 app.use(cookieParser())
-app.use(express.json())
+app.use(express.json({ limit: '20mb' }))
 app.use("/uploads", express.static("uploads"))
 
 // Performance instrumentation & aggregation
