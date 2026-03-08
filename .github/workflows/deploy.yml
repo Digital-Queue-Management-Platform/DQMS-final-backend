@@ -147,6 +147,13 @@ jobs:
             grep -v '^#' .env | grep -v '^$' | \
               sed "s/^\([A-Za-z_][A-Za-z0-9_]*\)='\(.*\)'$/\1=\2/" | \
               sed 's/^\([A-Za-z_][A-Za-z0-9_]*\)="\(.*\)"$/\1=\2/' > /tmp/docker.env
+
+            # Derive DIRECT_URL from DATABASE_URL by removing -pooler from the Neon hostname.
+            # Prisma migrations require a direct (non-pooled) connection to acquire advisory locks.
+            DIRECT_URL=$(grep '^DATABASE_URL=' /tmp/docker.env | sed 's/^DATABASE_URL=//' | sed 's/-pooler\././')
+            echo "DIRECT_URL=$DIRECT_URL" >> /tmp/docker.env
+            echo "DIRECT_URL=$DIRECT_URL" >> .env
+
             sudo docker run --rm --env-file /tmp/docker.env "$DOCKER_IMAGE" sh -c "
               npx prisma migrate resolve --rolled-back 20260308062000_add_recurring_closure_notices 2>&1 || true
               npx prisma migrate deploy
