@@ -377,10 +377,11 @@ router.post("/next-token", async (req, res) => {
         const tokenLangs = toLangArray(t.preferredLanguages)
         console.log(`Token #${t.tokenNumber} - Services:`, t.serviceTypes, 'Languages:', tokenLangs)
 
-        // If token has no language preference, skip it in strict mode
+        // If token has no language preference, any officer can serve it
         if (tokenLangs.length === 0) {
-          console.log(`Token #${t.tokenNumber} has no language preference - skipping`)
-          continue
+          nextToken = t
+          console.log(`✓ Token #${t.tokenNumber} has no language preference - any officer can serve`)
+          break
         }
 
         // Check if there's a language match
