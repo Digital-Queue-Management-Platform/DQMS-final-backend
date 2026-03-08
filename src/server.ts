@@ -26,6 +26,7 @@ import dgmRoutes from "./routes/dgm.routes"
 import kioskRoutes from "./routes/kiosk.routes"
 import billRoutes from "./routes/bill.routes"
 import sltSmsRoutes from "./routes/slt-sms.routes"
+import { healthTracker } from "./services/healthTracker"
 
 export const prisma = new PrismaClient()
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
@@ -321,6 +322,7 @@ const PORT = process.env.PORT || 3001
 
 server.listen(PORT, () => {
   logger.info(`Server running on port ${PORT}`)
+  healthTracker.start(prisma)
 })
 
 // Periodic job: detect long-wait tokens and create alerts
