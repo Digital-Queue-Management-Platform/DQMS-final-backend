@@ -155,14 +155,14 @@ jobs:
             echo "DIRECT_URL=$DIRECT_URL" >> .env
 
             # Neon auto-suspends inactive branches; the advisory-lock query times out
-            # during cold-start. Retry up to 3 times (15s apart) to let the branch resume,
-            # and always pass --skip-advisory-lock so PgBouncer pooled endpoints also work.
+            # during cold-start. Retry up to 3 times (15s apart) to let the branch resume.
+            # DIRECT_URL is set above so Prisma uses the direct (non-pooled) connection,
+            # which supports advisory locks without any extra flags.
             MIGRATION_SUCCESS=false
             for attempt in 1 2 3; do
               echo "Migration attempt $attempt/3..."
               if sudo docker run --rm --env-file /tmp/docker.env "$DOCKER_IMAGE" sh -c "
-                npx prisma migrate resolve --rolled-back 20260308062000_add_recurring_closure_notices 2>&1 || true
-                npx prisma migrate deploy --skip-advisory-lock
+                npx prisma migrate deploy
               "; then
                 MIGRATION_SUCCESS=true
                 break
