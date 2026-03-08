@@ -533,10 +533,10 @@ class SLTSmsService {
 
   // Refined helpers for completion messages
   private buildServiceCompletionFull(details: any, token: string | null, language: string) {
-    const fullRef = (details.refNumber || token).toString().split('/').pop()
+    const fullRef = details.refNumber || token
 
     const messages = {
-      en: `Dear Valued Customer\n\nYour token number ${token} at ${details.outletName} has been served. Ref: ${fullRef}.\n\nSLT-MOBITEL`,
+      en: `Dear Valued Customer\n\nYour token number ${token} at ${details.outletName} has been served. Track your service by Ref: ${fullRef}.\n\nSLT-MOBITEL`,
       si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${token} සේවා අවසන් විය. Ref: ${fullRef}.\n\nSLT-MOBITEL`,
       ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${token} சேவை முடிந்தது. Ref: ${fullRef}.\n\nSLT-MOBITEL`
     }
@@ -544,7 +544,7 @@ class SLTSmsService {
   }
 
   private buildServiceCompletionCompact(details: any, token: string | null, language: string) {
-    const ref = details.refNumber.split('/').pop() || token
+    const ref = details.refNumber || token
     const outlet = details.outletName.replace(/\s*(SLT|Mobitel|Office)\s*/gi, '').trim()
 
     const messages = {
