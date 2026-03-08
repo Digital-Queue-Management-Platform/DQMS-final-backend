@@ -28,7 +28,9 @@ import billRoutes from "./routes/bill.routes"
 import sltSmsRoutes from "./routes/slt-sms.routes"
 import { healthTracker } from "./services/healthTracker"
 
-export const prisma = new PrismaClient()
+export const prisma = new PrismaClient({
+  log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
+})
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 const app = express()
 const server = createServer(app)
@@ -90,14 +92,10 @@ if (process.env.PERF_LOG !== "false") {
 
 // WebSocket for real-time updates
 wss.on("connection", (ws) => {
-  console.log("Client connected")
-
-  ws.on("message", (message) => {
-    console.log("Received:", message.toString())
-  })
+  logger.debug("WS client connected")
 
   ws.on("close", () => {
-    console.log("Client disconnected")
+    logger.debug("WS client disconnected")
   })
 })
 
@@ -173,13 +171,35 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
       return res.status(400).json({ error: "Invalid 'at' date provided" })
     }
 
-    // 1. Mercantile holiday check
     const todayStart = new Date(now)
     todayStart.setHours(0, 0, 0, 0)
     const todayEnd = new Date(now)
     todayEnd.setHours(23, 59, 59, 999)
 
-    const holidays = await (prisma as any).mercantileHoliday.findMany()
+    // Run all 5 DB queries in parallel — saves up to 4× sequential round-trip latency
+    const [holidays, activeOneTime, recurringClosure, activeStandardOneTime, recurringStandard] = await Promise.all([
+      (prisma as any).mercantileHoliday.findMany({ select: { date: true, name: true, isRecurring: true } }),
+      (prisma as any).closureNotice.findFirst({
+        where: { outletId, isRecurring: false, startsAt: { lte: now }, endsAt: { gte: now }, noticeType: "closure" },
+        orderBy: { createdAt: "desc" },
+        select: { title: true, message: true }
+      }),
+      (prisma as any).closureNotice.findMany({
+        where: { outletId, isRecurring: true, noticeType: "closure" },
+        select: { title: true, message: true, isRecurring: true, recurringType: true, recurringDays: true, recurringEndDate: true, recurringStartTime: true, recurringEndTime: true, startsAt: true, endsAt: true }
+      }),
+      (prisma as any).closureNotice.findFirst({
+        where: { outletId, noticeType: "standard", isRecurring: false, startsAt: { lte: now }, endsAt: { gte: now } },
+        orderBy: { createdAt: "desc" },
+        select: { title: true, message: true }
+      }),
+      (prisma as any).closureNotice.findMany({
+        where: { outletId, noticeType: "standard", isRecurring: true },
+        select: { title: true, message: true, isRecurring: true, recurringType: true, recurringDays: true, recurringEndDate: true, recurringStartTime: true, recurringEndTime: true, startsAt: true, endsAt: true }
+      }),
+    ])
+
+    // 1. Mercantile holiday check
     for (const holiday of holidays) {
       const hDate = new Date(holiday.date)
       if (holiday.isRecurring) {
@@ -193,17 +213,7 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
       }
     }
 
-    // 2. Active one-time CLOSURE notices for this outlet (noticeType = "closure" or legacy null)
-    const activeOneTime = await (prisma as any).closureNotice.findFirst({
-      where: {
-        outletId,
-        isRecurring: false,
-        startsAt: { lte: now },
-        endsAt: { gte: now },
-        noticeType: "closure"
-      },
-      orderBy: { createdAt: "desc" }
-    })
+    // 2. Active one-time CLOSURE notice
     if (activeOneTime) {
       return res.json({
         isClosed: true,
@@ -213,15 +223,8 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
       })
     }
 
-    // 3. Recurring CLOSURE notices for this outlet
-    const recurringNotices = await (prisma as any).closureNotice.findMany({
-      where: {
-        outletId,
-        isRecurring: true,
-        noticeType: "closure"
-      }
-    })
-    for (const rn of recurringNotices) {
+    // 3. Recurring CLOSURE notices
+    for (const rn of recurringClosure) {
       if (isRecurringNoticeActive(rn, now)) {
         return res.json({
           isClosed: true,
@@ -232,25 +235,11 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
       }
     }
 
-    // 4. Active standard (dismissible) notices — branch is NOT closed, but show info banner
+    // 4. Standard (dismissible) notices — branch is NOT closed, but show info banner
     let standardNotice: { title: string; message: string } | null = null
-
-    const activeStandardOneTime = await (prisma as any).closureNotice.findFirst({
-      where: {
-        outletId,
-        noticeType: "standard",
-        isRecurring: false,
-        startsAt: { lte: now },
-        endsAt: { gte: now }
-      },
-      orderBy: { createdAt: "desc" }
-    })
     if (activeStandardOneTime) {
       standardNotice = { title: activeStandardOneTime.title, message: activeStandardOneTime.message }
     } else {
-      const recurringStandard = await (prisma as any).closureNotice.findMany({
-        where: { outletId, noticeType: "standard", isRecurring: true }
-      })
       for (const rs of recurringStandard) {
         if (isRecurringNoticeActive(rs, now)) {
           standardNotice = { title: rs.title, message: rs.message }
@@ -273,22 +262,18 @@ app.get("/api/outlet-notices/:outletId", async (req, res) => {
     const { outletId } = req.params
     const now = new Date()
 
-    // Fetch active one-time standard notices
-    const oneTime = await (prisma as any).closureNotice.findMany({
-      where: {
-        outletId,
-        noticeType: "standard",
-        isRecurring: false,
-        startsAt: { lte: now },
-        endsAt: { gte: now }
-      },
-      orderBy: { createdAt: "desc" }
-    })
-
-    // Fetch recurring standard notices and filter by current time
-    const recurring = await (prisma as any).closureNotice.findMany({
-      where: { outletId, noticeType: "standard", isRecurring: true }
-    })
+    // Fetch both notice types in parallel
+    const [oneTime, recurring] = await Promise.all([
+      (prisma as any).closureNotice.findMany({
+        where: { outletId, noticeType: "standard", isRecurring: false, startsAt: { lte: now }, endsAt: { gte: now } },
+        orderBy: { createdAt: "desc" },
+        select: { title: true, message: true }
+      }),
+      (prisma as any).closureNotice.findMany({
+        where: { outletId, noticeType: "standard", isRecurring: true },
+        select: { title: true, message: true, isRecurring: true, recurringType: true, recurringDays: true, recurringEndDate: true, recurringStartTime: true, recurringEndTime: true, startsAt: true, endsAt: true }
+      }),
+    ])
     const activeRecurring = recurring.filter((n: any) => isRecurringNoticeActive(n, now))
 
     const notices = [...oneTime, ...activeRecurring]

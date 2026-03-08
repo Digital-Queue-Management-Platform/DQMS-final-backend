@@ -95,7 +95,6 @@ router.use(authenticateAdmin)
 router.get("/analytics", async (req, res) => {
   try {
     const { startDate, endDate, outletId } = req.query
-    console.log('Analytics request:', { startDate, endDate, outletId })
 
     const where: any = {
       status: "completed",
@@ -109,27 +108,30 @@ router.get("/analytics", async (req, res) => {
       where.outletId = outletId
     }
 
-    console.log('Query where clause:', where)
-
-    // Total completed tokens
-    const totalTokens = await prisma.token.count({
-      where: {
-        ...where,
-        status: "completed",
-      }
-    })
-    console.log('Total tokens found:', totalTokens)
-
-    // Average waiting time
-    const completedTokens = await prisma.token.findMany({
-      where: {
-        ...where,
-        status: "completed",
-        startedAt: { not: undefined },
-        createdAt: { not: undefined },
-      },
-    })
-    console.log('Completed tokens found for avg calculation:', completedTokens.length)
+    // Run independent queries in parallel
+    const [totalTokens, completedTokens, feedbackStats, officerPerformance, serviceTypes] = await Promise.all([
+      prisma.token.count({ where: { ...where, status: "completed" } }),
+      // Only fetch the 3 timestamp fields needed — avoids transferring unused columns
+      prisma.token.findMany({
+        where: { ...where, status: "completed", startedAt: { not: undefined }, createdAt: { not: undefined } },
+        select: { startedAt: true, createdAt: true, completedAt: true },
+      }),
+      prisma.feedback.groupBy({
+        by: ["rating"],
+        where: { token: { ...where, status: "completed" } },
+        _count: true,
+      }),
+      prisma.token.groupBy({
+        by: ["assignedTo"],
+        where: { ...where, status: "completed", assignedTo: { not: null } },
+        _count: true,
+      }),
+      prisma.token.groupBy({
+        by: ["serviceTypes"],
+        where: { ...where, status: "completed" },
+        _count: true,
+      }),
+    ])
 
     const avgWaitTime =
       completedTokens.length > 0
@@ -142,7 +144,6 @@ router.get("/analytics", async (req, res) => {
         }, 0) / completedTokens.length
         : 0
 
-    // Average service time
     const avgServiceTime =
       completedTokens.length > 0
         ? completedTokens.reduce((sum, token) => {
@@ -154,57 +155,38 @@ router.get("/analytics", async (req, res) => {
         }, 0) / completedTokens.length
         : 0
 
-    // Feedback stats
-    const feedbackStats = await prisma.feedback.groupBy({
-      by: ["rating"],
-      where: {
-        token: {
-          ...where,
-          status: "completed"
-        }
-      },
-      _count: true,
+    // Batch-fetch all officers and all relevant feedbacks in 2 queries instead of N+N
+    const officerIds = officerPerformance.map(p => p.assignedTo!).filter(Boolean)
+    const [officerRecords, allFeedbacks] = await Promise.all([
+      officerIds.length > 0
+        ? prisma.officer.findMany({ where: { id: { in: officerIds } }, include: { outlet: true } })
+        : Promise.resolve([]),
+      officerIds.length > 0
+        ? prisma.feedback.findMany({
+            where: { token: { assignedTo: { in: officerIds }, createdAt: where.completedAt } },
+            select: { rating: true, token: { select: { assignedTo: true } } }
+          })
+        : Promise.resolve([]),
+    ])
+    const officerMap = new Map(officerRecords.map(o => [o.id, o]))
+    const feedbacksByOfficer = allFeedbacks.reduce<Map<string, number[]>>((acc, f) => {
+      const oid = f.token.assignedTo
+      if (oid) { if (!acc.has(oid)) acc.set(oid, []); acc.get(oid)!.push(f.rating) }
+      return acc
+    }, new Map())
+
+    const officerDetails = officerPerformance.map((perf) => {
+      const ratings = feedbacksByOfficer.get(perf.assignedTo!) ?? []
+      const avgRating = ratings.length > 0 ? ratings.reduce((s, r) => s + r, 0) / ratings.length : 0
+      return {
+        officer: officerMap.get(perf.assignedTo!) ?? null,
+        tokensHandled: perf._count,
+        avgRating,
+        feedbackCount: ratings.length,
+      }
     })
 
-    // Officer performance
-    const officerPerformance = await prisma.token.groupBy({
-      by: ["assignedTo"],
-      where: {
-        ...where,
-        status: "completed",
-        assignedTo: { not: null },
-      },
-      _count: true,
-    })
-
-    const officerDetails = await Promise.all(
-      officerPerformance.map(async (perf) => {
-        const officer = await prisma.officer.findUnique({
-          where: { id: perf.assignedTo! },
-          include: { outlet: true },
-        })
-
-        const feedbacks = await prisma.feedback.findMany({
-          where: {
-            token: {
-              assignedTo: perf.assignedTo!,
-              createdAt: where.createdAt,
-            },
-          },
-        })
-
-        const avgRating = feedbacks.length > 0 ? feedbacks.reduce((sum, f) => sum + f.rating, 0) / feedbacks.length : 0
-
-        return {
-          officer,
-          tokensHandled: perf._count,
-          avgRating,
-          feedbackCount: feedbacks.length,
-        }
-      }),
-    )
-
-    // Generate hourly waiting times (8 AM to 6 PM)
+    // Generate hourly waiting times (8 AM to 6 PM) — in-memory from already-fetched data
     const hourlyWaitingTimes = []
     for (let hour = 8; hour <= 18; hour++) {
       const hourStart = new Date(startDate ? new Date(startDate as string) : new Date())
@@ -233,25 +215,10 @@ router.get("/analytics", async (req, res) => {
       })
     }
 
-    // Generate service types data
-    const serviceTypes = await prisma.token.groupBy({
-      by: ["serviceTypes"],
-      where: {
-        ...where,
-        status: "completed",
-      },
-      _count: true,
-    })
-
     const serviceTypesFormatted = serviceTypes.map(service => {
-      // serviceTypes is an array, so we need to handle it differently
-      const serviceTypeArray = Array.isArray(service.serviceTypes) ? service.serviceTypes : [];
-      const firstServiceType = serviceTypeArray.length > 0 ? serviceTypeArray[0] : "other";
-
-      return {
-        name: firstServiceType,
-        count: service._count
-      };
+      const serviceTypeArray = Array.isArray(service.serviceTypes) ? service.serviceTypes : []
+      const firstServiceType = serviceTypeArray.length > 0 ? serviceTypeArray[0] : "other"
+      return { name: firstServiceType, count: service._count }
     })
 
     res.json({
@@ -357,32 +324,21 @@ router.get("/dashboard/realtime", async (req, res) => {
     const today = new Date()
     today.setHours(0, 0, 0, 0)
 
-    const activeTokens = await prisma.token.count({
-      where: {
-        createdAt: { gte: today },
-        status: { in: ["waiting", "in_service"] },
-      },
-    })
-
-    const completedToday = await prisma.token.count({
-      where: {
-        createdAt: { gte: today },
-        status: "completed",
-      },
-    })
-
-    const activeOfficers = await prisma.officer.count({
-      where: {
-        status: { in: ["available", "serving"] },
-      },
-    })
-
-    const avgRatingToday = await prisma.feedback.aggregate({
-      where: {
-        createdAt: { gte: today },
-      },
-      _avg: { rating: true },
-    })
+    const [activeTokens, completedToday, activeOfficers, avgRatingToday] = await Promise.all([
+      prisma.token.count({
+        where: { createdAt: { gte: today }, status: { in: ["waiting", "in_service"] } },
+      }),
+      prisma.token.count({
+        where: { createdAt: { gte: today }, status: "completed" },
+      }),
+      prisma.officer.count({
+        where: { status: { in: ["available", "serving"] } },
+      }),
+      prisma.feedback.aggregate({
+        where: { createdAt: { gte: today } },
+        _avg: { rating: true },
+      }),
+    ])
 
     res.json({
       activeTokens,
