@@ -161,14 +161,25 @@ jobs:
             MIGRATION_SUCCESS=false
             for attempt in 1 2 3; do
               echo "Migration attempt $attempt/3..."
-              if sudo docker run --rm --env-file /tmp/docker.env "$DOCKER_IMAGE" sh -c "
-                npx prisma migrate deploy
-              "; then
+              MIGRATION_OUTPUT=$(sudo docker run --rm --env-file /tmp/docker.env "$DOCKER_IMAGE" sh -c "
+                npx prisma migrate deploy 2>&1
+              " || true)
+              echo "$MIGRATION_OUTPUT"
+              
+              # Check if migration was successful (either no pending migrations or successful apply)
+              if echo "$MIGRATION_OUTPUT" | grep -q "No pending migrations to apply\|migrations? applied"; then
                 MIGRATION_SUCCESS=true
                 break
               fi
-              echo "Migration attempt $attempt failed. Waiting 15s before retry..."
-              sleep 15
+              
+              # If there was a connection/timeout error, retry
+              if echo "$MIGRATION_OUTPUT" | grep -q "timeout\|Connection\|ENOTFOUND\|advisory lock"; then
+                echo "Migration attempt $attempt failed (connection/timeout). Waiting 15s before retry..."
+                sleep 15
+              else
+                echo "Migration attempt $attempt failed with unexpected error. Stopping retries."
+                break
+              fi
             done
 
             if [ "\$MIGRATION_SUCCESS" != "true" ]; then
