@@ -1810,11 +1810,13 @@ router.get("/audit-logs", async (req: any, res) => {
       officerId,
       logType = "all",    // all | completed_services | transfers | breaks | service_cases
       page = "1",
-      limit = "50"
+      limit = "50",
+      export: isExport = "false"
     } = req.query
 
     const pageNum = Math.max(1, parseInt(page as string))
-    const limitNum = Math.min(200, Math.max(1, parseInt(limit as string)))
+    const maxLimit = isExport === "true" ? 10000 : 200
+    const limitNum = Math.min(maxLimit, Math.max(1, parseInt(limit as string)))
 
     // ── Date range calculation ──────────────────────────────────────────────
     const now = new Date()
