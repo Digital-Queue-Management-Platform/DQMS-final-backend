@@ -1018,6 +1018,18 @@ router.post("/complete-service", async (req, res) => {
 
         const isBillPayment = Array.isArray((token as any).serviceTypes) && ((token as any).serviceTypes.includes('SVC002') || (token as any).serviceTypes.includes('BILL_PAYMENT'))
 
+        // Build tracking URL used by all service completion SMS messages
+        const trackRef = `/service/status?ref=${encodeURIComponent(serviceCase.refNumber)}`
+        const smsOrigins = (process.env.FRONTEND_ORIGIN || '').split(',').map((s: string) => s.trim()).filter(Boolean)
+        let smsBaseUrl = smsOrigins[0] || ''
+        const smsVercelUrl = smsOrigins.find((o: string) => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+        if (smsVercelUrl) {
+          smsBaseUrl = smsVercelUrl
+        } else if (process.env.NODE_ENV === 'production') {
+          smsBaseUrl = smsOrigins.find((o: string) => o.startsWith('https://') && !o.includes('localhost')) || smsBaseUrl
+        }
+        const completionTrackingUrl = smsBaseUrl ? `${smsBaseUrl}${trackRef}` : undefined
+
         if (isBillPayment) {
           // Resolve the actual payment amount for the SMS
           let billPaymentAmount: number | undefined = (token as any).billPaymentAmount ?? undefined
@@ -1040,6 +1052,7 @@ router.post("/complete-service", async (req, res) => {
             paymentIntent: (token as any).billPaymentIntent || 'not_specified',
             paymentAmount: billPaymentAmount,
             paymentMethod: (token as any).billPaymentMethod || undefined,
+            trackingUrl: completionTrackingUrl,
           })
           console.log(`✓ Bill payment confirmation SMS sent to ${token.customer.mobileNumber}`)
         } else {
@@ -1049,7 +1062,8 @@ router.post("/complete-service", async (req, res) => {
             refNumber: serviceCase.refNumber,
             services,
             feedbackUrl,
-            outletName: token.outlet?.name || 'SLT Office'
+            outletName: token.outlet?.name || 'SLT Office',
+            trackingUrl: completionTrackingUrl,
           }, customerLang)
           console.log(`✓ Service completion SMS sent to ${token.customer.mobileNumber}`)
         }

@@ -489,6 +489,7 @@ class SLTSmsService {
       services: string
       feedbackUrl: string
       outletName: string
+      trackingUrl?: string
     },
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
@@ -534,24 +535,28 @@ class SLTSmsService {
 
   // Refined helpers for completion messages
   private buildServiceCompletionFull(details: any, token: string | null, language: string) {
-    const fullRef = details.refNumber || token
+    const trackLine = details.trackingUrl
+      ? `Track: ${details.trackingUrl}`
+      : `Ref: ${details.refNumber || token}`
 
     const messages = {
-      en: `Dear Valued Customer\n\nYour token number ${token} at ${details.outletName} has been served. Track your service by Ref: ${fullRef}.\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${token} සේවා අවසන් විය. Ref: ${fullRef}.\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${token} சேவை முடிந்தது. Ref: ${fullRef}.\n\nSLT-MOBITEL`
+      en: `Dear Valued Customer\n\nYour token number ${token} at ${details.outletName} has been served. ${trackLine}\n\nThank you for choosing SLT-MOBITEL.`,
+      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${token} සේවා අවසන් විය. ${trackLine}\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${token} சேவை முடிந்தது. ${trackLine}\n\nSLT-MOBITEL`
     }
     return (messages as any)[language] || messages.en
   }
 
   private buildServiceCompletionCompact(details: any, token: string | null, language: string) {
-    const ref = details.refNumber || token
     const outlet = details.outletName.replace(/\s*(SLT|Mobitel|Office)\s*/gi, '').trim()
+    const trackLine = details.trackingUrl
+      ? `Track: ${details.trackingUrl}`
+      : `Ref: ${details.refNumber || token}`
 
     const messages = {
-      en: `Dear Valued Customer\n\nToken ${token} at ${outlet} served. Ref: ${ref}.\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\n${outlet} හි ටෝකන් ${token} සේවා අවසන්. Ref: ${ref}.\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\n${outlet} இல் டோக்கன் ${token} முடிந்தது. Ref: ${ref}.\n\nSLT-MOBITEL`
+      en: `Dear Valued Customer\n\nToken ${token} at ${outlet} served. ${trackLine}\n\nThank you for choosing SLT-MOBITEL.`,
+      si: `ගරු පාරිභෝගිකයා\n\n${outlet} හි ටෝකන් ${token} සේවා අවසන්. ${trackLine}\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${outlet} இல் டோக்கன் ${token} முடிந்தது. ${trackLine}\n\nSLT-MOBITEL`
     }
     return (messages as any)[language] || messages.en
   }
@@ -843,6 +848,7 @@ class SLTSmsService {
       paymentIntent: string   // 'full' | 'partial' | 'not_specified'
       paymentAmount?: number  // amount paid (due amount for full, custom for partial)
       paymentMethod?: string  // 'cash' | 'card' | 'cheque' | 'bank_transfer'
+      trackingUrl?: string    // full URL for customer to track the service case
     }
   ): Promise<SMSResponse> {
     const formattedToken = details.tokenNumber.toString().padStart(3, '0')
@@ -866,7 +872,10 @@ class SLTSmsService {
     const methodPart = methodLabel ? ` via ${methodLabel}` : ''
     const amountPart = paymentLine ? `\nAmount: ${paymentLine}${methodPart}` : (methodLabel ? `\nPayment Method: ${methodLabel}` : '')
 
-    const message = `Dear Valued Customer\n\nYour bill payment at ${outlet} has been completed.${amountPart}\nRef: ${details.refNumber}\n\nSLT-MOBITEL`
+    const trackLine = details.trackingUrl
+      ? `\nTrack: ${details.trackingUrl}`
+      : `\nRef: ${details.refNumber}`
+    const message = `Dear Valued Customer\n\nYour bill payment at ${outlet} has been completed.${amountPart}${trackLine}\n\nThank you for choosing SLT-MOBITEL.`
 
     console.log(`[SLT SMS PAYMENT] Sending bill payment confirmation to ${mobileNumber}: "${message}"`)
 
