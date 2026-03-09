@@ -1485,5 +1485,102 @@ router.post("/restore", authenticateAdmin, async (req: any, res) => {
   }
 })
 
+// Test email service
+router.post("/test/email", async (req, res) => {
+  try {
+    const { email } = req.body
+
+    if (!email) {
+      return res.status(400).json({ error: "Email address is required" })
+    }
+
+    // Validate email format
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: "Invalid email format" })
+    }
+
+    // Send test email
+    const mailOptions = {
+      from: {
+        name: 'Digital Queue Management System',
+        address: process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@dqms.com'
+      },
+      to: email,
+      subject: `DQMS Test Email - Service Verification`,
+      html: `
+        <div style="font-family: Arial, sans-serif; color: #333;">
+          <h2>DQMS Email Service Test</h2>
+          <p>This is a test email from the Digital Queue Management System.</p>
+          <p>If you received this email, the email service is working correctly.</p>
+          <p>
+            <strong>Test Date:</strong> ${new Date().toLocaleString()}<br>
+            <strong>System:</strong> DQMS Admin Dashboard
+          </p>
+          <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
+          <p style="font-size: 12px; color: #999;">
+            This is an automated test message. Please ignore if you did not request this.
+          </p>
+        </div>
+      `,
+      text: `
+DQMS Email Service Test
+
+This is a test email from the Digital Queue Management System.
+If you received this email, the email service is working correctly.
+
+Test Date: ${new Date().toLocaleString()}
+System: DQMS Admin Dashboard
+
+---
+This is an automated test message. Please ignore if you did not request this.
+      `
+    }
+
+    const result = await emailService.sendTestEmail(email, mailOptions)
+    
+    if (result) {
+      res.json({ success: true, message: `Test email sent to ${email}` })
+    } else {
+      res.status(500).json({ error: "Failed to send test email" })
+    }
+  } catch (error: any) {
+    console.error("Test email error:", error)
+    res.status(500).json({ error: "Test email failed: " + (error?.message || "Unknown error") })
+  }
+})
+
+// Test SMS service
+router.post("/test/sms", async (req, res) => {
+  try {
+    const { phoneNumber } = req.body
+
+    if (!phoneNumber) {
+      return res.status(400).json({ error: "Phone number is required" })
+    }
+
+    // Validate phone number format
+    if (!isValidSLMobile(phoneNumber)) {
+      return res.status(400).json({ error: "Invalid phone number format. Please use a valid Sri Lankan mobile number." })
+    }
+
+    // Send test SMS
+    const testMessage = `DQMS Service Test: SMS service is working correctly. Time: ${new Date().toLocaleTimeString()}`
+    
+    const result = await sltSmsService.sendSMS({
+      to: phoneNumber,
+      message: testMessage
+    })
+
+    if (result.success) {
+      res.json({ success: true, message: `Test SMS sent to ${phoneNumber}`, messageId: result.messageId })
+    } else {
+      res.status(500).json({ error: `Failed to send test SMS: ${result.error}` })
+    }
+  } catch (error: any) {
+    console.error("Test SMS error:", error)
+    res.status(500).json({ error: "Test SMS failed: " + (error?.message || "Unknown error") })
+  }
+})
+
 export default router
 

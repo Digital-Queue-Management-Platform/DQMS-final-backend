@@ -604,6 +604,17 @@ SLT-MOBITEL
       return false
     }
   }
+
+  async sendTestEmail(email: string, mailOptions: any): Promise<boolean> {
+    try {
+      const result = await this.transporter.sendMail(mailOptions)
+      console.log('Test email sent successfully:', result.messageId)
+      return true
+    } catch (error) {
+      console.error('Failed to send test email:', error)
+      return false
+    }
+  }
 }
 
 export default new EmailService()
