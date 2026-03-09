@@ -98,7 +98,15 @@ router.post("/book", async (req, res) => {
     // Best-effort SMS confirmation via unified SMS helper (localized by preferredLanguage)
     try {
       const when = new Date(appointmentAt)
-      const whenStr = when.toLocaleString()
+      const whenStr = when.toLocaleString('en-GB', {
+        timeZone: 'Asia/Colombo',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      })
 
       // Map service codes to titles for SMS
       const serviceRecords = await prisma.service.findMany({
