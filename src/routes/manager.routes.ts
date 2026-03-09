@@ -237,7 +237,7 @@ router.get("/me", async (req, res) => {
 })
 
 // Get full service case details (RTOM)
-router.get("/service-case/:refNumber", async (req, res) => {
+router.get("/service-case/*", async (req, res) => {
   try {
     let token = (req as any).cookies?.dq_manager_jwt
     if (!token) {
@@ -248,9 +248,9 @@ router.get("/service-case/:refNumber", async (req, res) => {
     let payload: any
     try { payload = (jwt as any).verify(token, JWT_SECRET) } catch { return res.status(401).json({ error: "Invalid token" }) }
 
-    const { refNumber } = req.params
+    const refNumber = decodeURIComponent((req.params as any)[0])
     const sc: any = await (prisma as any).serviceCase.findUnique({
-      where: { refNumber: decodeURIComponent(refNumber) },
+      where: { refNumber },
       include: {
         customer: true,
         officer: true,

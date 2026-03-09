@@ -1404,13 +1404,13 @@ router.post('/service-case/complete', async (req: any, res) => {
 })
 
 // Get comprehensive service case details (Teleshop Manager)
-router.get('/service-case/:refNumber', async (req: any, res) => {
+router.get('/service-case/*', async (req: any, res) => {
   try {
     const tm = req.teleshopManager
-    const { refNumber } = req.params
+    const refNumber = decodeURIComponent((req.params as any)[0])
 
     const sc: any = await (prisma as any).serviceCase.findUnique({
-      where: { refNumber: decodeURIComponent(refNumber) },
+      where: { refNumber },
       include: {
         customer: true,
         officer: true,
