@@ -1325,6 +1325,144 @@ router.post('/service-case/complete', async (req: any, res) => {
   }
 })
 
+// Get comprehensive service case details (Teleshop Manager)
+router.get('/service-case/:refNumber', async (req: any, res) => {
+  try {
+    const tm = req.teleshopManager
+    const { refNumber } = req.params
+
+    const sc: any = await (prisma as any).serviceCase.findUnique({
+      where: { refNumber: decodeURIComponent(refNumber) },
+      include: {
+        customer: true,
+        officer: true,
+        outlet: true,
+        token: {
+          include: {
+            feedback: true,
+            transferLogs: {
+              include: {
+                fromOfficer: { select: { id: true, name: true, counterNumber: true } }
+              },
+              orderBy: { createdAt: 'asc' }
+            }
+          }
+        },
+        updates: { orderBy: { createdAt: 'asc' } }
+      }
+    })
+
+    if (!sc) return res.status(404).json({ error: 'Reference not found' })
+
+    // Authorization: case must belong to teleshop manager's outlet
+    if (tm.branchId && sc.outletId !== tm.branchId) {
+      return res.status(403).json({ error: 'Access denied: case not from your assigned outlet' })
+    }
+
+    // Resolve service titles from codes
+    const serviceCodes: string[] = sc.serviceTypes || []
+    const serviceRecords = serviceCodes.length > 0
+      ? await prisma.service.findMany({
+          where: { code: { in: serviceCodes } },
+          select: { code: true, title: true }
+        })
+      : []
+    const serviceTitleMap: Record<string, string> = {}
+    for (const s of serviceRecords) serviceTitleMap[s.code] = s.title
+
+    const token = sc.token
+    const feedback = token?.feedback || null
+
+    // Compute time spans
+    const waitDurationMs = token?.calledAt && token?.createdAt
+      ? new Date(token.calledAt).getTime() - new Date(token.createdAt).getTime()
+      : null
+    const serviceDurationMs = token?.completedAt && token?.startedAt
+      ? new Date(token.completedAt).getTime() - new Date(token.startedAt).getTime()
+      : null
+    const totalDurationMs = token?.completedAt && token?.createdAt
+      ? new Date(token.completedAt).getTime() - new Date(token.createdAt).getTime()
+      : null
+
+    res.json({
+      refNumber: sc.refNumber,
+      status: sc.status,
+      serviceTypes: sc.serviceTypes,
+      services: (sc.serviceTypes || []).map((code: string) => ({
+        code,
+        title: serviceTitleMap[code] || code
+      })),
+      createdAt: sc.createdAt,
+      completedAt: sc.completedAt,
+      lastUpdatedAt: sc.lastUpdatedAt,
+      outlet: { id: sc.outlet.id, name: sc.outlet.name, location: sc.outlet.location },
+      customer: {
+        id: sc.customer.id,
+        name: sc.customer.name,
+        mobileNumber: sc.customer.mobileNumber,
+        nicNumber: sc.customer.nicNumber || null,
+        email: sc.customer.email || null,
+        sltMobileNumber: sc.customer.sltMobileNumber || null,
+      },
+      officer: {
+        id: sc.officer.id,
+        name: sc.officer.name,
+        mobileNumber: sc.officer.mobileNumber,
+        counterNumber: sc.officer.counterNumber || null,
+      },
+      token: token ? {
+        id: token.id,
+        tokenNumber: token.tokenNumber,
+        isPriority: token.isPriority,
+        isTransferred: token.isTransferred,
+        preferredLanguages: token.preferredLanguages,
+        accountRef: token.accountRef || null,
+        sltTelephoneNumber: token.sltTelephoneNumber || null,
+        billPaymentIntent: token.billPaymentIntent || null,
+        billPaymentAmount: token.billPaymentAmount ?? null,
+        billPaymentMethod: token.billPaymentMethod || null,
+        createdAt: token.createdAt,
+        calledAt: token.calledAt || null,
+        startedAt: token.startedAt || null,
+        completedAt: token.completedAt || null,
+      } : null,
+      timeSpans: {
+        waitDurationMs,
+        serviceDurationMs,
+        totalDurationMs,
+      },
+      transferLogs: (token?.transferLogs || []).map((tl: any) => ({
+        id: tl.id,
+        fromOfficer: tl.fromOfficer,
+        fromCounterNumber: tl.fromCounterNumber,
+        toCounterNumber: tl.toCounterNumber,
+        previousServiceTypes: tl.previousServiceTypes,
+        newServiceTypes: tl.newServiceTypes,
+        notes: tl.notes,
+        createdAt: tl.createdAt,
+      })),
+      feedback: feedback ? {
+        rating: feedback.rating,
+        comment: feedback.comment || null,
+        createdAt: feedback.createdAt,
+        isResolved: (feedback as any).isResolved || false,
+        resolutionComment: (feedback as any).resolutionComment || null,
+      } : null,
+      updates: (sc.updates || []).map((u: any) => ({
+        id: u.id,
+        actorRole: u.actorRole,
+        actorId: u.actorId,
+        status: u.status,
+        note: u.note,
+        createdAt: u.createdAt,
+      }))
+    })
+  } catch (e) {
+    console.error('Teleshop manager service-case get error:', e)
+    res.status(500).json({ error: 'Failed to fetch service case' })
+  }
+})
+
 // Get alerts for Teleshop Manager (specifically 3-star feedback alerts)
 router.get("/alerts", async (req: any, res) => {
   try {
@@ -1660,11 +1798,31 @@ router.get("/audit-logs", async (req: any, res) => {
                   billPaymentMethod: true,
                   billPaymentAmount: true,
                   isPriority: true,
-                  customer: { select: { id: true, name: true, mobileNumber: true } }
+                  isTransferred: true,
+                  accountRef: true,
+                  sltTelephoneNumber: true,
+                  preferredLanguages: true,
+                  createdAt: true,
+                  calledAt: true,
+                  startedAt: true,
+                  completedAt: true,
+                  customer: { select: { id: true, name: true, mobileNumber: true, nicNumber: true, email: true } },
+                  serviceCases: {
+                    select: {
+                      refNumber: true,
+                      status: true,
+                      createdAt: true,
+                      completedAt: true,
+                      lastUpdatedAt: true,
+                      updates: { orderBy: { createdAt: "desc" }, take: 10 }
+                    },
+                    take: 1
+                  }
                 }
               },
               service: { select: { id: true, code: true, title: true } },
-              officer: { select: { id: true, name: true, counterNumber: true } }
+              officer: { select: { id: true, name: true, counterNumber: true, mobileNumber: true } },
+              outlet: { select: { id: true, name: true, location: true } }
             },
             orderBy: { completedAt: "desc" }
           })
@@ -1739,22 +1897,76 @@ router.get("/audit-logs", async (req: any, res) => {
 
     // Completed services
     for (const cs of completedServices as any[]) {
+      const tok = cs.token ?? null
+      const sc = tok?.serviceCases?.[0] ?? null
+
+      // Compute time spans in ms
+      const tokenIssuedAt = tok?.createdAt ?? null
+      const calledAt = tok?.calledAt ?? null
+      const startedAt = tok?.startedAt ?? null
+      const completedAt = tok?.completedAt ?? cs.completedAt ?? null
+      const waitDurationMs =
+        calledAt && tokenIssuedAt
+          ? new Date(calledAt).getTime() - new Date(tokenIssuedAt).getTime()
+          : null
+      const serviceDurationMs =
+        completedAt && startedAt
+          ? new Date(completedAt).getTime() - new Date(startedAt).getTime()
+          : null
+      const totalDurationMs =
+        completedAt && tokenIssuedAt
+          ? new Date(completedAt).getTime() - new Date(tokenIssuedAt).getTime()
+          : null
+
       entries.push({
         id: cs.id,
         type: "completed_service",
         timestamp: cs.completedAt,
         officer: cs.officer ?? null,
-        description: `Token #${cs.token?.tokenNumber} — ${cs.service?.title || cs.service?.code} completed`,
+        description: `Token #${tok?.tokenNumber} — ${cs.service?.title || cs.service?.code} completed`,
         meta: {
-          tokenNumber: cs.token?.tokenNumber,
-          customer: cs.token?.customer,
+          // Basic
+          tokenNumber: tok?.tokenNumber,
           service: cs.service,
           durationSeconds: cs.duration ?? null,
           notes: cs.notes ?? null,
-          billPaymentIntent: cs.token?.billPaymentIntent ?? null,
-          billPaymentMethod: cs.token?.billPaymentMethod ?? null,
-          billPaymentAmount: cs.token?.billPaymentAmount ?? null,
-          isPriority: cs.token?.isPriority ?? false
+          // Customer
+          customer: tok?.customer
+            ? { ...tok.customer, preferredLanguages: tok.preferredLanguages ?? [] }
+            : null,
+          // Officer enriched
+          officerMobile: cs.officer?.mobileNumber ?? null,
+          // Token details
+          isPriority: tok?.isPriority ?? false,
+          isTransferred: tok?.isTransferred ?? false,
+          accountRef: tok?.accountRef ?? null,
+          sltTelephoneNumber: tok?.sltTelephoneNumber ?? null,
+          // Timeline
+          tokenIssuedAt,
+          calledAt,
+          startedAt,
+          completedAt,
+          // Durations
+          waitDurationMs,
+          serviceDurationMs,
+          totalDurationMs,
+          // Bill payment
+          billPaymentIntent: tok?.billPaymentIntent ?? null,
+          billPaymentMethod: tok?.billPaymentMethod ?? null,
+          billPaymentAmount: tok?.billPaymentAmount ?? null,
+          // Outlet
+          outlet: cs.outlet ?? null,
+          // Service case
+          serviceCase: sc
+            ? {
+                refNumber: sc.refNumber,
+                status: sc.status,
+                createdAt: sc.createdAt,
+                completedAt: sc.completedAt,
+                lastUpdatedAt: sc.lastUpdatedAt,
+                updates: sc.updates ?? []
+              }
+            : null
         }
       })
     }

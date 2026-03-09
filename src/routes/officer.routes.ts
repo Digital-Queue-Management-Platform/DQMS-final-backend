@@ -1623,7 +1623,7 @@ router.get("/stats/:officerId", async (req, res) => {
 
     // If the current token is a bill payment service, fetch the SLT bill data
     let billData = null
-    if (currentToken && (currentToken.serviceTypes as string[]).includes('SVC002') && (currentToken as any).sltTelephoneNumber) {
+    if (currentToken && ((currentToken.serviceTypes as string[]).includes('SVC002') || (currentToken.serviceTypes as string[]).includes('BILL_PAYMENT')) && (currentToken as any).sltTelephoneNumber) {
       try {
         billData = await prisma.sltBill.findUnique({
           where: { telephoneNumber: (currentToken as any).sltTelephoneNumber },

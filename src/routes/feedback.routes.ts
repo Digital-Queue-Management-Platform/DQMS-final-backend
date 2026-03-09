@@ -112,10 +112,18 @@ router.post("/submit", async (req, res) => {
           })
           
           if (service && token.assignedTo) {
+            const durationSeconds =
+              (token as any).startedAt && (token as any).completedAt
+                ? Math.round(
+                    (new Date((token as any).completedAt).getTime() -
+                      new Date((token as any).startedAt).getTime()) /
+                      1000
+                  )
+                : undefined
             await FeedbackService.createCompletedService(
               tokenId,
               service.id,
-              undefined, // duration - could be calculated from startedAt/completedAt
+              durationSeconds,
               `Service completed for token ${token.tokenNumber}`
             )
           }
