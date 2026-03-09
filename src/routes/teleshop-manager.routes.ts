@@ -9,6 +9,27 @@ import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
 const router = Router()
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
+
+// Helper to write an audit log entry (fire-and-forget, non-blocking)
+const auditLog = (
+  teleshopManagerId: string,
+  action: string,
+  entityType?: string,
+  entityId?: string,
+  details?: object
+) => {
+  (prisma as any).teleshopManagerAuditLog
+    .create({
+      data: {
+        teleshopManagerId,
+        action,
+        entityType: entityType ?? null,
+        entityId: entityId ?? null,
+        details: details ?? null,
+      },
+    })
+    .catch((err: any) => console.error("Audit log error:", err))
+}
 const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
 
 // Request OTP for teleshop manager login
@@ -92,6 +113,10 @@ router.post("/login", async (req, res) => {
       data: { lastLoginAt: new Date() }
     })
 
+    auditLog(teleshopManager.id, "LOGIN", "teleshop_manager", teleshopManager.id, {
+      mobileNumber: teleshopManager.mobileNumber,
+    })
+
     // Create JWT token for teleshop manager authentication
     const tokenOptions: any = {
       teleshopManagerId: teleshopManager.id,
@@ -141,14 +166,30 @@ router.post("/login", async (req, res) => {
 })
 
 // Teleshop Manager logout
-router.post("/logout", async (req, res) => {
+router.post("/logout", async (req: any, res) => {
   try {
+    // Log before clearing cookie
+    const authHeader = req.headers.authorization
+    let managerId: string | null = null
+    try {
+      const rawToken = req.cookies?.dq_teleshop_manager_jwt ||
+        (authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : null)
+      if (rawToken) {
+        const payload: any = (jwt as any).verify(rawToken, JWT_SECRET)
+        managerId = payload?.teleshopManagerId ?? null
+      }
+    } catch (_) {}
+
     res.clearCookie("dq_teleshop_manager_jwt", {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       path: "/",
     })
+
+    if (managerId) {
+      auditLog(managerId, "LOGOUT", "teleshop_manager", managerId)
+    }
 
     res.json({
       success: true,
@@ -272,6 +313,10 @@ router.post("/kiosk-settings", async (req: any, res) => {
     const outlet = await prisma.outlet.update({
       where: { id: teleshopManager.branchId },
       data: { kioskPassword }
+    })
+
+    auditLog(teleshopManager.id, "KIOSK_PASSWORD_UPDATED", "outlet", outlet.id, {
+      outletName: outlet.name,
     })
 
     res.json({
@@ -447,6 +492,12 @@ router.post("/officers", async (req: any, res) => {
       loginUrl
     }).catch(err => console.error("Officer welcome SMS failed:", err))
 
+    auditLog(teleshopManager.id, "OFFICER_CREATED", "officer", officer.id, {
+      name: officer.name,
+      mobileNumber: officer.mobileNumber,
+      outletId: officer.outletId,
+    })
+
     res.json({ success: true, officer })
   } catch (error: any) {
     console.error("Teleshop Manager officer creation error:", error)
@@ -503,6 +554,8 @@ router.patch("/officers/:officerId", async (req: any, res) => {
         outlet: true
       }
     })
+
+    auditLog(teleshopManager.id, "OFFICER_UPDATED", "officer", officerId, updateData)
 
     res.json({ success: true, officer: updatedOfficer })
   } catch (error: any) {
@@ -589,6 +642,11 @@ router.patch("/officers/:officerId/assign-counter", async (req: any, res) => {
       data: { officerId, counterNumber: updatedOfficer.counterNumber }
     })
 
+    auditLog(teleshopManager.id, "OFFICER_COUNTER_ASSIGNED", "officer", officerId, {
+      counterNumber: updatedOfficer.counterNumber,
+      officerName: updatedOfficer.name,
+    })
+
     res.json({ success: true, officer: updatedOfficer })
   } catch (error: any) {
     console.error("Assign counter error:", error)
@@ -621,6 +679,11 @@ router.delete("/officers/:officerId", async (req: any, res) => {
     // Delete the officer
     await prisma.officer.delete({
       where: { id: officerId }
+    })
+
+    auditLog(teleshopManager.id, "OFFICER_DELETED", "officer", officerId, {
+      name: existingOfficer.name,
+      mobileNumber: existingOfficer.mobileNumber,
     })
 
     res.json({ success: true, message: "Officer deleted successfully" })
@@ -1252,6 +1315,10 @@ router.patch("/feedback/:feedbackId/resolve", async (req: any, res) => {
       }
     })
 
+    auditLog(teleshopManager.id, "FEEDBACK_RESOLVED", "feedback", feedbackId, {
+      resolutionComment: resolutionComment || "Resolved by teleshop manager",
+    })
+
     res.json({
       success: true,
       feedback: updatedFeedback,
@@ -1287,6 +1354,12 @@ router.post('/service-case/update', async (req: any, res) => {
 
     await (prisma as any).serviceCase.update({ where: { id: sc.id }, data: { lastUpdatedAt: new Date() } })
 
+    auditLog(tm.id, "SERVICE_CASE_UPDATED", "service_case", sc.id, {
+      refNumber,
+      note,
+      status: status || null,
+    })
+
     res.json({ success: true, update: upd })
   } catch (e) {
     console.error('Teleshop manager service-case update error:', e)
@@ -1316,6 +1389,11 @@ router.post('/service-case/complete', async (req: any, res) => {
         status: 'completed',
         note: note || 'Marked completed',
       }
+    })
+
+    auditLog(tm.id, "SERVICE_CASE_COMPLETED", "service_case", sc.id, {
+      refNumber,
+      note: note || 'Marked completed',
     })
 
     res.json({ success: true, case: updated })

@@ -70,6 +70,7 @@ model TeleshopManager {
   email             String?
   branchId          String?
   completedServices CompletedService[]
+  auditLogs         TeleshopManagerAuditLog[]
   branch            Outlet?            @relation(fields: [branchId], references: [id])
   region            Region             @relation(fields: [regionId], references: [id])
 
@@ -239,6 +240,20 @@ model TransferLog {
 
   @@index([tokenId])
   @@index([fromOfficerId, createdAt])
+}
+
+model TeleshopManagerAuditLog {
+  id                String          @id @default(uuid())
+  teleshopManagerId String
+  action            String
+  entityType        String?
+  entityId          String?
+  details           Json?
+  createdAt         DateTime        @default(now())
+  teleshopManager   TeleshopManager @relation(fields: [teleshopManagerId], references: [id])
+
+  @@index([teleshopManagerId, createdAt])
+  @@index([action, createdAt])
 }
 
 model ManagerQRToken {
