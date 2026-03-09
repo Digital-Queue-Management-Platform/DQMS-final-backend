@@ -1499,6 +1499,17 @@ router.post("/test/email", async (req, res) => {
       return res.status(400).json({ error: "Invalid email format" })
     }
 
+    const sriLankaTimestamp = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Colombo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(new Date())
+
     // Send test email
     const mailOptions = {
       from: {
@@ -1513,7 +1524,7 @@ router.post("/test/email", async (req, res) => {
           <p>This is a test email from the Digital Queue Management System.</p>
           <p>If you received this email, the email service is working correctly.</p>
           <p>
-            <strong>Test Date:</strong> ${new Date().toLocaleString()}<br>
+            <strong>Test Date (Asia/Colombo):</strong> ${sriLankaTimestamp}<br>
             <strong>System:</strong> DQMS Admin Dashboard
           </p>
           <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
@@ -1528,7 +1539,7 @@ DQMS Email Service Test
 This is a test email from the Digital Queue Management System.
 If you received this email, the email service is working correctly.
 
-Test Date: ${new Date().toLocaleString()}
+Test Date (Asia/Colombo): ${sriLankaTimestamp}
 System: DQMS Admin Dashboard
 
 ---
@@ -1563,8 +1574,19 @@ router.post("/test/sms", async (req, res) => {
       return res.status(400).json({ error: "Invalid phone number format. Please use a valid Sri Lankan mobile number." })
     }
 
+    const sriLankaTimestamp = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Colombo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(new Date())
+
     // Send test SMS
-    const testMessage = `DQMS Service Test: SMS service is working correctly. Time: ${new Date().toLocaleTimeString()}`
+    const testMessage = `DQMS Service Test: SMS service is working correctly. Time (Asia/Colombo): ${sriLankaTimestamp}`
     
     const result = await sltSmsService.sendSMS({
       to: phoneNumber,
