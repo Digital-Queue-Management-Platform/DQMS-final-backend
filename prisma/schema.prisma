@@ -39,9 +39,13 @@ model Token {
   calledAt           DateTime?
   startedAt          DateTime?
   completedAt        DateTime?
-  serviceTypes       String[]           @default([]) @map("serviceType")
-  isPriority         Boolean            @default(false)
-  isTransferred      Boolean            @default(false)
+  serviceTypes          String[]           @default([]) @map("serviceType")
+  isPriority            Boolean            @default(false)
+  isTransferred         Boolean            @default(false)
+  sltTelephoneNumber    String?
+  billPaymentIntent     String?
+  billPaymentAmount     Float?
+  billPaymentMethod     String?
   completedServices  CompletedService[]
   feedback           Feedback?
   serviceCases       ServiceCase[]
@@ -262,6 +266,9 @@ model Appointment {
   queuedAt           DateTime?
   completedAt        DateTime?
   sltTelephoneNumber String?
+  billPaymentIntent  String?
+  billPaymentAmount  Float?
+  billPaymentMethod  String?
   outlet             Outlet    @relation(fields: [outletId], references: [id])
 
   @@index([outletId, appointmentAt])

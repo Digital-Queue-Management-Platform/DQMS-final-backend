@@ -1016,15 +1016,43 @@ router.post("/complete-service", async (req, res) => {
           else if (prefs.includes('ta')) customerLang = 'ta'
         }
 
-        await sltSmsService.sendServiceCompletion(token.customer.mobileNumber, {
-          firstName,
-          tokenNumber: token.tokenNumber,
-          refNumber: serviceCase.refNumber,
-          services,
-          feedbackUrl,
-          outletName: token.outlet?.name || 'SLT Office'
-        }, customerLang)
-        console.log(`✓ Service completion SMS sent to ${token.customer.mobileNumber}`)
+        const isBillPayment = Array.isArray((token as any).serviceTypes) && ((token as any).serviceTypes.includes('SVC002') || (token as any).serviceTypes.includes('BILL_PAYMENT'))
+
+        if (isBillPayment) {
+          // Resolve the actual payment amount for the SMS
+          let billPaymentAmount: number | undefined = (token as any).billPaymentAmount ?? undefined
+          if ((token as any).billPaymentIntent === 'full' && (token as any).sltTelephoneNumber) {
+            try {
+              const billRecord = await prisma.sltBill.findUnique({
+                where: { telephoneNumber: (token as any).sltTelephoneNumber },
+                select: { currentBill: true }
+              })
+              if (billRecord) billPaymentAmount = billRecord.currentBill
+            } catch { /* ignore, amount stays undefined */ }
+          }
+
+          // Send bill payment confirmation SMS with payment details
+          await sltSmsService.sendBillPaymentConfirmation(token.customer.mobileNumber, {
+            firstName,
+            tokenNumber: token.tokenNumber,
+            outletName: token.outlet?.name || 'SLT Office',
+            refNumber: serviceCase.refNumber,
+            paymentIntent: (token as any).billPaymentIntent || 'not_specified',
+            paymentAmount: billPaymentAmount,
+            paymentMethod: (token as any).billPaymentMethod || undefined,
+          })
+          console.log(`✓ Bill payment confirmation SMS sent to ${token.customer.mobileNumber}`)
+        } else {
+          await sltSmsService.sendServiceCompletion(token.customer.mobileNumber, {
+            firstName,
+            tokenNumber: token.tokenNumber,
+            refNumber: serviceCase.refNumber,
+            services,
+            feedbackUrl,
+            outletName: token.outlet?.name || 'SLT Office'
+          }, customerLang)
+          console.log(`✓ Service completion SMS sent to ${token.customer.mobileNumber}`)
+        }
       } catch (smsError) {
         console.error('SMS sending failed:', smsError)
         // Continue execution even if SMS fails
@@ -1593,10 +1621,33 @@ router.get("/stats/:officerId", async (req, res) => {
       include: { customer: true },
     })
 
+    // If the current token is a bill payment service, fetch the SLT bill data
+    let billData = null
+    if (currentToken && (currentToken.serviceTypes as string[]).includes('SVC002') && (currentToken as any).sltTelephoneNumber) {
+      try {
+        billData = await prisma.sltBill.findUnique({
+          where: { telephoneNumber: (currentToken as any).sltTelephoneNumber },
+          select: {
+            telephoneNumber: true,
+            accountName: true,
+            accountAddress: true,
+            currentBill: true,
+            dueDate: true,
+            status: true,
+            lastPaymentDate: true,
+            updatedAt: true,
+          }
+        })
+      } catch (billError) {
+        console.error('Failed to fetch bill data for token:', billError)
+      }
+    }
+
     res.json({
       tokensHandled,
       avgRating: avgRating._avg.rating || 0,
       currentToken,
+      billData,
     })
   } catch (error) {
     console.error("Stats error:", error)

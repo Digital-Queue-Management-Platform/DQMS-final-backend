@@ -26,15 +26,27 @@ const managerQRTokens = global.globalManagerQRTokens;
 router.get("/outlet/:outletId", async (req, res) => {
   try {
     const { outletId } = req.params
+    const { officerId } = req.query
     const lastReset = getLastDailyReset()
+
+    // Build waiting tokens filter - only show unassigned tokens or tokens assigned to this officer
+    const waitingTokensFilter: any = {
+      outletId,
+      status: { in: ["waiting", "skipped"] },
+      createdAt: { gte: lastReset },
+    }
+
+    // If officerId is provided, filter to show only tokens available to this officer
+    if (officerId) {
+      waitingTokensFilter.OR = [
+        { assignedTo: null }, // Unassigned tokens
+        { assignedTo: String(officerId) } // Tokens assigned to this officer
+      ]
+    }
 
     // Fetch in separate queries to avoid long-lived interactive transaction issues (P2028)
     const waitingTokens = await prisma.token.findMany({
-      where: {
-        outletId,
-        status: { in: ["waiting", "skipped"] },
-        createdAt: { gte: lastReset },
-      },
+      where: waitingTokensFilter,
       orderBy: { tokenNumber: "asc" },
       include: {
         customer: true,
@@ -79,6 +91,8 @@ router.get("/outlet/:outletId", async (req, res) => {
         outletId,
         status: "in_service",
         createdAt: { gte: lastReset },
+        // Only show in-service tokens assigned to this officer
+        ...(officerId && { assignedTo: String(officerId) })
       },
       include: {
         customer: true,

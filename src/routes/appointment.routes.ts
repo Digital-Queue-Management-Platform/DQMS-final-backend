@@ -24,7 +24,7 @@ function digitsOnly(m: string | undefined | null) {
 // Book an appointment
 router.post("/book", async (req, res) => {
   try {
-    const { name, mobileNumber, outletId, serviceTypes, appointmentAt, preferredLanguage, verifiedMobileToken, notes, email, nicNumber, sltTelephoneNumber } = req.body || {}
+    const { name, mobileNumber, outletId, serviceTypes, appointmentAt, preferredLanguage, verifiedMobileToken, notes, email, nicNumber, sltTelephoneNumber, billPaymentIntent, billPaymentAmount, billPaymentMethod } = req.body || {}
 
     if (!name || !mobileNumber || !outletId || !Array.isArray(serviceTypes) || serviceTypes.length === 0 || !appointmentAt) {
       return res.status(400).json({ error: "Missing required fields" })
@@ -76,6 +76,9 @@ router.post("/book", async (req, res) => {
         serviceTypes,
         preferredLanguage: preferredLanguage || undefined,
         sltTelephoneNumber: sltTelephoneNumber || undefined,
+        billPaymentIntent: billPaymentIntent || undefined,
+        billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : undefined,
+        billPaymentMethod: billPaymentMethod || undefined,
         appointmentAt: new Date(appointmentAt),
         status: 'booked',
         notes: notes || undefined,

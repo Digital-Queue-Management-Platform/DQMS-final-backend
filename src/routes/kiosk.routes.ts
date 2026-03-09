@@ -124,7 +124,18 @@ router.get("/services", async (req, res) => {
 router.post("/tokens", async (req: any, res: any) => {
   try {
     const { outletId } = req.kiosk
-    const { name, mobileNumber, serviceTypes, preferredLanguages, nicNumber, email, sltMobileNumber, accountRef } = req.body
+    const { name, mobileNumber, serviceTypes, preferredLanguages, nicNumber, email, sltMobileNumber, accountRef, sltTelephoneNumber, billPaymentIntent, billPaymentAmount, billPaymentMethod } = req.body
+
+    // Validate bill payment intent if provided
+    if (billPaymentIntent && !['full', 'partial'].includes(billPaymentIntent)) {
+      return res.status(400).json({ error: "billPaymentIntent must be 'full' or 'partial'" })
+    }
+    if (billPaymentIntent === 'partial' && (typeof billPaymentAmount !== 'number' || billPaymentAmount <= 0)) {
+      return res.status(400).json({ error: "billPaymentAmount must be a positive number for partial payments" })
+    }
+    if (billPaymentMethod && !['cash', 'card', 'cheque', 'bank_transfer'].includes(billPaymentMethod)) {
+      return res.status(400).json({ error: "billPaymentMethod must be 'cash', 'card', 'cheque', or 'bank_transfer'" })
+    }
 
     // Validate required fields
     if (!name || !mobileNumber || !serviceTypes || !Array.isArray(serviceTypes) || serviceTypes.length === 0) {
@@ -200,7 +211,11 @@ router.post("/tokens", async (req: any, res: any) => {
         preferredLanguages,
         accountRef: accountRef?.trim() || null,
         status: "waiting",
-        outletId: outletId
+        outletId: outletId,
+        sltTelephoneNumber: sltTelephoneNumber?.trim() || null,
+        billPaymentIntent: billPaymentIntent || null,
+        billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : null,
+        billPaymentMethod: billPaymentMethod || null,
       },
       include: {
         customer: {

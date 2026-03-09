@@ -1568,3 +1568,288 @@ router.delete("/closure-notices/:noticeId", async (req: any, res) => {
     res.status(500).json({ error: "Failed to delete closure notice" })
   }
 })
+
+// ─── Audit Logs ───────────────────────────────────────────────────────────────
+// GET /teleshop-manager/audit-logs
+// Returns a combined timeline of CompletedServices, TransferLogs, BreakLogs and
+// ServiceCases for the teleshop manager's assigned branch.  Supports period
+// presets (today | week | month | year) or a custom startDate/endDate range,
+// plus optional officerId and logType filters.
+router.get("/audit-logs", async (req: any, res) => {
+  try {
+    const tm = req.teleshopManager
+
+    if (!tm.branchId) {
+      return res.json({
+        logs: [],
+        summary: { completedServices: 0, transfers: 0, breaks: 0, serviceCases: 0, total: 0 },
+        pagination: { page: 1, limit: 50, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
+      })
+    }
+
+    const {
+      period = "today",   // today | week | month | year | custom
+      startDate,
+      endDate,
+      officerId,
+      logType = "all",    // all | completed_services | transfers | breaks | service_cases
+      page = "1",
+      limit = "50"
+    } = req.query
+
+    const pageNum = Math.max(1, parseInt(page as string))
+    const limitNum = Math.min(200, Math.max(1, parseInt(limit as string)))
+
+    // ── Date range calculation ──────────────────────────────────────────────
+    const now = new Date()
+    let rangeStart: Date
+    let rangeEnd: Date = new Date(now.getTime() + 24 * 60 * 60 * 1000) // default: tomorrow (inclusive)
+
+    if (period === "custom" && startDate && endDate) {
+      rangeStart = new Date(startDate as string)
+      rangeEnd = new Date(endDate as string)
+      // Make endDate inclusive (end of that day)
+      rangeEnd.setHours(23, 59, 59, 999)
+    } else if (period === "week") {
+      rangeStart = new Date(now)
+      rangeStart.setDate(now.getDate() - 7)
+      rangeStart.setHours(0, 0, 0, 0)
+    } else if (period === "month") {
+      rangeStart = new Date(now)
+      rangeStart.setMonth(now.getMonth() - 1)
+      rangeStart.setHours(0, 0, 0, 0)
+    } else if (period === "year") {
+      rangeStart = new Date(now)
+      rangeStart.setFullYear(now.getFullYear() - 1)
+      rangeStart.setHours(0, 0, 0, 0)
+    } else {
+      // today (default)
+      rangeStart = new Date(now)
+      rangeStart.setHours(0, 0, 0, 0)
+    }
+
+    // ── Fetch each log type in parallel ────────────────────────────────────
+    // Build officer filter for branch
+    const officerFilter: any = { outletId: tm.branchId }
+    if (officerId) officerFilter.id = officerId
+
+    const officersAtBranch = await prisma.officer.findMany({
+      where: officerFilter,
+      select: { id: true, name: true, counterNumber: true, mobileNumber: true }
+    })
+    const officerIds = officersAtBranch.map((o: any) => o.id)
+    const officerMap: Record<string, any> = {}
+    officersAtBranch.forEach((o: any) => { officerMap[o.id] = o })
+
+    const dateRange = { gte: rangeStart, lte: rangeEnd }
+
+    const [completedServices, transferLogs, breakLogs, serviceCases] = await Promise.all([
+      // 1. Completed services
+      (logType === "all" || logType === "completed_services")
+        ? prisma.completedService.findMany({
+            where: {
+              outletId: tm.branchId,
+              officerId: officerId ? (officerId as string) : { in: officerIds },
+              completedAt: dateRange
+            },
+            include: {
+              token: {
+                select: {
+                  tokenNumber: true,
+                  billPaymentIntent: true,
+                  billPaymentMethod: true,
+                  billPaymentAmount: true,
+                  isPriority: true,
+                  customer: { select: { id: true, name: true, mobileNumber: true } }
+                }
+              },
+              service: { select: { id: true, code: true, title: true } },
+              officer: { select: { id: true, name: true, counterNumber: true } }
+            },
+            orderBy: { completedAt: "desc" }
+          })
+        : Promise.resolve([]),
+
+      // 2. Transfer logs
+      (logType === "all" || logType === "transfers")
+        ? (prisma as any).transferLog.findMany({
+            where: {
+              fromOfficerId: { in: officerIds },
+              createdAt: dateRange
+            },
+            include: {
+              token: {
+                select: {
+                  tokenNumber: true,
+                  outletId: true,
+                  customer: { select: { id: true, name: true, mobileNumber: true } }
+                }
+              },
+              fromOfficer: { select: { id: true, name: true, counterNumber: true } }
+            },
+            orderBy: { createdAt: "desc" }
+          })
+        : Promise.resolve([]),
+
+      // 3. Break logs
+      (logType === "all" || logType === "breaks")
+        ? (prisma as any).breakLog.findMany({
+            where: {
+              officerId: { in: officerIds },
+              startedAt: dateRange
+            },
+            include: {
+              Officer: { select: { id: true, name: true, counterNumber: true } }
+            },
+            orderBy: { startedAt: "desc" }
+          })
+        : Promise.resolve([]),
+
+      // 4. Service cases
+      (logType === "all" || logType === "service_cases")
+        ? (prisma as any).serviceCase.findMany({
+            where: {
+              outletId: tm.branchId,
+              officerId: officerId ? (officerId as string) : { in: officerIds },
+              createdAt: dateRange
+            },
+            include: {
+              officer: { select: { id: true, name: true, counterNumber: true } },
+              updates: {
+                orderBy: { createdAt: "desc" },
+                take: 5
+              }
+            },
+            orderBy: { createdAt: "desc" }
+          })
+        : Promise.resolve([])
+    ])
+
+    // ── Normalise into a unified event timeline ────────────────────────────
+    type AuditEntry = {
+      id: string
+      type: "completed_service" | "transfer" | "break" | "service_case"
+      timestamp: string
+      officer: { id: string; name: string; counterNumber?: number | null } | null
+      description: string
+      meta: Record<string, any>
+    }
+
+    const entries: AuditEntry[] = []
+
+    // Completed services
+    for (const cs of completedServices as any[]) {
+      entries.push({
+        id: cs.id,
+        type: "completed_service",
+        timestamp: cs.completedAt,
+        officer: cs.officer ?? null,
+        description: `Token #${cs.token?.tokenNumber} — ${cs.service?.title || cs.service?.code} completed`,
+        meta: {
+          tokenNumber: cs.token?.tokenNumber,
+          customer: cs.token?.customer,
+          service: cs.service,
+          durationSeconds: cs.duration ?? null,
+          notes: cs.notes ?? null,
+          billPaymentIntent: cs.token?.billPaymentIntent ?? null,
+          billPaymentMethod: cs.token?.billPaymentMethod ?? null,
+          billPaymentAmount: cs.token?.billPaymentAmount ?? null,
+          isPriority: cs.token?.isPriority ?? false
+        }
+      })
+    }
+
+    // Transfer logs
+    for (const tl of transferLogs as any[]) {
+      // Only include if token belongs to this outlet
+      if (tl.token?.outletId && tl.token.outletId !== tm.branchId) continue
+      entries.push({
+        id: tl.id,
+        type: "transfer",
+        timestamp: tl.createdAt,
+        officer: tl.fromOfficer ?? null,
+        description: `Token #${tl.token?.tokenNumber} transferred (Counter ${tl.fromCounterNumber ?? "?"} → ${tl.toCounterNumber ?? "?"})`,
+        meta: {
+          tokenNumber: tl.token?.tokenNumber,
+          customer: tl.token?.customer,
+          fromCounterNumber: tl.fromCounterNumber,
+          toCounterNumber: tl.toCounterNumber,
+          previousServiceTypes: tl.previousServiceTypes,
+          newServiceTypes: tl.newServiceTypes,
+          notes: tl.notes ?? null
+        }
+      })
+    }
+
+    // Break logs
+    for (const bl of breakLogs as any[]) {
+      const officer = bl.Officer ?? null
+      const durationMins = bl.endedAt
+        ? Math.round((new Date(bl.endedAt).getTime() - new Date(bl.startedAt).getTime()) / 60000)
+        : null
+      entries.push({
+        id: bl.id,
+        type: "break",
+        timestamp: bl.startedAt,
+        officer: officer ? { id: officer.id, name: officer.name, counterNumber: officer.counterNumber } : null,
+        description: bl.endedAt
+          ? `Break ended (${durationMins} min)`
+          : `Break started`,
+        meta: {
+          startedAt: bl.startedAt,
+          endedAt: bl.endedAt ?? null,
+          durationMinutes: durationMins
+        }
+      })
+    }
+
+    // Service cases
+    for (const sc of serviceCases as any[]) {
+      entries.push({
+        id: sc.id,
+        type: "service_case",
+        timestamp: sc.createdAt,
+        officer: sc.officer ?? null,
+        description: `Service case ${sc.refNumber} — ${sc.status}`,
+        meta: {
+          refNumber: sc.refNumber,
+          serviceTypes: sc.serviceTypes,
+          status: sc.status,
+          completedAt: sc.completedAt ?? null,
+          latestUpdate: sc.updates?.[0] ?? null
+        }
+      })
+    }
+
+    // ── Sort all entries newest-first ──────────────────────────────────────
+    entries.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+
+    // ── Paginate ───────────────────────────────────────────────────────────
+    const total = entries.length
+    const paged = entries.slice((pageNum - 1) * limitNum, pageNum * limitNum)
+
+    res.json({
+      logs: paged,
+      summary: {
+        completedServices: (completedServices as any[]).length,
+        transfers: (transferLogs as any[]).filter((tl: any) => !tl.token?.outletId || tl.token.outletId === tm.branchId).length,
+        breaks: (breakLogs as any[]).length,
+        serviceCases: (serviceCases as any[]).length,
+        total
+      },
+      officers: officersAtBranch,
+      period: { preset: period, start: rangeStart, end: rangeEnd },
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum),
+        hasNext: pageNum * limitNum < total,
+        hasPrev: pageNum > 1
+      }
+    })
+  } catch (error) {
+    console.error("Audit logs error:", error)
+    res.status(500).json({ error: "Failed to fetch audit logs" })
+  }
+})

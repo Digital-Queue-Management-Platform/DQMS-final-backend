@@ -831,6 +831,49 @@ class SLTSmsService {
   }
 
   /**
+   * Send bill payment confirmation SMS when CSO marks the payment as complete
+   */
+  async sendBillPaymentConfirmation(
+    mobileNumber: string,
+    details: {
+      firstName: string
+      tokenNumber: number
+      outletName: string
+      refNumber: string
+      paymentIntent: string   // 'full' | 'partial' | 'not_specified'
+      paymentAmount?: number  // amount paid (due amount for full, custom for partial)
+      paymentMethod?: string  // 'cash' | 'card' | 'cheque' | 'bank_transfer'
+    }
+  ): Promise<SMSResponse> {
+    const formattedToken = details.tokenNumber.toString().padStart(3, '0')
+    const outlet = details.outletName.replace(/\s*(SLT|Mobitel|Office)\s*/gi, '').trim() || details.outletName
+
+    const methodLabels: Record<string, string> = {
+      cash: 'Cash',
+      card: 'Card',
+      cheque: 'Cheque',
+      bank_transfer: 'Bank Transfer'
+    }
+    const methodLabel = details.paymentMethod ? (methodLabels[details.paymentMethod] || details.paymentMethod) : ''
+
+    let paymentLine = ''
+    if (details.paymentIntent === 'full' && details.paymentAmount != null) {
+      paymentLine = `Rs. ${details.paymentAmount.toFixed(2)} (Full Payment)`
+    } else if (details.paymentIntent === 'partial' && details.paymentAmount != null) {
+      paymentLine = `Rs. ${details.paymentAmount.toFixed(2)} (Partial Payment)`
+    }
+
+    const methodPart = methodLabel ? ` via ${methodLabel}` : ''
+    const amountPart = paymentLine ? `\nAmount: ${paymentLine}${methodPart}` : (methodLabel ? `\nPayment Method: ${methodLabel}` : '')
+
+    const message = `Dear Valued Customer\n\nYour bill payment at ${outlet} has been completed.${amountPart}\nRef: ${details.refNumber}\n\nSLT-MOBITEL`
+
+    console.log(`[SLT SMS PAYMENT] Sending bill payment confirmation to ${mobileNumber}: "${message}"`)
+
+    return this.sendSMS({ to: mobileNumber, message })
+  }
+
+  /**
    * Check service availability
    */
   isConfigured(): boolean {
