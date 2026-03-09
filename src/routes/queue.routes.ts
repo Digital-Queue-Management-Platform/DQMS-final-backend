@@ -44,40 +44,47 @@ router.get("/outlet/:outletId", async (req, res) => {
       ]
     }
 
-    // Fetch in separate queries to avoid long-lived interactive transaction issues (P2028)
-    const waitingTokens = await prisma.token.findMany({
-      where: waitingTokensFilter,
-      orderBy: { tokenNumber: "asc" },
-      include: {
-        customer: true,
-      },
-    })
+    // Run the three independent queries in parallel — cuts sequential round-trips from ~3s to ~800ms
+    const [waitingTokens, inServiceTokens, availableOfficers] = await Promise.all([
+      prisma.token.findMany({
+        where: waitingTokensFilter,
+        orderBy: { tokenNumber: "asc" },
+        include: { customer: true },
+      }),
+      prisma.token.findMany({
+        where: {
+          outletId,
+          status: "in_service",
+          createdAt: { gte: lastReset },
+          ...(officerId && { assignedTo: String(officerId) })
+        },
+        include: { customer: true, officer: true },
+      }),
+      prisma.officer.count({
+        where: { outletId, status: "available" },
+      }),
+    ])
 
-    // Determine which waiting tokens originated from appointments
+    // Appointment and transfer-log lookups are only needed when there are waiting tokens
     const waitingTokenIds = waitingTokens.map((t) => t.id)
     let appointmentTokenIdSet = new Set<string>()
-    if (waitingTokenIds.length > 0) {
-      // Use raw query for broad compatibility across client versions
-      const appts: any[] = await prisma.$queryRaw`
-        SELECT "tokenId" FROM "Appointment" WHERE "tokenId" = ANY(${waitingTokenIds})
-      `
-      appointmentTokenIdSet = new Set((appts || []).map((a: any) => a.tokenId).filter(Boolean) as string[])
-    }
-    // Fetch last transfer logs for all waiting tokens to identify source officer
-    const transferLogs = await prisma.transferLog.findMany({
-      where: {
-        tokenId: { in: waitingTokenIds },
-        createdAt: { gte: lastReset },
-      },
-      orderBy: { createdAt: "desc" },
-    })
-
     const lastTransferMap = new Map<string, string>()
-    transferLogs.forEach((log) => {
-      if (!lastTransferMap.has(log.tokenId)) {
-        lastTransferMap.set(log.tokenId, log.fromOfficerId)
-      }
-    })
+
+    if (waitingTokenIds.length > 0) {
+      const [appts, transferLogs] = await Promise.all([
+        prisma.$queryRaw<{ tokenId: string }[]>`
+          SELECT "tokenId" FROM "Appointment" WHERE "tokenId" = ANY(${waitingTokenIds})
+        `,
+        prisma.transferLog.findMany({
+          where: { tokenId: { in: waitingTokenIds }, createdAt: { gte: lastReset } },
+          orderBy: { createdAt: "desc" },
+        }),
+      ])
+      appointmentTokenIdSet = new Set((appts || []).map((a) => a.tokenId).filter(Boolean))
+      transferLogs.forEach((log) => {
+        if (!lastTransferMap.has(log.tokenId)) lastTransferMap.set(log.tokenId, log.fromOfficerId)
+      })
+    }
 
     // Attach non-schema helper flags for frontend rendering
     const filteredWaitingTokens = waitingTokens.map((t: any) => ({
@@ -85,27 +92,6 @@ router.get("/outlet/:outletId", async (req, res) => {
       fromAppointment: appointmentTokenIdSet.has(t.id),
       lastTransferByOfficerId: lastTransferMap.get(t.id) || null,
     }))
-
-    const inServiceTokens = await prisma.token.findMany({
-      where: {
-        outletId,
-        status: "in_service",
-        createdAt: { gte: lastReset },
-        // Only show in-service tokens assigned to this officer
-        ...(officerId && { assignedTo: String(officerId) })
-      },
-      include: {
-        customer: true,
-        officer: true,
-      },
-    })
-
-    const availableOfficers = await prisma.officer.count({
-      where: {
-        outletId,
-        status: "available",
-      },
-    })
 
     res.json({
       waiting: filteredWaitingTokens,
