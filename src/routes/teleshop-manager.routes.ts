@@ -1953,6 +1953,23 @@ router.get("/audit-logs", async (req: any, res) => {
               officer: { select: { id: true, name: true, counterNumber: true, mobileNumber: true } },
               customer: { select: { id: true, name: true, mobileNumber: true, nicNumber: true, email: true } },
               outlet: { select: { id: true, name: true, location: true } },
+              token: {
+                select: {
+                  tokenNumber: true,
+                  isPriority: true,
+                  isTransferred: true,
+                  accountRef: true,
+                  sltTelephoneNumber: true,
+                  billPaymentIntent: true,
+                  billPaymentMethod: true,
+                  billPaymentAmount: true,
+                  preferredLanguages: true,
+                  createdAt: true,
+                  calledAt: true,
+                  startedAt: true,
+                  completedAt: true
+                }
+              },
               updates: {
                 orderBy: { createdAt: "desc" },
                 take: 20
@@ -2097,6 +2114,24 @@ router.get("/audit-logs", async (req: any, res) => {
 
     // Service cases
     for (const sc of serviceCases as any[]) {
+      const tok = sc.token ?? null
+      const tokenIssuedAt = tok?.createdAt ?? null
+      const calledAt = tok?.calledAt ?? null
+      const startedAt = tok?.startedAt ?? null
+      const completedAt = tok?.completedAt ?? sc.completedAt ?? null
+      const waitDurationMs =
+        calledAt && tokenIssuedAt
+          ? new Date(calledAt).getTime() - new Date(tokenIssuedAt).getTime()
+          : null
+      const serviceDurationMs =
+        completedAt && startedAt
+          ? new Date(completedAt).getTime() - new Date(startedAt).getTime()
+          : null
+      const totalDurationMs =
+        completedAt && tokenIssuedAt
+          ? new Date(completedAt).getTime() - new Date(tokenIssuedAt).getTime()
+          : null
+
       entries.push({
         id: sc.id,
         type: "service_case",
@@ -2113,7 +2148,26 @@ router.get("/audit-logs", async (req: any, res) => {
           completedAt: sc.completedAt ?? null,
           lastUpdatedAt: sc.lastUpdatedAt ?? null,
           updates: sc.updates ?? [],
-          latestUpdate: sc.updates?.[0] ?? null
+          latestUpdate: sc.updates?.[0] ?? null,
+          // Token details
+          tokenNumber: tok?.tokenNumber ?? null,
+          isPriority: tok?.isPriority ?? false,
+          isTransferred: tok?.isTransferred ?? false,
+          accountRef: tok?.accountRef ?? null,
+          sltTelephoneNumber: tok?.sltTelephoneNumber ?? null,
+          preferredLanguages: tok?.preferredLanguages ?? [],
+          // Bill payment
+          billPaymentIntent: tok?.billPaymentIntent ?? null,
+          billPaymentMethod: tok?.billPaymentMethod ?? null,
+          billPaymentAmount: tok?.billPaymentAmount ?? null,
+          // Service timeline
+          tokenIssuedAt,
+          calledAt,
+          startedAt,
+          tokenCompletedAt: completedAt,
+          waitDurationMs,
+          serviceDurationMs,
+          totalDurationMs
         }
       })
     }
