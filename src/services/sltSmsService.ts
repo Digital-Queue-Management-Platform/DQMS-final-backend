@@ -527,36 +527,62 @@ class SLTSmsService {
       console.warn(`[SLT SMS COMPLETE] Warning: Even compact version exceeds 160 chars (${finalMessage.length}).`)
     }
 
-    return this.sendSMS({
+    const result = await this.sendSMS({
       to: mobileNumber,
       message: finalMessage
     })
+
+    // When a tracking URL was sent as SMS 1, send a second SMS with a thank-you +
+    // feedback review link so the customer gets both the status URL and an invitation
+    // to rate their experience as separate, readable messages.
+    if (details.trackingUrl && details.feedbackUrl) {
+      const outlet = details.outletName
+      const tokenDisplay = formattedToken || ''
+      const thankYouFull = `Dear Valued Customer\n\nToken ${tokenDisplay} at ${outlet} served. Thank you for choosing SLT-MOBITEL! Rate: ${details.feedbackUrl}\n\nSLT-MOBITEL`
+      // If outlet name makes it too long, drop it from the thank-you SMS
+      const thankYouMsg = thankYouFull.length <= 160
+        ? thankYouFull
+        : `Dear Valued Customer\n\nToken ${tokenDisplay} served. Thank you for choosing SLT-MOBITEL! Rate: ${details.feedbackUrl}\n\nSLT-MOBITEL`
+      console.log(`[SLT SMS COMPLETE] Sending thank-you+review SMS (${thankYouMsg.length} chars): "${thankYouMsg}"`)
+      await this.sendSMS({ to: mobileNumber, message: thankYouMsg })
+    }
+
+    return result
   }
 
   // Refined helpers for completion messages
   private buildServiceCompletionFull(details: any, token: string | null, language: string) {
-    const trackLine = details.trackingUrl
-      ? `Track: ${details.trackingUrl}`
-      : `Ref: ${details.refNumber || token}`
+    if (details.trackingUrl) {
+      // When a tracking URL is included, drop the greeting/closing to stay within the
+      // 160-char GSM-7 limit that the SLT SMS gateway enforces for reliable delivery.
+      const outlet = details.outletName.replace(/\s*(SLT|Mobitel|Office)\s*/gi, '').trim() || details.outletName
+      const withOutlet = `Token ${token} at ${outlet} served.\nTrack: ${details.trackingUrl}`
+      if (withOutlet.length <= 160) return withOutlet
+      // Fallback: omit outlet name if even the compact form is too long
+      return `Token ${token} served.\nTrack: ${details.trackingUrl}`
+    }
 
     const messages = {
-      en: `Dear Valued Customer\n\nYour token number ${token} at ${details.outletName} has been served. ${trackLine}\n\nThank you for choosing SLT-MOBITEL.`,
-      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${token} සේවා අවසන් විය. ${trackLine}\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${token} சேவை முடிந்தது. ${trackLine}\n\nSLT-MOBITEL`
+      en: `Dear Valued Customer\n\nYour token number ${token} at ${details.outletName} has been served. Ref: ${details.refNumber || token}\n\nThank you for choosing SLT-MOBITEL.`,
+      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${token} සේවා අවසන් විය. Ref: ${details.refNumber || token}\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${token} சேவை முடிந்தது. Ref: ${details.refNumber || token}\n\nSLT-MOBITEL`
     }
     return (messages as any)[language] || messages.en
   }
 
   private buildServiceCompletionCompact(details: any, token: string | null, language: string) {
-    const outlet = details.outletName.replace(/\s*(SLT|Mobitel|Office)\s*/gi, '').trim()
-    const trackLine = details.trackingUrl
-      ? `Track: ${details.trackingUrl}`
-      : `Ref: ${details.refNumber || token}`
+    const outlet = details.outletName.replace(/\s*(SLT|Mobitel|Office)\s*/gi, '').trim() || details.outletName
+
+    if (details.trackingUrl) {
+      const withOutlet = `Token ${token} at ${outlet} served.\nTrack: ${details.trackingUrl}`
+      if (withOutlet.length <= 160) return withOutlet
+      return `Token ${token} served.\nTrack: ${details.trackingUrl}`
+    }
 
     const messages = {
-      en: `Dear Valued Customer\n\nToken ${token} at ${outlet} served. ${trackLine}\n\nThank you for choosing SLT-MOBITEL.`,
-      si: `ගරු පාරිභෝගිකයා\n\n${outlet} හි ටෝකන් ${token} සේවා අවසන්. ${trackLine}\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\n${outlet} இல் டோக்கன் ${token} முடிந்தது. ${trackLine}\n\nSLT-MOBITEL`
+      en: `Dear Valued Customer\n\nToken ${token} at ${outlet} served. Ref: ${details.refNumber || token}\n\nThank you for choosing SLT-MOBITEL.`,
+      si: `ගරු පාරිභෝගිකයා\n\n${outlet} හි ටෝකන් ${token} සේවා අවසන්. Ref: ${details.refNumber || token}\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${outlet} இல் டோக்கன் ${token} முடிந்தது. Ref: ${details.refNumber || token}\n\nSLT-MOBITEL`
     }
     return (messages as any)[language] || messages.en
   }
@@ -849,6 +875,7 @@ class SLTSmsService {
       paymentAmount?: number  // amount paid (due amount for full, custom for partial)
       paymentMethod?: string  // 'cash' | 'card' | 'cheque' | 'bank_transfer'
       trackingUrl?: string    // full URL for customer to track the service case
+      feedbackUrl?: string    // full URL for customer to leave a review
     }
   ): Promise<SMSResponse> {
     const formattedToken = details.tokenNumber.toString().padStart(3, '0')
@@ -863,23 +890,53 @@ class SLTSmsService {
     const methodLabel = details.paymentMethod ? (methodLabels[details.paymentMethod] || details.paymentMethod) : ''
 
     let paymentLine = ''
-    if (details.paymentIntent === 'full' && details.paymentAmount != null) {
+    if (details.paymentIntent === 'full' && details.paymentAmount != null && details.paymentAmount > 0) {
       paymentLine = `Rs. ${details.paymentAmount.toFixed(2)} (Full Payment)`
-    } else if (details.paymentIntent === 'partial' && details.paymentAmount != null) {
+    } else if (details.paymentIntent === 'partial' && details.paymentAmount != null && details.paymentAmount > 0) {
       paymentLine = `Rs. ${details.paymentAmount.toFixed(2)} (Partial Payment)`
     }
 
     const methodPart = methodLabel ? ` via ${methodLabel}` : ''
     const amountPart = paymentLine ? `\nAmount: ${paymentLine}${methodPart}` : (methodLabel ? `\nPayment Method: ${methodLabel}` : '')
 
-    const trackLine = details.trackingUrl
-      ? `\nTrack: ${details.trackingUrl}`
-      : `\nRef: ${details.refNumber}`
-    const message = `Dear Valued Customer\n\nYour bill payment at ${outlet} has been completed.${amountPart}${trackLine}\n\nThank you for choosing SLT-MOBITEL.`
+    let message: string
+    if (details.trackingUrl) {
+      // Never show method label alone when there is no amount — it's meaningless without a figure.
+      const amountCompact = paymentLine
+        ? `\n${paymentLine.replace('Full Payment', 'Full').replace('Partial Payment', 'Partial')}${methodPart}`
+        : ''
+      // Prefer the full "Dear Valued Customer" greeting, but the Vercel URL is ~100 chars which
+      // pushes the total past the 160-char GSM-7 limit the SLT gateway silently drops.
+      // Fall back progressively: drop greeting first, then drop footer, to stay deliverable.
+      const withGreeting = `Dear Valued Customer\nBill payment complete.${amountCompact}\nTrack: ${details.trackingUrl}\n\nSLT-MOBITEL`
+      if (withGreeting.length <= 160) {
+        message = withGreeting
+      } else {
+        // Dropping "Dear Valued Customer\n" saves 21 chars; SLT-MOBITEL branding is kept.
+        const noGreeting = `Bill payment complete.${amountCompact}\nTrack: ${details.trackingUrl}\n\nSLT-MOBITEL`
+        message = noGreeting.length <= 160 ? noGreeting : `Bill payment complete.\nTrack: ${details.trackingUrl}`
+      }
+    } else {
+      const trackLine = `\nRef: ${details.refNumber}`
+      message = `Dear Valued Customer\n\nYour bill payment at ${outlet} has been completed.${amountPart}${trackLine}\n\nThank you for choosing SLT-MOBITEL.`
+    }
 
     console.log(`[SLT SMS PAYMENT] Sending bill payment confirmation to ${mobileNumber}: "${message}"`)
 
-    return this.sendSMS({ to: mobileNumber, message })
+    const result = await this.sendSMS({ to: mobileNumber, message })
+
+    // Send a second SMS with a thank-you + review invitation (same pattern as service completion).
+    if (details.trackingUrl && details.feedbackUrl) {
+      const formattedToken = details.tokenNumber.toString().padStart(3, '0')
+      const thankYouFull = `Dear Valued Customer\n\nThank you for choosing SLT-MOBITEL! Rate your experience: ${details.feedbackUrl}\n\nSLT-MOBITEL`
+      const thankYouMsg = thankYouFull.length <= 160
+        ? thankYouFull
+        : `Thank you for choosing SLT-MOBITEL! Rate: ${details.feedbackUrl}`
+      console.log(`[SLT SMS PAYMENT] Sending thank-you+review SMS (${thankYouMsg.length} chars): "${thankYouMsg}"`)
+      await this.sendSMS({ to: mobileNumber, message: thankYouMsg })
+    }
+
+    return result
   }
 
   /**

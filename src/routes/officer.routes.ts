@@ -1053,6 +1053,7 @@ router.post("/complete-service", async (req, res) => {
             paymentAmount: billPaymentAmount,
             paymentMethod: (token as any).billPaymentMethod || undefined,
             trackingUrl: completionTrackingUrl,
+            feedbackUrl,
           })
           console.log(`✓ Bill payment confirmation SMS sent to ${token.customer.mobileNumber}`)
         } else {
