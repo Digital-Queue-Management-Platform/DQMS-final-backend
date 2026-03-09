@@ -47,6 +47,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
+          context: git
           images: ${{ env.REGISTRY }}/${{ steps.lowercase.outputs.image_name }}
           tags: |
             type=raw,value=latest
