@@ -1872,10 +1872,12 @@ router.get("/audit-logs", async (req: any, res) => {
               createdAt: dateRange
             },
             include: {
-              officer: { select: { id: true, name: true, counterNumber: true } },
+              officer: { select: { id: true, name: true, counterNumber: true, mobileNumber: true } },
+              customer: { select: { id: true, name: true, mobileNumber: true, nicNumber: true, email: true } },
+              outlet: { select: { id: true, name: true, location: true } },
               updates: {
                 orderBy: { createdAt: "desc" },
-                take: 5
+                take: 20
               }
             },
             orderBy: { createdAt: "desc" }
@@ -2027,7 +2029,12 @@ router.get("/audit-logs", async (req: any, res) => {
           refNumber: sc.refNumber,
           serviceTypes: sc.serviceTypes,
           status: sc.status,
+          customer: sc.customer ?? null,
+          outlet: sc.outlet ?? null,
+          createdAt: sc.createdAt,
           completedAt: sc.completedAt ?? null,
+          lastUpdatedAt: sc.lastUpdatedAt ?? null,
+          updates: sc.updates ?? [],
           latestUpdate: sc.updates?.[0] ?? null
         }
       })
