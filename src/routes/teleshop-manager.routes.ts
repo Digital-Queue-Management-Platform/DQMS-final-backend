@@ -9,6 +9,27 @@ import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
 const router = Router()
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
+
+// Helper to write an audit log entry (fire-and-forget, non-blocking)
+const auditLog = (
+  teleshopManagerId: string,
+  action: string,
+  entityType?: string,
+  entityId?: string,
+  details?: object
+) => {
+  (prisma as any).teleshopManagerAuditLog
+    .create({
+      data: {
+        teleshopManagerId,
+        action,
+        entityType: entityType ?? null,
+        entityId: entityId ?? null,
+        details: details ?? null,
+      },
+    })
+    .catch((err: any) => console.error("Audit log error:", err))
+}
 const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
 
 // Request OTP for teleshop manager login
@@ -92,6 +113,10 @@ router.post("/login", async (req, res) => {
       data: { lastLoginAt: new Date() }
     })
 
+    auditLog(teleshopManager.id, "LOGIN", "teleshop_manager", teleshopManager.id, {
+      mobileNumber: teleshopManager.mobileNumber,
+    })
+
     // Create JWT token for teleshop manager authentication
     const tokenOptions: any = {
       teleshopManagerId: teleshopManager.id,
@@ -141,14 +166,30 @@ router.post("/login", async (req, res) => {
 })
 
 // Teleshop Manager logout
-router.post("/logout", async (req, res) => {
+router.post("/logout", async (req: any, res) => {
   try {
+    // Log before clearing cookie
+    const authHeader = req.headers.authorization
+    let managerId: string | null = null
+    try {
+      const rawToken = req.cookies?.dq_teleshop_manager_jwt ||
+        (authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : null)
+      if (rawToken) {
+        const payload: any = (jwt as any).verify(rawToken, JWT_SECRET)
+        managerId = payload?.teleshopManagerId ?? null
+      }
+    } catch (_) {}
+
     res.clearCookie("dq_teleshop_manager_jwt", {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       path: "/",
     })
+
+    if (managerId) {
+      auditLog(managerId, "LOGOUT", "teleshop_manager", managerId)
+    }
 
     res.json({
       success: true,
@@ -272,6 +313,10 @@ router.post("/kiosk-settings", async (req: any, res) => {
     const outlet = await prisma.outlet.update({
       where: { id: teleshopManager.branchId },
       data: { kioskPassword }
+    })
+
+    auditLog(teleshopManager.id, "KIOSK_PASSWORD_UPDATED", "outlet", outlet.id, {
+      outletName: outlet.name,
     })
 
     res.json({
@@ -447,6 +492,12 @@ router.post("/officers", async (req: any, res) => {
       loginUrl
     }).catch(err => console.error("Officer welcome SMS failed:", err))
 
+    auditLog(teleshopManager.id, "OFFICER_CREATED", "officer", officer.id, {
+      name: officer.name,
+      mobileNumber: officer.mobileNumber,
+      outletId: officer.outletId,
+    })
+
     res.json({ success: true, officer })
   } catch (error: any) {
     console.error("Teleshop Manager officer creation error:", error)
@@ -503,6 +554,8 @@ router.patch("/officers/:officerId", async (req: any, res) => {
         outlet: true
       }
     })
+
+    auditLog(teleshopManager.id, "OFFICER_UPDATED", "officer", officerId, updateData)
 
     res.json({ success: true, officer: updatedOfficer })
   } catch (error: any) {
@@ -589,6 +642,11 @@ router.patch("/officers/:officerId/assign-counter", async (req: any, res) => {
       data: { officerId, counterNumber: updatedOfficer.counterNumber }
     })
 
+    auditLog(teleshopManager.id, "OFFICER_COUNTER_ASSIGNED", "officer", officerId, {
+      counterNumber: updatedOfficer.counterNumber,
+      officerName: updatedOfficer.name,
+    })
+
     res.json({ success: true, officer: updatedOfficer })
   } catch (error: any) {
     console.error("Assign counter error:", error)
@@ -621,6 +679,11 @@ router.delete("/officers/:officerId", async (req: any, res) => {
     // Delete the officer
     await prisma.officer.delete({
       where: { id: officerId }
+    })
+
+    auditLog(teleshopManager.id, "OFFICER_DELETED", "officer", officerId, {
+      name: existingOfficer.name,
+      mobileNumber: existingOfficer.mobileNumber,
     })
 
     res.json({ success: true, message: "Officer deleted successfully" })
@@ -1252,6 +1315,10 @@ router.patch("/feedback/:feedbackId/resolve", async (req: any, res) => {
       }
     })
 
+    auditLog(teleshopManager.id, "FEEDBACK_RESOLVED", "feedback", feedbackId, {
+      resolutionComment: resolutionComment || "Resolved by teleshop manager",
+    })
+
     res.json({
       success: true,
       feedback: updatedFeedback,
@@ -1287,6 +1354,12 @@ router.post('/service-case/update', async (req: any, res) => {
 
     await (prisma as any).serviceCase.update({ where: { id: sc.id }, data: { lastUpdatedAt: new Date() } })
 
+    auditLog(tm.id, "SERVICE_CASE_UPDATED", "service_case", sc.id, {
+      refNumber,
+      note,
+      status: status || null,
+    })
+
     res.json({ success: true, update: upd })
   } catch (e) {
     console.error('Teleshop manager service-case update error:', e)
@@ -1318,10 +1391,153 @@ router.post('/service-case/complete', async (req: any, res) => {
       }
     })
 
+    auditLog(tm.id, "SERVICE_CASE_COMPLETED", "service_case", sc.id, {
+      refNumber,
+      note: note || 'Marked completed',
+    })
+
     res.json({ success: true, case: updated })
   } catch (e) {
     console.error('Teleshop manager service-case complete error:', e)
     res.status(500).json({ error: 'Failed to complete case' })
+  }
+})
+
+// Get comprehensive service case details (Teleshop Manager)
+router.get('/service-case/*', async (req: any, res) => {
+  try {
+    const tm = req.teleshopManager
+    const refNumber = decodeURIComponent((req.params as any)[0])
+
+    const sc: any = await (prisma as any).serviceCase.findUnique({
+      where: { refNumber },
+      include: {
+        customer: true,
+        officer: true,
+        outlet: true,
+        token: {
+          include: {
+            feedback: true,
+            transferLogs: {
+              include: {
+                fromOfficer: { select: { id: true, name: true, counterNumber: true } }
+              },
+              orderBy: { createdAt: 'asc' }
+            }
+          }
+        },
+        updates: { orderBy: { createdAt: 'asc' } }
+      }
+    })
+
+    if (!sc) return res.status(404).json({ error: 'Reference not found' })
+
+    // Authorization: case must belong to teleshop manager's outlet
+    if (tm.branchId && sc.outletId !== tm.branchId) {
+      return res.status(403).json({ error: 'Access denied: case not from your assigned outlet' })
+    }
+
+    // Resolve service titles from codes
+    const serviceCodes: string[] = sc.serviceTypes || []
+    const serviceRecords = serviceCodes.length > 0
+      ? await prisma.service.findMany({
+          where: { code: { in: serviceCodes } },
+          select: { code: true, title: true }
+        })
+      : []
+    const serviceTitleMap: Record<string, string> = {}
+    for (const s of serviceRecords) serviceTitleMap[s.code] = s.title
+
+    const token = sc.token
+    const feedback = token?.feedback || null
+
+    // Compute time spans
+    const waitDurationMs = token?.calledAt && token?.createdAt
+      ? new Date(token.calledAt).getTime() - new Date(token.createdAt).getTime()
+      : null
+    const serviceDurationMs = token?.completedAt && token?.startedAt
+      ? new Date(token.completedAt).getTime() - new Date(token.startedAt).getTime()
+      : null
+    const totalDurationMs = token?.completedAt && token?.createdAt
+      ? new Date(token.completedAt).getTime() - new Date(token.createdAt).getTime()
+      : null
+
+    res.json({
+      refNumber: sc.refNumber,
+      status: sc.status,
+      serviceTypes: sc.serviceTypes,
+      services: (sc.serviceTypes || []).map((code: string) => ({
+        code,
+        title: serviceTitleMap[code] || code
+      })),
+      createdAt: sc.createdAt,
+      completedAt: sc.completedAt,
+      lastUpdatedAt: sc.lastUpdatedAt,
+      outlet: { id: sc.outlet.id, name: sc.outlet.name, location: sc.outlet.location },
+      customer: {
+        id: sc.customer.id,
+        name: sc.customer.name,
+        mobileNumber: sc.customer.mobileNumber,
+        nicNumber: sc.customer.nicNumber || null,
+        email: sc.customer.email || null,
+        sltMobileNumber: sc.customer.sltMobileNumber || null,
+      },
+      officer: {
+        id: sc.officer.id,
+        name: sc.officer.name,
+        mobileNumber: sc.officer.mobileNumber,
+        counterNumber: sc.officer.counterNumber || null,
+      },
+      token: token ? {
+        id: token.id,
+        tokenNumber: token.tokenNumber,
+        isPriority: token.isPriority,
+        isTransferred: token.isTransferred,
+        preferredLanguages: token.preferredLanguages,
+        accountRef: token.accountRef || null,
+        sltTelephoneNumber: token.sltTelephoneNumber || null,
+        billPaymentIntent: token.billPaymentIntent || null,
+        billPaymentAmount: token.billPaymentAmount ?? null,
+        billPaymentMethod: token.billPaymentMethod || null,
+        createdAt: token.createdAt,
+        calledAt: token.calledAt || null,
+        startedAt: token.startedAt || null,
+        completedAt: token.completedAt || null,
+      } : null,
+      timeSpans: {
+        waitDurationMs,
+        serviceDurationMs,
+        totalDurationMs,
+      },
+      transferLogs: (token?.transferLogs || []).map((tl: any) => ({
+        id: tl.id,
+        fromOfficer: tl.fromOfficer,
+        fromCounterNumber: tl.fromCounterNumber,
+        toCounterNumber: tl.toCounterNumber,
+        previousServiceTypes: tl.previousServiceTypes,
+        newServiceTypes: tl.newServiceTypes,
+        notes: tl.notes,
+        createdAt: tl.createdAt,
+      })),
+      feedback: feedback ? {
+        rating: feedback.rating,
+        comment: feedback.comment || null,
+        createdAt: feedback.createdAt,
+        isResolved: (feedback as any).isResolved || false,
+        resolutionComment: (feedback as any).resolutionComment || null,
+      } : null,
+      updates: (sc.updates || []).map((u: any) => ({
+        id: u.id,
+        actorRole: u.actorRole,
+        actorId: u.actorId,
+        status: u.status,
+        note: u.note,
+        createdAt: u.createdAt,
+      }))
+    })
+  } catch (e) {
+    console.error('Teleshop manager service-case get error:', e)
+    res.status(500).json({ error: 'Failed to fetch service case' })
   }
 })
 
@@ -1566,5 +1782,427 @@ router.delete("/closure-notices/:noticeId", async (req: any, res) => {
   } catch (error) {
     console.error("Delete closure notice error:", error)
     res.status(500).json({ error: "Failed to delete closure notice" })
+  }
+})
+
+// ─── Audit Logs ───────────────────────────────────────────────────────────────
+// GET /teleshop-manager/audit-logs
+// Returns a combined timeline of CompletedServices, TransferLogs, BreakLogs and
+// ServiceCases for the teleshop manager's assigned branch.  Supports period
+// presets (today | week | month | year) or a custom startDate/endDate range,
+// plus optional officerId and logType filters.
+router.get("/audit-logs", async (req: any, res) => {
+  try {
+    const tm = req.teleshopManager
+
+    if (!tm.branchId) {
+      return res.json({
+        logs: [],
+        summary: { completedServices: 0, transfers: 0, breaks: 0, serviceCases: 0, total: 0 },
+        pagination: { page: 1, limit: 50, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
+      })
+    }
+
+    const {
+      period = "today",   // today | week | month | year | custom
+      startDate,
+      endDate,
+      officerId,
+      logType = "all",    // all | completed_services | transfers | breaks | service_cases
+      page = "1",
+      limit = "50",
+      export: isExport = "false"
+    } = req.query
+
+    const pageNum = Math.max(1, parseInt(page as string))
+    const maxLimit = isExport === "true" ? 10000 : 200
+    const limitNum = Math.min(maxLimit, Math.max(1, parseInt(limit as string)))
+
+    // ── Date range calculation ──────────────────────────────────────────────
+    const now = new Date()
+    let rangeStart: Date
+    let rangeEnd: Date = new Date(now.getTime() + 24 * 60 * 60 * 1000) // default: tomorrow (inclusive)
+
+    if (period === "custom" && startDate && endDate) {
+      rangeStart = new Date(startDate as string)
+      rangeEnd = new Date(endDate as string)
+      // Make endDate inclusive (end of that day)
+      rangeEnd.setHours(23, 59, 59, 999)
+    } else if (period === "week") {
+      rangeStart = new Date(now)
+      rangeStart.setDate(now.getDate() - 7)
+      rangeStart.setHours(0, 0, 0, 0)
+    } else if (period === "month") {
+      rangeStart = new Date(now)
+      rangeStart.setMonth(now.getMonth() - 1)
+      rangeStart.setHours(0, 0, 0, 0)
+    } else if (period === "year") {
+      rangeStart = new Date(now)
+      rangeStart.setFullYear(now.getFullYear() - 1)
+      rangeStart.setHours(0, 0, 0, 0)
+    } else {
+      // today (default)
+      rangeStart = new Date(now)
+      rangeStart.setHours(0, 0, 0, 0)
+    }
+
+    // ── Fetch each log type in parallel ────────────────────────────────────
+    // Build officer filter for branch
+    const officerFilter: any = { outletId: tm.branchId }
+    if (officerId) officerFilter.id = officerId
+
+    const officersAtBranch = await prisma.officer.findMany({
+      where: officerFilter,
+      select: { id: true, name: true, counterNumber: true, mobileNumber: true }
+    })
+    const officerIds = officersAtBranch.map((o: any) => o.id)
+    const officerMap: Record<string, any> = {}
+    officersAtBranch.forEach((o: any) => { officerMap[o.id] = o })
+
+    const dateRange = { gte: rangeStart, lte: rangeEnd }
+
+    const [completedServices, transferLogs, breakLogs, serviceCases] = await Promise.all([
+      // 1. Completed services
+      (logType === "all" || logType === "completed_services")
+        ? prisma.completedService.findMany({
+            where: {
+              outletId: tm.branchId,
+              officerId: officerId ? (officerId as string) : { in: officerIds },
+              completedAt: dateRange
+            },
+            include: {
+              token: {
+                select: {
+                  tokenNumber: true,
+                  billPaymentIntent: true,
+                  billPaymentMethod: true,
+                  billPaymentAmount: true,
+                  isPriority: true,
+                  isTransferred: true,
+                  accountRef: true,
+                  sltTelephoneNumber: true,
+                  preferredLanguages: true,
+                  createdAt: true,
+                  calledAt: true,
+                  startedAt: true,
+                  completedAt: true,
+                  customer: { select: { id: true, name: true, mobileNumber: true, nicNumber: true, email: true } },
+                  serviceCases: {
+                    select: {
+                      refNumber: true,
+                      status: true,
+                      createdAt: true,
+                      completedAt: true,
+                      lastUpdatedAt: true,
+                      updates: { orderBy: { createdAt: "desc" }, take: 10 }
+                    },
+                    take: 1
+                  }
+                }
+              },
+              service: { select: { id: true, code: true, title: true } },
+              officer: { select: { id: true, name: true, counterNumber: true, mobileNumber: true } },
+              outlet: { select: { id: true, name: true, location: true } }
+            },
+            orderBy: { completedAt: "desc" }
+          })
+        : Promise.resolve([]),
+
+      // 2. Transfer logs
+      (logType === "all" || logType === "transfers")
+        ? (prisma as any).transferLog.findMany({
+            where: {
+              fromOfficerId: { in: officerIds },
+              createdAt: dateRange
+            },
+            include: {
+              token: {
+                select: {
+                  tokenNumber: true,
+                  outletId: true,
+                  customer: { select: { id: true, name: true, mobileNumber: true } }
+                }
+              },
+              fromOfficer: { select: { id: true, name: true, counterNumber: true } }
+            },
+            orderBy: { createdAt: "desc" }
+          })
+        : Promise.resolve([]),
+
+      // 3. Break logs
+      (logType === "all" || logType === "breaks")
+        ? (prisma as any).breakLog.findMany({
+            where: {
+              officerId: { in: officerIds },
+              startedAt: dateRange
+            },
+            include: {
+              Officer: { select: { id: true, name: true, counterNumber: true } }
+            },
+            orderBy: { startedAt: "desc" }
+          })
+        : Promise.resolve([]),
+
+      // 4. Service cases
+      (logType === "all" || logType === "service_cases")
+        ? (prisma as any).serviceCase.findMany({
+            where: {
+              outletId: tm.branchId,
+              officerId: officerId ? (officerId as string) : { in: officerIds },
+              createdAt: dateRange
+            },
+            include: {
+              officer: { select: { id: true, name: true, counterNumber: true, mobileNumber: true } },
+              customer: { select: { id: true, name: true, mobileNumber: true, nicNumber: true, email: true } },
+              outlet: { select: { id: true, name: true, location: true } },
+              token: {
+                select: {
+                  tokenNumber: true,
+                  isPriority: true,
+                  isTransferred: true,
+                  accountRef: true,
+                  sltTelephoneNumber: true,
+                  billPaymentIntent: true,
+                  billPaymentMethod: true,
+                  billPaymentAmount: true,
+                  preferredLanguages: true,
+                  createdAt: true,
+                  calledAt: true,
+                  startedAt: true,
+                  completedAt: true
+                }
+              },
+              updates: {
+                orderBy: { createdAt: "desc" },
+                take: 20
+              }
+            },
+            orderBy: { createdAt: "desc" }
+          })
+        : Promise.resolve([])
+    ])
+
+    // ── Normalise into a unified event timeline ────────────────────────────
+    type AuditEntry = {
+      id: string
+      type: "completed_service" | "transfer" | "break" | "service_case"
+      timestamp: string
+      officer: { id: string; name: string; counterNumber?: number | null } | null
+      description: string
+      meta: Record<string, any>
+    }
+
+    const entries: AuditEntry[] = []
+
+    // Completed services
+    for (const cs of completedServices as any[]) {
+      const tok = cs.token ?? null
+      const sc = tok?.serviceCases?.[0] ?? null
+
+      // Compute time spans in ms
+      const tokenIssuedAt = tok?.createdAt ?? null
+      const calledAt = tok?.calledAt ?? null
+      const startedAt = tok?.startedAt ?? null
+      const completedAt = tok?.completedAt ?? cs.completedAt ?? null
+      const waitDurationMs =
+        calledAt && tokenIssuedAt
+          ? new Date(calledAt).getTime() - new Date(tokenIssuedAt).getTime()
+          : null
+      const serviceDurationMs =
+        completedAt && startedAt
+          ? new Date(completedAt).getTime() - new Date(startedAt).getTime()
+          : null
+      const totalDurationMs =
+        completedAt && tokenIssuedAt
+          ? new Date(completedAt).getTime() - new Date(tokenIssuedAt).getTime()
+          : null
+
+      entries.push({
+        id: cs.id,
+        type: "completed_service",
+        timestamp: cs.completedAt,
+        officer: cs.officer ?? null,
+        description: `Token #${tok?.tokenNumber} — ${cs.service?.title || cs.service?.code} completed`,
+        meta: {
+          // Basic
+          tokenNumber: tok?.tokenNumber,
+          service: cs.service,
+          durationSeconds: cs.duration ?? null,
+          notes: cs.notes ?? null,
+          // Customer
+          customer: tok?.customer
+            ? { ...tok.customer, preferredLanguages: tok.preferredLanguages ?? [] }
+            : null,
+          // Officer enriched
+          officerMobile: cs.officer?.mobileNumber ?? null,
+          // Token details
+          isPriority: tok?.isPriority ?? false,
+          isTransferred: tok?.isTransferred ?? false,
+          accountRef: tok?.accountRef ?? null,
+          sltTelephoneNumber: tok?.sltTelephoneNumber ?? null,
+          // Timeline
+          tokenIssuedAt,
+          calledAt,
+          startedAt,
+          completedAt,
+          // Durations
+          waitDurationMs,
+          serviceDurationMs,
+          totalDurationMs,
+          // Bill payment
+          billPaymentIntent: tok?.billPaymentIntent ?? null,
+          billPaymentMethod: tok?.billPaymentMethod ?? null,
+          billPaymentAmount: tok?.billPaymentAmount ?? null,
+          // Outlet
+          outlet: cs.outlet ?? null,
+          // Service case
+          serviceCase: sc
+            ? {
+                refNumber: sc.refNumber,
+                status: sc.status,
+                createdAt: sc.createdAt,
+                completedAt: sc.completedAt,
+                lastUpdatedAt: sc.lastUpdatedAt,
+                updates: sc.updates ?? []
+              }
+            : null
+        }
+      })
+    }
+
+    // Transfer logs
+    for (const tl of transferLogs as any[]) {
+      // Only include if token belongs to this outlet
+      if (tl.token?.outletId && tl.token.outletId !== tm.branchId) continue
+      entries.push({
+        id: tl.id,
+        type: "transfer",
+        timestamp: tl.createdAt,
+        officer: tl.fromOfficer ?? null,
+        description: `Token #${tl.token?.tokenNumber} transferred (Counter ${tl.fromCounterNumber ?? "?"} → ${tl.toCounterNumber ?? "?"})`,
+        meta: {
+          tokenNumber: tl.token?.tokenNumber,
+          customer: tl.token?.customer,
+          fromCounterNumber: tl.fromCounterNumber,
+          toCounterNumber: tl.toCounterNumber,
+          previousServiceTypes: tl.previousServiceTypes,
+          newServiceTypes: tl.newServiceTypes,
+          notes: tl.notes ?? null
+        }
+      })
+    }
+
+    // Break logs
+    for (const bl of breakLogs as any[]) {
+      const officer = bl.Officer ?? null
+      const durationMins = bl.endedAt
+        ? Math.round((new Date(bl.endedAt).getTime() - new Date(bl.startedAt).getTime()) / 60000)
+        : null
+      entries.push({
+        id: bl.id,
+        type: "break",
+        timestamp: bl.startedAt,
+        officer: officer ? { id: officer.id, name: officer.name, counterNumber: officer.counterNumber } : null,
+        description: bl.endedAt
+          ? `Break ended (${durationMins} min)`
+          : `Break started`,
+        meta: {
+          startedAt: bl.startedAt,
+          endedAt: bl.endedAt ?? null,
+          durationMinutes: durationMins
+        }
+      })
+    }
+
+    // Service cases
+    for (const sc of serviceCases as any[]) {
+      const tok = sc.token ?? null
+      const tokenIssuedAt = tok?.createdAt ?? null
+      const calledAt = tok?.calledAt ?? null
+      const startedAt = tok?.startedAt ?? null
+      const completedAt = tok?.completedAt ?? sc.completedAt ?? null
+      const waitDurationMs =
+        calledAt && tokenIssuedAt
+          ? new Date(calledAt).getTime() - new Date(tokenIssuedAt).getTime()
+          : null
+      const serviceDurationMs =
+        completedAt && startedAt
+          ? new Date(completedAt).getTime() - new Date(startedAt).getTime()
+          : null
+      const totalDurationMs =
+        completedAt && tokenIssuedAt
+          ? new Date(completedAt).getTime() - new Date(tokenIssuedAt).getTime()
+          : null
+
+      entries.push({
+        id: sc.id,
+        type: "service_case",
+        timestamp: sc.createdAt,
+        officer: sc.officer ?? null,
+        description: `Service case ${sc.refNumber} — ${sc.status}`,
+        meta: {
+          refNumber: sc.refNumber,
+          serviceTypes: sc.serviceTypes,
+          status: sc.status,
+          customer: sc.customer ?? null,
+          outlet: sc.outlet ?? null,
+          createdAt: sc.createdAt,
+          completedAt: sc.completedAt ?? null,
+          lastUpdatedAt: sc.lastUpdatedAt ?? null,
+          updates: sc.updates ?? [],
+          latestUpdate: sc.updates?.[0] ?? null,
+          // Token details
+          tokenNumber: tok?.tokenNumber ?? null,
+          isPriority: tok?.isPriority ?? false,
+          isTransferred: tok?.isTransferred ?? false,
+          accountRef: tok?.accountRef ?? null,
+          sltTelephoneNumber: tok?.sltTelephoneNumber ?? null,
+          preferredLanguages: tok?.preferredLanguages ?? [],
+          // Bill payment
+          billPaymentIntent: tok?.billPaymentIntent ?? null,
+          billPaymentMethod: tok?.billPaymentMethod ?? null,
+          billPaymentAmount: tok?.billPaymentAmount ?? null,
+          // Service timeline
+          tokenIssuedAt,
+          calledAt,
+          startedAt,
+          tokenCompletedAt: completedAt,
+          waitDurationMs,
+          serviceDurationMs,
+          totalDurationMs
+        }
+      })
+    }
+
+    // ── Sort all entries newest-first ──────────────────────────────────────
+    entries.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+
+    // ── Paginate ───────────────────────────────────────────────────────────
+    const total = entries.length
+    const paged = entries.slice((pageNum - 1) * limitNum, pageNum * limitNum)
+
+    res.json({
+      logs: paged,
+      summary: {
+        completedServices: (completedServices as any[]).length,
+        transfers: (transferLogs as any[]).filter((tl: any) => !tl.token?.outletId || tl.token.outletId === tm.branchId).length,
+        breaks: (breakLogs as any[]).length,
+        serviceCases: (serviceCases as any[]).length,
+        total
+      },
+      officers: officersAtBranch,
+      period: { preset: period, start: rangeStart, end: rangeEnd },
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum),
+        hasNext: pageNum * limitNum < total,
+        hasPrev: pageNum > 1
+      }
+    })
+  } catch (error) {
+    console.error("Audit logs error:", error)
+    res.status(500).json({ error: "Failed to fetch audit logs" })
   }
 })

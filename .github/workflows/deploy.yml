@@ -47,6 +47,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
+          context: git
           images: ${{ env.REGISTRY }}/${{ steps.lowercase.outputs.image_name }}
           tags: |
             type=raw,value=latest
@@ -147,10 +148,47 @@ jobs:
             grep -v '^#' .env | grep -v '^$' | \
               sed "s/^\([A-Za-z_][A-Za-z0-9_]*\)='\(.*\)'$/\1=\2/" | \
               sed 's/^\([A-Za-z_][A-Za-z0-9_]*\)="\(.*\)"$/\1=\2/' > /tmp/docker.env
-            sudo docker run --rm --env-file /tmp/docker.env "$DOCKER_IMAGE" sh -c "
-              npx prisma migrate resolve --rolled-back 20260308062000_add_recurring_closure_notices 2>&1 || true
-              npx prisma migrate deploy
-            "
+
+            # Derive DIRECT_URL from DATABASE_URL by removing -pooler from the Neon hostname.
+            # Prisma migrations require a direct (non-pooled) connection to acquire advisory locks.
+            DIRECT_URL=$(grep '^DATABASE_URL=' /tmp/docker.env | sed 's/^DATABASE_URL=//' | sed 's/-pooler\././')
+            echo "DIRECT_URL=$DIRECT_URL" >> /tmp/docker.env
+            echo "DIRECT_URL=$DIRECT_URL" >> .env
+
+            # Neon auto-suspends inactive branches; the advisory-lock query times out
+            # during cold-start. Retry up to 3 times (15s apart) to let the branch resume.
+            # DIRECT_URL is set above so Prisma uses the direct (non-pooled) connection,
+            # which supports advisory locks without any extra flags.
+            MIGRATION_SUCCESS=false
+            for attempt in 1 2 3; do
+              echo "Migration attempt $attempt/3..."
+              MIGRATION_OUTPUT=$(sudo docker run --rm --env-file /tmp/docker.env "$DOCKER_IMAGE" sh -c "
+                npx prisma migrate deploy 2>&1
+              " || true)
+              echo "$MIGRATION_OUTPUT"
+              
+              # Check if migration was successful (either no pending migrations or successful apply)
+              # The period at the end is important for "No pending migrations to apply."
+              if echo "$MIGRATION_OUTPUT" | grep -q "No pending migrations to apply\.\|migrations applied"; then
+                echo "✅ Migrations successful!"
+                MIGRATION_SUCCESS=true
+                break
+              fi
+              
+              # If there was a connection/timeout error, retry
+              if echo "$MIGRATION_OUTPUT" | grep -q "timeout\|Connection\|ENOTFOUND\|advisory lock"; then
+                echo "Migration attempt $attempt failed (connection/timeout). Waiting 15s before retry..."
+                sleep 15
+              else
+                echo "Migration attempt $attempt failed with unexpected error. Stopping retries."
+                break
+              fi
+            done
+
+            if [ "$MIGRATION_SUCCESS" != "true" ]; then
+              echo "❌ All migration attempts failed!"
+              exit 1
+            fi
 
             # Start new container (prisma migrate deploy in CMD will be a no-op now)
             sudo docker compose up -d --no-deps backend

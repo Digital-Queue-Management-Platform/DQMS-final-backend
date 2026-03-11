@@ -157,21 +157,65 @@ router.post("/closure-notices", async (req, res) => {
         const auth = verifyGMToken(req)
         if (!auth) return res.status(401).json({ error: "GM authentication required" })
 
-        const { outletId, title, message, startsAt, endsAt } = req.body
+        const { outletId, title, message, startsAt, endsAt, noticeType, isRecurring, recurringType, recurringDays, recurringEndDate } = req.body
         if (!outletId || !title || !message || !startsAt || !endsAt)
             return res.status(400).json({ error: "outletId, title, message, startsAt, and endsAt are required" })
 
         const outlet = await prisma.outlet.findUnique({ where: { id: outletId } })
         if (!outlet) return res.status(404).json({ error: "Outlet not found" })
 
+        if (!isRecurring && new Date(startsAt) >= new Date(endsAt))
+            return res.status(400).json({ error: "endsAt must be after startsAt" })
+
+        const type = noticeType === "standard" ? "standard" : "closure"
         const notice = await (prisma as any).closureNotice.create({
-            data: { outletId, title, message, startsAt: new Date(startsAt), endsAt: new Date(endsAt), createdBy: "gm", createdById: auth.gmId }
+            data: {
+                outletId, title, message,
+                startsAt: new Date(startsAt), endsAt: new Date(endsAt),
+                createdBy: "gm", createdById: auth.gmId,
+                noticeType: type,
+                isRecurring: Boolean(isRecurring),
+                recurringType: isRecurring ? (recurringType || "weekly") : null,
+                recurringDays: isRecurring && Array.isArray(recurringDays) ? recurringDays : [],
+                recurringEndDate: recurringEndDate ? new Date(recurringEndDate) : null,
+            }
         })
 
         res.json({ success: true, notice })
     } catch (err) {
         console.error("GM create closure notice error:", err)
         res.status(500).json({ error: "Failed to create closure notice" })
+    }
+})
+
+// PUT /closure-notices/:id - update a closure notice
+router.put("/closure-notices/:id", async (req, res) => {
+    try {
+        const auth = verifyGMToken(req)
+        if (!auth) return res.status(401).json({ error: "GM authentication required" })
+
+        const notice = await (prisma as any).closureNotice.findUnique({ where: { id: req.params.id } })
+        if (!notice) return res.status(404).json({ error: "Notice not found" })
+
+        const { title, message, startsAt, endsAt, noticeType, isRecurring, recurringType, recurringDays, recurringEndDate } = req.body
+        const type = noticeType === "standard" ? "standard" : "closure"
+        const updated = await (prisma as any).closureNotice.update({
+            where: { id: req.params.id },
+            data: {
+                title, message,
+                startsAt: new Date(startsAt),
+                endsAt: new Date(endsAt),
+                noticeType: type,
+                isRecurring: Boolean(isRecurring),
+                recurringType: isRecurring ? (recurringType || "weekly") : null,
+                recurringDays: isRecurring && Array.isArray(recurringDays) ? recurringDays : [],
+                recurringEndDate: recurringEndDate ? new Date(recurringEndDate) : null,
+            }
+        })
+        res.json({ success: true, notice: updated })
+    } catch (err) {
+        console.error("GM update closure notice error:", err)
+        res.status(500).json({ error: "Failed to update closure notice" })
     }
 })
 

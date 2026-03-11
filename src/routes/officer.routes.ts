@@ -377,10 +377,11 @@ router.post("/next-token", async (req, res) => {
         const tokenLangs = toLangArray(t.preferredLanguages)
         console.log(`Token #${t.tokenNumber} - Services:`, t.serviceTypes, 'Languages:', tokenLangs)
 
-        // If token has no language preference, skip it in strict mode
+        // If token has no language preference, any officer can serve it
         if (tokenLangs.length === 0) {
-          console.log(`Token #${t.tokenNumber} has no language preference - skipping`)
-          continue
+          nextToken = t
+          console.log(`✓ Token #${t.tokenNumber} has no language preference - any officer can serve`)
+          break
         }
 
         // Check if there's a language match
@@ -451,13 +452,23 @@ router.post("/next-token", async (req, res) => {
 
       console.log(`[NEXT-TOKEN] About to send SMS to ${updatedToken.customer.mobileNumber} for token #${updatedToken.tokenNumber}`)
 
+      const _prefs = (updatedToken as any).preferredLanguages
+      let customerLang: 'en' | 'si' | 'ta' = 'en'
+      if (Array.isArray(_prefs) && _prefs.length > 0) {
+        const fp = String(_prefs[0]).toLowerCase()
+        if (['en', 'si', 'ta'].includes(fp)) customerLang = fp as 'en' | 'si' | 'ta'
+      } else if (typeof _prefs === 'string') {
+        if (_prefs.includes('si')) customerLang = 'si'
+        else if (_prefs.includes('ta')) customerLang = 'ta'
+      }
+
       await sltSmsService.sendCustomerCalled(updatedToken.customer.mobileNumber, {
         firstName,
         tokenNumber: updatedToken.tokenNumber,
         counterNumber: officer.counterNumber || 0,
         outletName: updatedToken.outlet?.name || 'SLT Office',
         recoveryUrl
-      })
+      }, customerLang)
       console.log(`✓ Next-token SMS sent to customer ${updatedToken.customer.mobileNumber} for token #${updatedToken.tokenNumber}`)
     } catch (smsError) {
       console.error('Next-token SMS sending failed:', smsError)
@@ -629,12 +640,22 @@ router.post("/skip-token", async (req, res) => {
       const shortId = skipped.id.substring(0, 8)
       const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
 
+      const _skipPrefs = (skipped as any).preferredLanguages
+      let customerLang: 'en' | 'si' | 'ta' = 'en'
+      if (Array.isArray(_skipPrefs) && _skipPrefs.length > 0) {
+        const fp = String(_skipPrefs[0]).toLowerCase()
+        if (['en', 'si', 'ta'].includes(fp)) customerLang = fp as 'en' | 'si' | 'ta'
+      } else if (typeof _skipPrefs === 'string') {
+        if (_skipPrefs.includes('si')) customerLang = 'si'
+        else if (_skipPrefs.includes('ta')) customerLang = 'ta'
+      }
+
       await sltSmsService.sendCustomerSkipped(skipped.customer.mobileNumber, {
         firstName,
         tokenNumber: skipped.tokenNumber,
         outletName: skipped.outlet?.name || 'SLT Office',
         recoveryUrl
-      })
+      }, customerLang)
       console.log(`✓ Skip SMS sent to customer ${skipped.customer.mobileNumber} for token #${skipped.tokenNumber}`)
     } catch (smsError) {
       console.error('Skip SMS sending failed:', smsError)
@@ -699,13 +720,23 @@ router.post("/recall-token", async (req, res) => {
       const shortId = recalled.id.substring(0, 8)
       const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
 
+      const _recallPrefs = (recalled as any).preferredLanguages
+      let customerLang: 'en' | 'si' | 'ta' = 'en'
+      if (Array.isArray(_recallPrefs) && _recallPrefs.length > 0) {
+        const fp = String(_recallPrefs[0]).toLowerCase()
+        if (['en', 'si', 'ta'].includes(fp)) customerLang = fp as 'en' | 'si' | 'ta'
+      } else if (typeof _recallPrefs === 'string') {
+        if (_recallPrefs.includes('si')) customerLang = 'si'
+        else if (_recallPrefs.includes('ta')) customerLang = 'ta'
+      }
+
       await sltSmsService.sendCustomerRecalled(recalled.customer.mobileNumber, {
         firstName,
         tokenNumber: recalled.tokenNumber,
         outletName: recalled.outlet?.name || 'SLT Office',
         recoveryUrl,
         counterNumber: recalled.counterNumber || undefined
-      })
+      }, customerLang)
       console.log(`✓ Recall SMS sent to customer ${recalled.customer.mobileNumber} for token #${recalled.tokenNumber}`)
     } catch (smsError) {
       console.error('Recall SMS sending failed:', smsError)
@@ -830,13 +861,23 @@ router.post("/call-token", async (req, res) => {
 
       console.log(`[CALL-TOKEN] About to send SMS to ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
 
+      const _callPrefs = (called as any).preferredLanguages
+      let customerLang: 'en' | 'si' | 'ta' = 'en'
+      if (Array.isArray(_callPrefs) && _callPrefs.length > 0) {
+        const fp = String(_callPrefs[0]).toLowerCase()
+        if (['en', 'si', 'ta'].includes(fp)) customerLang = fp as 'en' | 'si' | 'ta'
+      } else if (typeof _callPrefs === 'string') {
+        if (_callPrefs.includes('si')) customerLang = 'si'
+        else if (_callPrefs.includes('ta')) customerLang = 'ta'
+      }
+
       await sltSmsService.sendCustomerCalled(called.customer.mobileNumber, {
         firstName,
         tokenNumber: called.tokenNumber,
         counterNumber: officer.counterNumber || 0,
         outletName: called.outlet?.name || 'SLT Office',
         recoveryUrl
-      })
+      }, customerLang)
       console.log(`✓ Call-to-counter SMS sent to customer ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
     } catch (smsError) {
       console.error('Call-to-counter SMS sending failed:', smsError)
@@ -975,15 +1016,58 @@ router.post("/complete-service", async (req, res) => {
           else if (prefs.includes('ta')) customerLang = 'ta'
         }
 
-        await sltSmsService.sendServiceCompletion(token.customer.mobileNumber, {
-          firstName,
-          tokenNumber: token.tokenNumber,
-          refNumber: serviceCase.refNumber,
-          services,
-          feedbackUrl,
-          outletName: token.outlet?.name || 'SLT Office'
-        }, customerLang)
-        console.log(`✓ Service completion SMS sent to ${token.customer.mobileNumber}`)
+        const isBillPayment = Array.isArray((token as any).serviceTypes) && ((token as any).serviceTypes.includes('SVC002') || (token as any).serviceTypes.includes('BILL_PAYMENT'))
+
+        // Build tracking URL used by all service completion SMS messages
+        const trackRef = `/service/status?ref=${encodeURIComponent(serviceCase.refNumber)}`
+        const smsOrigins = (process.env.FRONTEND_ORIGIN || '').split(',').map((s: string) => s.trim()).filter(Boolean)
+        let smsBaseUrl = smsOrigins[0] || ''
+        const smsVercelUrl = smsOrigins.find((o: string) => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+        if (smsVercelUrl) {
+          smsBaseUrl = smsVercelUrl
+        } else if (process.env.NODE_ENV === 'production') {
+          smsBaseUrl = smsOrigins.find((o: string) => o.startsWith('https://') && !o.includes('localhost')) || smsBaseUrl
+        }
+        const completionTrackingUrl = smsBaseUrl ? `${smsBaseUrl}${trackRef}` : undefined
+
+        if (isBillPayment) {
+          // Resolve the actual payment amount for the SMS
+          let billPaymentAmount: number | undefined = (token as any).billPaymentAmount ?? undefined
+          if ((token as any).billPaymentIntent === 'full' && (token as any).sltTelephoneNumber) {
+            try {
+              const billRecord = await prisma.sltBill.findUnique({
+                where: { telephoneNumber: (token as any).sltTelephoneNumber },
+                select: { currentBill: true }
+              })
+              if (billRecord) billPaymentAmount = billRecord.currentBill
+            } catch { /* ignore, amount stays undefined */ }
+          }
+
+          // Send bill payment confirmation SMS with payment details
+          await sltSmsService.sendBillPaymentConfirmation(token.customer.mobileNumber, {
+            firstName,
+            tokenNumber: token.tokenNumber,
+            outletName: token.outlet?.name || 'SLT Office',
+            refNumber: serviceCase.refNumber,
+            paymentIntent: (token as any).billPaymentIntent || 'not_specified',
+            paymentAmount: billPaymentAmount,
+            paymentMethod: (token as any).billPaymentMethod || undefined,
+            trackingUrl: completionTrackingUrl,
+            feedbackUrl,
+          })
+          console.log(`✓ Bill payment confirmation SMS sent to ${token.customer.mobileNumber}`)
+        } else {
+          await sltSmsService.sendServiceCompletion(token.customer.mobileNumber, {
+            firstName,
+            tokenNumber: token.tokenNumber,
+            refNumber: serviceCase.refNumber,
+            services,
+            feedbackUrl,
+            outletName: token.outlet?.name || 'SLT Office',
+            trackingUrl: completionTrackingUrl,
+          }, customerLang)
+          console.log(`✓ Service completion SMS sent to ${token.customer.mobileNumber}`)
+        }
       } catch (smsError) {
         console.error('SMS sending failed:', smsError)
         // Continue execution even if SMS fails
@@ -1552,10 +1636,33 @@ router.get("/stats/:officerId", async (req, res) => {
       include: { customer: true },
     })
 
+    // If the current token is a bill payment service, fetch the SLT bill data
+    let billData = null
+    if (currentToken && ((currentToken.serviceTypes as string[]).includes('SVC002') || (currentToken.serviceTypes as string[]).includes('BILL_PAYMENT')) && (currentToken as any).sltTelephoneNumber) {
+      try {
+        billData = await prisma.sltBill.findUnique({
+          where: { telephoneNumber: (currentToken as any).sltTelephoneNumber },
+          select: {
+            telephoneNumber: true,
+            accountName: true,
+            accountAddress: true,
+            currentBill: true,
+            dueDate: true,
+            status: true,
+            lastPaymentDate: true,
+            updatedAt: true,
+          }
+        })
+      } catch (billError) {
+        console.error('Failed to fetch bill data for token:', billError)
+      }
+    }
+
     res.json({
       tokensHandled,
       avgRating: avgRating._avg.rating || 0,
       currentToken,
+      billData,
     })
   } catch (error) {
     console.error("Stats error:", error)
@@ -1931,7 +2038,7 @@ router.post("/service-case/complete", async (req, res) => {
   }
 })
 
-// Officer-auth: Get a service case by refNumber only if owned by this officer
+// Officer-auth: Get a service case by refNumber - any case from the officer's outlet
 router.get("/service-case/*", async (req, res) => {
   try {
     // Authenticate officer via JWT (cookie or Authorization header)
@@ -1952,35 +2059,134 @@ router.get("/service-case/*", async (req, res) => {
     }
 
     const officerId = payload.officerId
+
+    // Look up officer to get outletId for authorization
+    const officer = await prisma.officer.findUnique({
+      where: { id: officerId },
+      select: { id: true, outletId: true }
+    })
+    if (!officer) return res.status(401).json({ error: "Officer not found" })
+
     const refNumber = decodeURIComponent((req.params as any)[0])
     if (!refNumber) return res.status(400).json({ error: 'refNumber is required' })
 
     const sc: any = await (prisma as any).serviceCase.findUnique({
       where: { refNumber },
       include: {
-        outlet: true,
-        officer: true,
         customer: true,
-        token: { select: { preferredLanguages: true } },
+        officer: true,
+        outlet: true,
+        token: {
+          include: {
+            feedback: true,
+            transferLogs: {
+              include: {
+                fromOfficer: { select: { id: true, name: true, counterNumber: true } }
+              },
+              orderBy: { createdAt: 'asc' }
+            }
+          }
+        },
         updates: { orderBy: { createdAt: 'asc' } },
       },
     })
 
     if (!sc) return res.status(404).json({ error: 'Reference not found' })
-    if (sc.officerId !== officerId) {
+
+    // Authorization: officer must belong to the same outlet as the service case
+    if (sc.outletId !== officer.outletId) {
       return res.status(403).json({ error: 'Not authorized to view this service case' })
     }
+
+    // Resolve service titles from codes
+    const serviceCodes: string[] = sc.serviceTypes || []
+    const serviceRecords = serviceCodes.length > 0
+      ? await prisma.service.findMany({
+          where: { code: { in: serviceCodes } },
+          select: { code: true, title: true }
+        })
+      : []
+    const serviceTitleMap: Record<string, string> = {}
+    for (const s of serviceRecords) serviceTitleMap[s.code] = s.title
+
+    const tok = sc.token
+    const feedback = tok?.feedback || null
+
+    const waitDurationMs = tok?.calledAt && tok?.createdAt
+      ? new Date(tok.calledAt).getTime() - new Date(tok.createdAt).getTime()
+      : null
+    const serviceDurationMs = tok?.completedAt && tok?.startedAt
+      ? new Date(tok.completedAt).getTime() - new Date(tok.startedAt).getTime()
+      : null
+    const totalDurationMs = tok?.completedAt && tok?.createdAt
+      ? new Date(tok.completedAt).getTime() - new Date(tok.createdAt).getTime()
+      : null
 
     return res.json({
       refNumber: sc.refNumber,
       status: sc.status,
-      outlet: { id: sc.outletId, name: sc.outlet.name, location: sc.outlet.location },
       serviceTypes: sc.serviceTypes,
+      services: (sc.serviceTypes || []).map((code: string) => ({
+        code,
+        title: serviceTitleMap[code] || code
+      })),
       createdAt: sc.createdAt,
       completedAt: sc.completedAt,
-      preferredLanguage: Array.isArray(sc?.token?.preferredLanguages) && sc.token.preferredLanguages.length > 0
-        ? sc.token.preferredLanguages[0]
-        : null,
+      lastUpdatedAt: sc.lastUpdatedAt,
+      isOwnCase: sc.officerId === officerId,
+      outlet: { id: sc.outlet.id, name: sc.outlet.name, location: sc.outlet.location },
+      customer: {
+        id: sc.customer.id,
+        name: sc.customer.name,
+        mobileNumber: sc.customer.mobileNumber,
+        nicNumber: sc.customer.nicNumber || null,
+        email: sc.customer.email || null,
+        sltMobileNumber: sc.customer.sltMobileNumber || null,
+      },
+      officer: {
+        id: sc.officer.id,
+        name: sc.officer.name,
+        mobileNumber: sc.officer.mobileNumber,
+        counterNumber: sc.officer.counterNumber || null,
+      },
+      token: tok ? {
+        id: tok.id,
+        tokenNumber: tok.tokenNumber,
+        isPriority: tok.isPriority,
+        isTransferred: tok.isTransferred,
+        preferredLanguages: tok.preferredLanguages,
+        accountRef: tok.accountRef || null,
+        sltTelephoneNumber: tok.sltTelephoneNumber || null,
+        billPaymentIntent: tok.billPaymentIntent || null,
+        billPaymentAmount: tok.billPaymentAmount ?? null,
+        billPaymentMethod: tok.billPaymentMethod || null,
+        createdAt: tok.createdAt,
+        calledAt: tok.calledAt || null,
+        startedAt: tok.startedAt || null,
+        completedAt: tok.completedAt || null,
+      } : null,
+      timeSpans: {
+        waitDurationMs,
+        serviceDurationMs,
+        totalDurationMs,
+      },
+      transferLogs: (tok?.transferLogs || []).map((tl: any) => ({
+        id: tl.id,
+        fromOfficer: tl.fromOfficer,
+        fromCounterNumber: tl.fromCounterNumber,
+        toCounterNumber: tl.toCounterNumber,
+        previousServiceTypes: tl.previousServiceTypes,
+        newServiceTypes: tl.newServiceTypes,
+        notes: tl.notes,
+        createdAt: tl.createdAt,
+      })),
+      feedback: feedback ? {
+        rating: feedback.rating,
+        comment: feedback.comment || null,
+        createdAt: feedback.createdAt,
+        isResolved: (feedback as any).isResolved || false,
+        resolutionComment: (feedback as any).resolutionComment || null,
+      } : null,
       updates: (sc.updates as any[]).map((u: any) => ({
         id: u.id,
         actorRole: u.actorRole,

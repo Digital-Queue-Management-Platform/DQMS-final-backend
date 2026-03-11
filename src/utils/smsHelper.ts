@@ -66,16 +66,15 @@ class UnifiedSmsHelper {
    * Send OTP SMS
    */
   async sendOTP(mobileNumber: string, otpCode: string, language: 'en' | 'si' | 'ta' = 'en'): Promise<SendSMSResult> {
-    const otpMessages = {
-      en: `Dear Valued Customer\n\nYour verification code is ${otpCode}. Valid for 5 minutes.\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\nඔබගේ සත්‍යාපන කේතය ${otpCode}. මිනිත්තු 5ක් සඳහා වලංගුයි.\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\nஉங்கள் சரிபார்ப்பு குறியீடு ${otpCode}. 5 நிமிடங்களுக்கு செல்லுபடியாகும்.\n\nSLT-MOBITEL`
-    }
+    // Always send OTP in English (plain ASCII) regardless of preferred language.
+    // Unicode SMS (Sinhala/Tamil) is limited to 70 chars per segment and many gateways
+    // do not reliably deliver multi-part Unicode SMS, causing OTPs to be silently lost.
+    const message = `Dear Valued Customer\n\nYour verification code is ${otpCode}. Valid for 5 minutes.\n\nSLT-MOBITEL`
 
     return this.sendSMS({
       to: mobileNumber,
-      body: otpMessages[language],
-      language
+      body: message,
+      language: 'en'
     })
   }
 
@@ -100,8 +99,8 @@ class UnifiedSmsHelper {
 
     return this.sendSMS({
       to: mobileNumber,
-      body: messages[language],
-      language
+      body: messages.en,
+      language: 'en'
     })
   }
 
@@ -123,8 +122,8 @@ class UnifiedSmsHelper {
 
     return this.sendSMS({
       to: mobileNumber,
-      body: messages[language],
-      language
+      body: messages.en,
+      language: 'en'
     })
   }
 
@@ -149,8 +148,8 @@ class UnifiedSmsHelper {
 
     return this.sendSMS({
       to: mobileNumber,
-      body: messages[language],
-      language
+      body: messages.en,
+      language: 'en'
     })
   }
 
@@ -177,8 +176,8 @@ class UnifiedSmsHelper {
 
     return this.sendSMS({
       to: mobileNumber,
-      body: messages[language],
-      language
+      body: messages.en,
+      language: 'en'
     })
   }
 

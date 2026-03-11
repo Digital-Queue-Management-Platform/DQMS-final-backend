@@ -311,7 +311,7 @@ router.get("/validate-qr", async (req, res) => {
 // Register customer and create token
 router.post("/register", async (req, res) => {
   try {
-    const { name, mobileNumber, serviceTypes, outletId, qrToken, preferredLanguages, sltMobileNumber, nicNumber, email, verifiedMobileToken } = req.body
+    const { name, mobileNumber, serviceTypes, outletId, qrToken, preferredLanguages, sltMobileNumber, nicNumber, email, verifiedMobileToken, sltTelephoneNumber, billPaymentIntent, billPaymentAmount, billPaymentMethod } = req.body
 
     console.log(`Registration attempt - Mobile: ${mobileNumber}, Outlet: ${outletId}, Services: ${serviceTypes}`)
 
@@ -450,6 +450,10 @@ router.post("/register", async (req, res) => {
           preferredLanguages: Array.isArray(preferredLanguages) && preferredLanguages.length > 0
             ? preferredLanguages
             : undefined,
+          sltTelephoneNumber: sltTelephoneNumber?.trim() || null,
+          billPaymentIntent: billPaymentIntent || null,
+          billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : null,
+          billPaymentMethod: billPaymentMethod || null,
         },
         include: {
           customer: true,
@@ -635,6 +639,45 @@ router.post("/token/:tokenId/cancel", async (req, res) => {
   } catch (error) {
     console.error("Token cancel error:", error)
     res.status(500).json({ error: "Failed to cancel token" })
+  }
+})
+
+// Update bill payment method — only allowed when token is in_service (officer has called the customer)
+router.patch("/token/:tokenId/payment-method", async (req, res) => {
+  try {
+    const { tokenId } = req.params
+    const { billPaymentIntent, billPaymentAmount, billPaymentMethod } = req.body
+
+    if (!billPaymentIntent || !['full', 'partial'].includes(billPaymentIntent)) {
+      return res.status(400).json({ error: "billPaymentIntent must be 'full' or 'partial'" })
+    }
+    if (!billPaymentMethod || !['cash', 'card', 'cheque', 'bank_transfer'].includes(billPaymentMethod)) {
+      return res.status(400).json({ error: "billPaymentMethod must be 'cash', 'card', 'cheque', or 'bank_transfer'" })
+    }
+
+    const token = await prisma.token.findUnique({ where: { id: tokenId } })
+
+    if (!token) {
+      return res.status(404).json({ error: "Token not found" })
+    }
+
+    if (token.status !== 'in_service') {
+      return res.status(400).json({ error: "Payment method can only be set after the officer has called you to the counter" })
+    }
+
+    const updatedToken = await prisma.token.update({
+      where: { id: tokenId },
+      data: {
+        billPaymentMethod,
+        billPaymentIntent,
+        billPaymentAmount: billPaymentIntent === 'partial' ? (billPaymentAmount ?? null) : null,
+      },
+    })
+
+    res.json({ success: true, token: updatedToken })
+  } catch (error) {
+    console.error("Payment method update error:", error)
+    res.status(500).json({ error: "Failed to update payment method" })
   }
 })
 

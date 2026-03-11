@@ -20,6 +20,7 @@ import managerRoutes from "./routes/manager.routes"
 import teleshopManagerRoutes from "./routes/teleshop-manager.routes"
 import appointmentRoutes from "./routes/appointment.routes"
 import ipSpeakerRoutes from "./routes/ip-speaker.routes"
+import ttsRoutes from "./routes/tts.routes"
 import serviceCaseRoutes from "./routes/service-case.routes"
 import gmRoutes from "./routes/gm.routes"
 import dgmRoutes from "./routes/dgm.routes"
@@ -28,7 +29,9 @@ import billRoutes from "./routes/bill.routes"
 import sltSmsRoutes from "./routes/slt-sms.routes"
 import { healthTracker } from "./services/healthTracker"
 
-export const prisma = new PrismaClient()
+export const prisma = new PrismaClient({
+  log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
+})
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 const app = express()
 const server = createServer(app)
@@ -55,7 +58,7 @@ app.use(
 )
 app.use(compression({ threshold: Number(process.env.COMPRESS_THRESHOLD || 1024) }))
 app.use(cookieParser())
-app.use(express.json())
+app.use(express.json({ limit: '20mb' }))
 app.use("/uploads", express.static("uploads"))
 
 // Performance instrumentation & aggregation
@@ -90,14 +93,10 @@ if (process.env.PERF_LOG !== "false") {
 
 // WebSocket for real-time updates
 wss.on("connection", (ws) => {
-  console.log("Client connected")
-
-  ws.on("message", (message) => {
-    console.log("Received:", message.toString())
-  })
+  logger.debug("WS client connected")
 
   ws.on("close", () => {
-    console.log("Client disconnected")
+    logger.debug("WS client disconnected")
   })
 })
 
@@ -121,6 +120,7 @@ app.use("/api/document", documentRoutes)
 app.use("/api/manager", managerRoutes)
 app.use("/api/teleshop-manager", teleshopManagerRoutes)
 app.use("/api/ip-speaker", ipSpeakerRoutes)
+app.use("/api/tts", ttsRoutes)
 app.use("/api/appointment", appointmentRoutes)
 app.use("/api/service-case", serviceCaseRoutes)
 app.use("/api/kiosk", kioskRoutes)
@@ -173,13 +173,35 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
       return res.status(400).json({ error: "Invalid 'at' date provided" })
     }
 
-    // 1. Mercantile holiday check
     const todayStart = new Date(now)
     todayStart.setHours(0, 0, 0, 0)
     const todayEnd = new Date(now)
     todayEnd.setHours(23, 59, 59, 999)
 
-    const holidays = await (prisma as any).mercantileHoliday.findMany()
+    // Run all 5 DB queries in parallel — saves up to 4× sequential round-trip latency
+    const [holidays, activeOneTime, recurringClosure, activeStandardOneTime, recurringStandard] = await Promise.all([
+      (prisma as any).mercantileHoliday.findMany({ select: { date: true, name: true, isRecurring: true } }),
+      (prisma as any).closureNotice.findFirst({
+        where: { outletId, isRecurring: false, startsAt: { lte: now }, endsAt: { gte: now }, noticeType: "closure" },
+        orderBy: { createdAt: "desc" },
+        select: { title: true, message: true }
+      }),
+      (prisma as any).closureNotice.findMany({
+        where: { outletId, isRecurring: true, noticeType: "closure" },
+        select: { title: true, message: true, isRecurring: true, recurringType: true, recurringDays: true, recurringEndDate: true, recurringStartTime: true, recurringEndTime: true, startsAt: true, endsAt: true }
+      }),
+      (prisma as any).closureNotice.findFirst({
+        where: { outletId, noticeType: "standard", isRecurring: false, startsAt: { lte: now }, endsAt: { gte: now } },
+        orderBy: { createdAt: "desc" },
+        select: { title: true, message: true }
+      }),
+      (prisma as any).closureNotice.findMany({
+        where: { outletId, noticeType: "standard", isRecurring: true },
+        select: { title: true, message: true, isRecurring: true, recurringType: true, recurringDays: true, recurringEndDate: true, recurringStartTime: true, recurringEndTime: true, startsAt: true, endsAt: true }
+      }),
+    ])
+
+    // 1. Mercantile holiday check
     for (const holiday of holidays) {
       const hDate = new Date(holiday.date)
       if (holiday.isRecurring) {
@@ -193,17 +215,7 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
       }
     }
 
-    // 2. Active one-time CLOSURE notices for this outlet (noticeType = "closure" or legacy null)
-    const activeOneTime = await (prisma as any).closureNotice.findFirst({
-      where: {
-        outletId,
-        isRecurring: false,
-        startsAt: { lte: now },
-        endsAt: { gte: now },
-        noticeType: "closure"
-      },
-      orderBy: { createdAt: "desc" }
-    })
+    // 2. Active one-time CLOSURE notice
     if (activeOneTime) {
       return res.json({
         isClosed: true,
@@ -213,15 +225,8 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
       })
     }
 
-    // 3. Recurring CLOSURE notices for this outlet
-    const recurringNotices = await (prisma as any).closureNotice.findMany({
-      where: {
-        outletId,
-        isRecurring: true,
-        noticeType: "closure"
-      }
-    })
-    for (const rn of recurringNotices) {
+    // 3. Recurring CLOSURE notices
+    for (const rn of recurringClosure) {
       if (isRecurringNoticeActive(rn, now)) {
         return res.json({
           isClosed: true,
@@ -232,25 +237,11 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
       }
     }
 
-    // 4. Active standard (dismissible) notices — branch is NOT closed, but show info banner
+    // 4. Standard (dismissible) notices — branch is NOT closed, but show info banner
     let standardNotice: { title: string; message: string } | null = null
-
-    const activeStandardOneTime = await (prisma as any).closureNotice.findFirst({
-      where: {
-        outletId,
-        noticeType: "standard",
-        isRecurring: false,
-        startsAt: { lte: now },
-        endsAt: { gte: now }
-      },
-      orderBy: { createdAt: "desc" }
-    })
     if (activeStandardOneTime) {
       standardNotice = { title: activeStandardOneTime.title, message: activeStandardOneTime.message }
     } else {
-      const recurringStandard = await (prisma as any).closureNotice.findMany({
-        where: { outletId, noticeType: "standard", isRecurring: true }
-      })
       for (const rs of recurringStandard) {
         if (isRecurringNoticeActive(rs, now)) {
           standardNotice = { title: rs.title, message: rs.message }
@@ -273,22 +264,18 @@ app.get("/api/outlet-notices/:outletId", async (req, res) => {
     const { outletId } = req.params
     const now = new Date()
 
-    // Fetch active one-time standard notices
-    const oneTime = await (prisma as any).closureNotice.findMany({
-      where: {
-        outletId,
-        noticeType: "standard",
-        isRecurring: false,
-        startsAt: { lte: now },
-        endsAt: { gte: now }
-      },
-      orderBy: { createdAt: "desc" }
-    })
-
-    // Fetch recurring standard notices and filter by current time
-    const recurring = await (prisma as any).closureNotice.findMany({
-      where: { outletId, noticeType: "standard", isRecurring: true }
-    })
+    // Fetch both notice types in parallel
+    const [oneTime, recurring] = await Promise.all([
+      (prisma as any).closureNotice.findMany({
+        where: { outletId, noticeType: "standard", isRecurring: false, startsAt: { lte: now }, endsAt: { gte: now } },
+        orderBy: { createdAt: "desc" },
+        select: { title: true, message: true }
+      }),
+      (prisma as any).closureNotice.findMany({
+        where: { outletId, noticeType: "standard", isRecurring: true },
+        select: { title: true, message: true, isRecurring: true, recurringType: true, recurringDays: true, recurringEndDate: true, recurringStartTime: true, recurringEndTime: true, startsAt: true, endsAt: true }
+      }),
+    ])
     const activeRecurring = recurring.filter((n: any) => isRecurringNoticeActive(n, now))
 
     const notices = [...oneTime, ...activeRecurring]
@@ -506,6 +493,17 @@ function scheduleDailyResetTick() {
 }
 
 scheduleDailyResetTick()
+
+// Neon free-tier keep-alive: ping DB every 4 minutes to prevent auto-suspend (suspends after ~5 min idle)
+if (process.env.DISABLE_DB_KEEPALIVE !== "true") {
+  setInterval(async () => {
+    try {
+      await prisma.$queryRaw`SELECT 1`
+    } catch (err) {
+      logger.warn({ err }, "DB keep-alive ping failed")
+    }
+  }, 4 * 60 * 1000)
+}
 
 // Graceful shutdown
 process.on("SIGINT", async () => {

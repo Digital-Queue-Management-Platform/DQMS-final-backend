@@ -546,8 +546,7 @@ Please do not reply to this email.
                 <p style="margin-top: 32px;">Should you encounter any difficulties or require further assistance, please contact the IT Support Helpdesk.</p>
                 
                 <p>Best regards,<br>
-                <strong style="color: #0056b3;">Digital Operations Team</strong><br>
-                SLT-MOBITEL</p>
+                <strong style="color: #0056b3;">SLT-MOBITEL</strong></p>
             </div>
             
             <div class="footer">
@@ -591,7 +590,6 @@ Your access is strictly for authorized personnel. Please do not share your mobil
 For technical support, please contact the system administrator.
 
 Best regards,
-Digital Operations Team
 SLT-MOBITEL
     `
   }
@@ -603,6 +601,17 @@ SLT-MOBITEL
       return true
     } catch (error) {
       console.error('SMTP connection failed:', error)
+      return false
+    }
+  }
+
+  async sendTestEmail(email: string, mailOptions: any): Promise<boolean> {
+    try {
+      const result = await this.transporter.sendMail(mailOptions)
+      console.log('Test email sent successfully:', result.messageId)
+      return true
+    } catch (error) {
+      console.error('Failed to send test email:', error)
       return false
     }
   }

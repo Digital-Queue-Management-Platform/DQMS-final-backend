@@ -24,7 +24,7 @@ function digitsOnly(m: string | undefined | null) {
 // Book an appointment
 router.post("/book", async (req, res) => {
   try {
-    const { name, mobileNumber, outletId, serviceTypes, appointmentAt, preferredLanguage, verifiedMobileToken, notes, email, nicNumber, sltTelephoneNumber } = req.body || {}
+    const { name, mobileNumber, outletId, serviceTypes, appointmentAt, preferredLanguage, verifiedMobileToken, notes, email, nicNumber, sltTelephoneNumber, billPaymentIntent, billPaymentAmount, billPaymentMethod } = req.body || {}
 
     if (!name || !mobileNumber || !outletId || !Array.isArray(serviceTypes) || serviceTypes.length === 0 || !appointmentAt) {
       return res.status(400).json({ error: "Missing required fields" })
@@ -76,6 +76,9 @@ router.post("/book", async (req, res) => {
         serviceTypes,
         preferredLanguage: preferredLanguage || undefined,
         sltTelephoneNumber: sltTelephoneNumber || undefined,
+        billPaymentIntent: billPaymentIntent || undefined,
+        billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : undefined,
+        billPaymentMethod: billPaymentMethod || undefined,
         appointmentAt: new Date(appointmentAt),
         status: 'booked',
         notes: notes || undefined,
@@ -95,7 +98,15 @@ router.post("/book", async (req, res) => {
     // Best-effort SMS confirmation via unified SMS helper (localized by preferredLanguage)
     try {
       const when = new Date(appointmentAt)
-      const whenStr = when.toLocaleString()
+      const whenStr = when.toLocaleString('en-GB', {
+        timeZone: 'Asia/Colombo',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      })
 
       // Map service codes to titles for SMS
       const serviceRecords = await prisma.service.findMany({

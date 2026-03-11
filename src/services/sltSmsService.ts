@@ -207,11 +207,12 @@ class SLTSmsService {
         : `SLT DQMS: ${firstName ? `${firstName},` : ''} உங்கள் குறியீடு ${otpCode}. 5 நிமிடம்.\n\nSLT-MOBITEL`
     }
 
-    console.log(`[SLT SMS DEBUG] Sending OTP to ${mobileNumber}, userName: "${userName}", firstName: "${firstName}", userType: "${userType}", message: "${otpMessages[language]}" (${otpMessages[language].length} chars)`)
+    const selectedOtpMsg = this.selectMessageForSMS(otpMessages, language)
+    console.log(`[SLT SMS DEBUG] Sending OTP to ${mobileNumber}, userName: "${userName}", firstName: "${firstName}", userType: "${userType}", message: "${selectedOtpMsg}" (${selectedOtpMsg.length} chars)`)
 
     return this.sendSMS({
       to: mobileNumber,
-      message: otpMessages[language]
+      message: selectedOtpMsg
     })
   }
 
@@ -236,7 +237,7 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: this.selectMessageForSMS(messages, language)
     })
   }
 
@@ -269,7 +270,7 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: this.selectMessageForSMS(messages, language)
     })
   }
 
@@ -296,7 +297,7 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: this.selectMessageForSMS(messages, language)
     })
   }
 
@@ -322,7 +323,7 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: this.selectMessageForSMS(messages, language)
     })
   }
 
@@ -346,7 +347,7 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: this.selectMessageForSMS(messages, language)
     })
   }
 
@@ -371,7 +372,7 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: this.selectMessageForSMS(messages, language)
     })
   }
 
@@ -400,11 +401,12 @@ class SLTSmsService {
       ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} தற்போது அழைக்கப்படுகிறது. தயவுசெய்து கவுண்டர் ${details.counterNumber} க்கு செல்லவும்.\n\nSLT-MOBITEL`
     }
 
-    console.log(`[SLT SMS CALL] Message content (${messages[language].length} chars): ${messages[language]}`)
+    const selectedCallMsg = this.selectMessageForSMS(messages, language)
+    console.log(`[SLT SMS CALL] Message content (${selectedCallMsg.length} chars): ${selectedCallMsg}`)
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: selectedCallMsg
     })
   }
 
@@ -432,11 +434,12 @@ class SLTSmsService {
       ta: `அன்பு வாடிக்கையாளரே\n\nநீங்கள் அங்கு இல்லாததால் ${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} தவிர்க்கப்பட்டது. மீண்டும் அழைக்கப்பட தயவுசெய்து கவுண்டருக்கு வரவும்.\n\nSLT-MOBITEL`
     }
 
-    console.log(`[SLT SMS SKIP] Message content (${messages[language].length} chars): "${messages[language]}"`)
+    const selectedSkipMsg = this.selectMessageForSMS(messages, language)
+    console.log(`[SLT SMS SKIP] Message content (${selectedSkipMsg.length} chars): "${selectedSkipMsg}"`)
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: selectedSkipMsg
     })
   }
 
@@ -465,11 +468,12 @@ class SLTSmsService {
       ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} மீண்டும் அழைக்கப்படுகிறது. தயவுசெய்து உடனடியாக கவுண்டர் ${details.counterNumber || ''} க்கு செல்லவும்.\n\nSLT-MOBITEL`
     }
 
-    console.log(`[SLT SMS RECALL] Message content (${messages[language].length} chars): "${messages[language]}"`)
+    const selectedRecallMsg = this.selectMessageForSMS(messages, language)
+    console.log(`[SLT SMS RECALL] Message content (${selectedRecallMsg.length} chars): "${selectedRecallMsg}"`)
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: selectedRecallMsg
     })
   }
 
@@ -485,6 +489,7 @@ class SLTSmsService {
       services: string
       feedbackUrl: string
       outletName: string
+      trackingUrl?: string
     },
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
@@ -505,52 +510,79 @@ class SLTSmsService {
       ta: this.buildServiceCompletionCompact(details, formattedToken, 'ta')
     }
 
-    const targetMessage = (fullMessages as any)[language] || fullMessages.en
-    const isUnicode = /[^\x00-\x7F]/.test(targetMessage)
-    const limit = isUnicode ? 70 : 160
+    // Always use English: Unicode (Sinhala/Tamil) multi-part SMS is not reliably
+    // delivered by the SLT gateway (same limitation as OTP messages).
+    let finalMessage = fullMessages.en
 
-    let finalMessage = targetMessage
-
-    if (finalMessage.length > limit) {
-      console.warn(`[SLT SMS COMPLETE] Full message too long (${finalMessage.length}), limit ${limit}. Trying compact version.`)
-      const compactMsg = (compactMessages as any)[language] || compactMessages.en
-      if (compactMsg.length < finalMessage.length) {
-        finalMessage = compactMsg
+    if (finalMessage.length > 160) {
+      console.warn(`[SLT SMS COMPLETE] Full message too long (${finalMessage.length}), trying compact version.`)
+      if (compactMessages.en.length < finalMessage.length) {
+        finalMessage = compactMessages.en
       }
     }
 
-    console.log(`[SLT SMS COMPLETE] Final message (${finalMessage.length} chars, Unicode: ${isUnicode}): "${finalMessage}"`)
+    console.log(`[SLT SMS COMPLETE] Final message (${finalMessage.length} chars): "${finalMessage}"`)
 
-    if (finalMessage.length > limit) {
-      console.warn(`[SLT SMS COMPLETE] Warning: Even compact version exceeds ${limit} chars (${finalMessage.length}).`)
+    if (finalMessage.length > 160) {
+      console.warn(`[SLT SMS COMPLETE] Warning: Even compact version exceeds 160 chars (${finalMessage.length}).`)
     }
 
-    return this.sendSMS({
+    const result = await this.sendSMS({
       to: mobileNumber,
       message: finalMessage
     })
+
+    // When a tracking URL was sent as SMS 1, send a second SMS with a thank-you +
+    // feedback review link so the customer gets both the status URL and an invitation
+    // to rate their experience as separate, readable messages.
+    if (details.trackingUrl && details.feedbackUrl) {
+      const outlet = details.outletName
+      const tokenDisplay = formattedToken || ''
+      const thankYouFull = `Dear Valued Customer\n\nToken ${tokenDisplay} at ${outlet} served. Thank you for choosing SLT-MOBITEL! Rate: ${details.feedbackUrl}\n\nSLT-MOBITEL`
+      // If outlet name makes it too long, drop it from the thank-you SMS
+      const thankYouMsg = thankYouFull.length <= 160
+        ? thankYouFull
+        : `Dear Valued Customer\n\nToken ${tokenDisplay} served. Thank you for choosing SLT-MOBITEL! Rate: ${details.feedbackUrl}\n\nSLT-MOBITEL`
+      console.log(`[SLT SMS COMPLETE] Sending thank-you+review SMS (${thankYouMsg.length} chars): "${thankYouMsg}"`)
+      await this.sendSMS({ to: mobileNumber, message: thankYouMsg })
+    }
+
+    return result
   }
 
   // Refined helpers for completion messages
   private buildServiceCompletionFull(details: any, token: string | null, language: string) {
-    const fullRef = details.refNumber || token
+    if (details.trackingUrl) {
+      // When a tracking URL is included, drop the greeting/closing to stay within the
+      // 160-char GSM-7 limit that the SLT SMS gateway enforces for reliable delivery.
+      const outlet = details.outletName.replace(/\s*(SLT|Mobitel|Office)\s*/gi, '').trim() || details.outletName
+      const withOutlet = `Token ${token} at ${outlet} served.\nTrack: ${details.trackingUrl}`
+      if (withOutlet.length <= 160) return withOutlet
+      // Fallback: omit outlet name if even the compact form is too long
+      return `Token ${token} served.\nTrack: ${details.trackingUrl}`
+    }
 
     const messages = {
-      en: `Dear Valued Customer\n\nYour token number ${token} at ${details.outletName} has been served. Track your service by Ref: ${fullRef}.\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${token} සේවා අවසන් විය. Ref: ${fullRef}.\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${token} சேவை முடிந்தது. Ref: ${fullRef}.\n\nSLT-MOBITEL`
+      en: `Dear Valued Customer\n\nYour token number ${token} at ${details.outletName} has been served. Ref: ${details.refNumber || token}\n\nThank you for choosing SLT-MOBITEL.`,
+      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${token} සේවා අවසන් විය. Ref: ${details.refNumber || token}\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${token} சேவை முடிந்தது. Ref: ${details.refNumber || token}\n\nSLT-MOBITEL`
     }
     return (messages as any)[language] || messages.en
   }
 
   private buildServiceCompletionCompact(details: any, token: string | null, language: string) {
-    const ref = details.refNumber || token
-    const outlet = details.outletName.replace(/\s*(SLT|Mobitel|Office)\s*/gi, '').trim()
+    const outlet = details.outletName.replace(/\s*(SLT|Mobitel|Office)\s*/gi, '').trim() || details.outletName
+
+    if (details.trackingUrl) {
+      const withOutlet = `Token ${token} at ${outlet} served.\nTrack: ${details.trackingUrl}`
+      if (withOutlet.length <= 160) return withOutlet
+      return `Token ${token} served.\nTrack: ${details.trackingUrl}`
+    }
 
     const messages = {
-      en: `Dear Valued Customer\n\nToken ${token} at ${outlet} served. Ref: ${ref}.\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\n${outlet} හි ටෝකන් ${token} සේවා අවසන්. Ref: ${ref}.\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\n${outlet} இல் டோக்கன் ${token} முடிந்தது. Ref: ${ref}.\n\nSLT-MOBITEL`
+      en: `Dear Valued Customer\n\nToken ${token} at ${outlet} served. Ref: ${details.refNumber || token}\n\nThank you for choosing SLT-MOBITEL.`,
+      si: `ගරු පාරිභෝගිකයා\n\n${outlet} හි ටෝකන් ${token} සේවා අවසන්. Ref: ${details.refNumber || token}\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\n${outlet} இல் டோக்கன் ${token} முடிந்தது. Ref: ${details.refNumber || token}\n\nSLT-MOBITEL`
     }
     return (messages as any)[language] || messages.en
   }
@@ -568,15 +600,14 @@ class SLTSmsService {
     },
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
-    const messages = {
-      en: `Dear Valued Customer\n\nYour registration code for ${details.outletName} is ${details.otpCode}. Valid for 5 minutes.\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} සඳහා ඔබගේ ලියාපදිංචි කේතය ${details.otpCode}. මිනිත්තු 5 සඳහා වලංගුයි.\n\nSLT-MOBITEL`,
-      ta: `அன்பு වාடிக்கையாளரே\n\n${details.outletName} க்கான உங்கள் பதிவு குறியீடு ${details.otpCode}. 5 நிமிடங்களுக்கு செல்லுபடியாகும்.\n\nSLT-MOBITEL`
-    }
+    // Always send OTP in English (plain ASCII) regardless of preferred language.
+    // Unicode SMS (Sinhala/Tamil) is limited to 70 chars per segment and many gateways
+    // do not reliably deliver multi-part Unicode SMS, causing OTPs to be silently lost.
+    const message = `Dear Valued Customer\n\nYour registration code for ${details.outletName} is ${details.otpCode}. Valid for 5 minutes.\n\nSLT-MOBITEL`
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message
     })
   }
 
@@ -637,7 +668,7 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: this.selectMessageForSMS(messages, language)
     })
   }
 
@@ -665,7 +696,7 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: messages[language]
+      message: this.selectMessageForSMS(messages, language)
     })
   }
 
@@ -721,25 +752,22 @@ class SLTSmsService {
     }
 
     const fullMessages = buildFullMessages()
-    const targetMessage = fullMessages[language] || fullMessages.en
-    const isUnicode = /[^\x00-\x7F]/.test(targetMessage)
-    const limit = isUnicode ? 70 : 160
+    // Always use English: Unicode (Sinhala/Tamil) multi-part SMS is not reliably
+    // delivered by the SLT gateway (same limitation as OTP messages).
+    let finalMessage = fullMessages.en
 
-    let finalMessage = targetMessage
-
-    if (finalMessage.length > limit) {
-      console.warn(`[SLT SMS TRANSFER] Full message too long (${finalMessage.length}), limit ${limit}. Trying compact version.`)
+    if (finalMessage.length > 160) {
+      console.warn(`[SLT SMS TRANSFER] Full message too long (${finalMessage.length}), trying compact version.`)
       const compactMessages = buildCompactMessages()
-      const compactMessage = compactMessages[language] || compactMessages.en
-      if (compactMessage.length < finalMessage.length) {
-        finalMessage = compactMessage
+      if (compactMessages.en.length < finalMessage.length) {
+        finalMessage = compactMessages.en
       }
     }
 
-    console.log(`[SLT SMS TRANSFER] Final message (${finalMessage.length} chars, Unicode: ${isUnicode}): "${finalMessage}"`)
+    console.log(`[SLT SMS TRANSFER] Final message (${finalMessage.length} chars): "${finalMessage}"`)
 
-    if (finalMessage.length > limit) {
-      console.warn(`[SLT SMS TRANSFER] Warning: Even compact message exceeds ${limit} chars (${finalMessage.length}).`)
+    if (finalMessage.length > 160) {
+      console.warn(`[SLT SMS TRANSFER] Warning: Even compact message exceeds 160 chars (${finalMessage.length}).`)
     }
 
     return this.sendSMS({
@@ -809,8 +837,106 @@ class SLTSmsService {
 
     return this.sendSMS({
       to: mobileNumber,
-      message: (messages as any)[language] || messages.en
+      message: this.selectMessageForSMS(messages, language)
     })
+  }
+
+  /**
+   * Select the appropriate message for SMS delivery.
+   * Falls back to English when the target language produces a Unicode message
+   * that exceeds the 70-character single-segment limit, because the SLT gateway
+   * does not reliably deliver multi-part Unicode SMS.
+   */
+  private selectMessageForSMS(
+    messages: { en: string; si: string; ta: string },
+    language: 'en' | 'si' | 'ta'
+  ): string {
+    if (language === 'en') return messages.en
+    const candidate = messages[language]
+    const isUnicode = /[^\x00-\x7F]/.test(candidate)
+    if (isUnicode && candidate.length > 70) {
+      console.warn(`[SLT SMS] ${language.toUpperCase()} message (${candidate.length} chars) exceeds single-segment Unicode limit (70). Falling back to English.`)
+      return messages.en
+    }
+    return candidate
+  }
+
+  /**
+   * Send bill payment confirmation SMS when CSO marks the payment as complete
+   */
+  async sendBillPaymentConfirmation(
+    mobileNumber: string,
+    details: {
+      firstName: string
+      tokenNumber: number
+      outletName: string
+      refNumber: string
+      paymentIntent: string   // 'full' | 'partial' | 'not_specified'
+      paymentAmount?: number  // amount paid (due amount for full, custom for partial)
+      paymentMethod?: string  // 'cash' | 'card' | 'cheque' | 'bank_transfer'
+      trackingUrl?: string    // full URL for customer to track the service case
+      feedbackUrl?: string    // full URL for customer to leave a review
+    }
+  ): Promise<SMSResponse> {
+    const formattedToken = details.tokenNumber.toString().padStart(3, '0')
+    const outlet = details.outletName.replace(/\s*(SLT|Mobitel|Office)\s*/gi, '').trim() || details.outletName
+
+    const methodLabels: Record<string, string> = {
+      cash: 'Cash',
+      card: 'Card',
+      cheque: 'Cheque',
+      bank_transfer: 'Bank Transfer'
+    }
+    const methodLabel = details.paymentMethod ? (methodLabels[details.paymentMethod] || details.paymentMethod) : ''
+
+    let paymentLine = ''
+    if (details.paymentIntent === 'full' && details.paymentAmount != null && details.paymentAmount > 0) {
+      paymentLine = `Rs. ${details.paymentAmount.toFixed(2)} (Full Payment)`
+    } else if (details.paymentIntent === 'partial' && details.paymentAmount != null && details.paymentAmount > 0) {
+      paymentLine = `Rs. ${details.paymentAmount.toFixed(2)} (Partial Payment)`
+    }
+
+    const methodPart = methodLabel ? ` via ${methodLabel}` : ''
+    const amountPart = paymentLine ? `\nAmount: ${paymentLine}${methodPart}` : (methodLabel ? `\nPayment Method: ${methodLabel}` : '')
+
+    let message: string
+    if (details.trackingUrl) {
+      // Never show method label alone when there is no amount — it's meaningless without a figure.
+      const amountCompact = paymentLine
+        ? `\n${paymentLine.replace('Full Payment', 'Full').replace('Partial Payment', 'Partial')}${methodPart}`
+        : ''
+      // Prefer the full "Dear Valued Customer" greeting, but the Vercel URL is ~100 chars which
+      // pushes the total past the 160-char GSM-7 limit the SLT gateway silently drops.
+      // Fall back progressively: drop greeting first, then drop footer, to stay deliverable.
+      const withGreeting = `Dear Valued Customer\nBill payment complete.${amountCompact}\nTrack: ${details.trackingUrl}\n\nSLT-MOBITEL`
+      if (withGreeting.length <= 160) {
+        message = withGreeting
+      } else {
+        // Dropping "Dear Valued Customer\n" saves 21 chars; SLT-MOBITEL branding is kept.
+        const noGreeting = `Bill payment complete.${amountCompact}\nTrack: ${details.trackingUrl}\n\nSLT-MOBITEL`
+        message = noGreeting.length <= 160 ? noGreeting : `Bill payment complete.\nTrack: ${details.trackingUrl}`
+      }
+    } else {
+      const trackLine = `\nRef: ${details.refNumber}`
+      message = `Dear Valued Customer\n\nYour bill payment at ${outlet} has been completed.${amountPart}${trackLine}\n\nThank you for choosing SLT-MOBITEL.`
+    }
+
+    console.log(`[SLT SMS PAYMENT] Sending bill payment confirmation to ${mobileNumber}: "${message}"`)
+
+    const result = await this.sendSMS({ to: mobileNumber, message })
+
+    // Send a second SMS with a thank-you + review invitation (same pattern as service completion).
+    if (details.trackingUrl && details.feedbackUrl) {
+      const formattedToken = details.tokenNumber.toString().padStart(3, '0')
+      const thankYouFull = `Dear Valued Customer\n\nThank you for choosing SLT-MOBITEL! Rate your experience: ${details.feedbackUrl}\n\nSLT-MOBITEL`
+      const thankYouMsg = thankYouFull.length <= 160
+        ? thankYouFull
+        : `Thank you for choosing SLT-MOBITEL! Rate: ${details.feedbackUrl}`
+      console.log(`[SLT SMS PAYMENT] Sending thank-you+review SMS (${thankYouMsg.length} chars): "${thankYouMsg}"`)
+      await this.sendSMS({ to: mobileNumber, message: thankYouMsg })
+    }
+
+    return result
   }
 
   /**
