@@ -494,6 +494,17 @@ function scheduleDailyResetTick() {
 
 scheduleDailyResetTick()
 
+// Neon free-tier keep-alive: ping DB every 4 minutes to prevent auto-suspend (suspends after ~5 min idle)
+if (process.env.DISABLE_DB_KEEPALIVE !== "true") {
+  setInterval(async () => {
+    try {
+      await prisma.$queryRaw`SELECT 1`
+    } catch (err) {
+      logger.warn({ err }, "DB keep-alive ping failed")
+    }
+  }, 4 * 60 * 1000)
+}
+
 // Graceful shutdown
 process.on("SIGINT", async () => {
   await prisma.$disconnect()
