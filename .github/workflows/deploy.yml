@@ -182,8 +182,8 @@ jobs:
               echo "$MIGRATION_OUTPUT"
               
               # Check if migration was successful (either no pending migrations or successful apply)
-              # The period at the end is important for "No pending migrations to apply."
-              if echo "$MIGRATION_OUTPUT" | grep -q "No pending migrations to apply\.\|migrations applied"; then
+              # Matches: "No pending migrations to apply." OR "All migrations have been successfully applied."
+              if echo "$MIGRATION_OUTPUT" | grep -q "No pending migrations to apply\.\|successfully applied\|migrations applied"; then
                 echo "✅ Migrations successful!"
                 MIGRATION_SUCCESS=true
                 break
