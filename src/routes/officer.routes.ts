@@ -331,33 +331,36 @@ router.post("/next-token", async (req, res) => {
         return res.json({ error: 'You have no assigned languages. Please contact your manager.' })
       }
 
-      // Get candidate tokens that match officer's assigned services
-      // Priority 1: Tokens specifically assigned to THIS counter
-      let candidateTokens = await prisma.token.findMany({
-        where: {
-          outletId: officer.outletId,
-          status: 'waiting',
-          isTransferred: false,
-          counterNumber: officer.counterNumber && officer.counterNumber > 0 ? officer.counterNumber : undefined,
-          serviceTypes: { hasSome: assignedServices },
-          createdAt: { gte: lastReset },
-        },
-        orderBy: [
-          { isPriority: 'desc' },
-          { tokenNumber: 'asc' }
-        ],
-        take: 20,
-        include: { customer: true },
-      })
+      // TRANSFERRED CUSTOMER PRIORITY: Customers transferred to this counter already waited
+      // in another queue — they must be served before new arrivals regardless of token number.
+      if (officer.counterNumber && officer.counterNumber > 0) {
+        const transferredForCounter = await prisma.token.findFirst({
+          where: {
+            outletId: officer.outletId,
+            status: 'waiting',
+            isTransferred: true,
+            counterNumber: officer.counterNumber,
+            serviceTypes: { hasSome: assignedServices },
+            createdAt: { gte: lastReset },
+          },
+          orderBy: { createdAt: 'asc' }, // oldest total wait first
+          include: { customer: true },
+        })
+        if (transferredForCounter) {
+          nextToken = transferredForCounter
+          console.log(`✓ TRANSFER PRIORITY: Token #${transferredForCounter.tokenNumber} served first (customer already waited in a previous queue)`)
+        }
+      }
 
-      // If no counter-specific tokens, look for general pool tokens (counterNumber is null)
-      if (candidateTokens.length === 0) {
-        candidateTokens = await prisma.token.findMany({
+      if (!nextToken) {
+        // Get candidate tokens that match officer's assigned services
+        // Priority 1: Tokens specifically assigned to THIS counter
+        let candidateTokens = await prisma.token.findMany({
           where: {
             outletId: officer.outletId,
             status: 'waiting',
             isTransferred: false,
-            counterNumber: null,
+            counterNumber: officer.counterNumber && officer.counterNumber > 0 ? officer.counterNumber : undefined,
             serviceTypes: { hasSome: assignedServices },
             createdAt: { gte: lastReset },
           },
@@ -365,34 +368,54 @@ router.post("/next-token", async (req, res) => {
             { isPriority: 'desc' },
             { tokenNumber: 'asc' }
           ],
-          take: 50,
+          take: 20,
           include: { customer: true },
         })
-      }
 
-      console.log(`Found ${candidateTokens.length} tokens with matching services`)
-
-      // Filter by language match
-      for (const t of candidateTokens) {
-        const tokenLangs = toLangArray(t.preferredLanguages)
-        console.log(`Token #${t.tokenNumber} - Services:`, t.serviceTypes, 'Languages:', tokenLangs)
-
-        // If token has no language preference, any officer can serve it
-        if (tokenLangs.length === 0) {
-          nextToken = t
-          console.log(`✓ Token #${t.tokenNumber} has no language preference - any officer can serve`)
-          break
+        // If no counter-specific tokens, look for general pool tokens (counterNumber is null)
+        if (candidateTokens.length === 0) {
+          candidateTokens = await prisma.token.findMany({
+            where: {
+              outletId: officer.outletId,
+              status: 'waiting',
+              isTransferred: false,
+              counterNumber: null,
+              serviceTypes: { hasSome: assignedServices },
+              createdAt: { gte: lastReset },
+            },
+            orderBy: [
+              { isPriority: 'desc' },
+              { tokenNumber: 'asc' }
+            ],
+            take: 50,
+            include: { customer: true },
+          })
         }
 
-        // Check if there's a language match
-        if (hasAny(tokenLangs, officerLanguages)) {
-          nextToken = t
-          console.log(`✓ Matched Token #${t.tokenNumber} - Service + Language match`)
-          break
-        } else {
-          console.log(`✗ Token #${t.tokenNumber} language mismatch - Token wants:`, tokenLangs, 'Officer has:', officerLanguages)
+        console.log(`Found ${candidateTokens.length} tokens with matching services`)
+
+        // Filter by language match
+        for (const t of candidateTokens) {
+          const tokenLangs = toLangArray(t.preferredLanguages)
+          console.log(`Token #${t.tokenNumber} - Services:`, t.serviceTypes, 'Languages:', tokenLangs)
+
+          // If token has no language preference, any officer can serve it
+          if (tokenLangs.length === 0) {
+            nextToken = t
+            console.log(`✓ Token #${t.tokenNumber} has no language preference - any officer can serve`)
+            break
+          }
+
+          // Check if there's a language match
+          if (hasAny(tokenLangs, officerLanguages)) {
+            nextToken = t
+            console.log(`✓ Matched Token #${t.tokenNumber} - Service + Language match`)
+            break
+          } else {
+            console.log(`✗ Token #${t.tokenNumber} language mismatch - Token wants:`, tokenLangs, 'Officer has:', officerLanguages)
+          }
         }
-      }
+      } // end if (!nextToken) — skip regular matching when a transferred token was found
 
       if (!nextToken) {
         console.log('No tokens match your assigned services and languages')
