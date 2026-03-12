@@ -1,6 +1,7 @@
 import { Router } from "express"
 import { prisma, broadcast } from "../server"
 import * as jwt from "jsonwebtoken"
+import { getLastDailyReset } from "../utils/resetWindow"
 
 const router = Router()
 
@@ -199,13 +200,12 @@ router.post("/tokens", async (req: any, res: any) => {
     }
 
     // Get next token number for this outlet
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
+    const lastReset = getLastDailyReset()
 
     const lastToken = await prisma.token.findFirst({
       where: {
         outletId: outletId,
-        createdAt: { gte: today }
+        createdAt: { gte: lastReset }
       },
       orderBy: { tokenNumber: 'desc' }
     })
