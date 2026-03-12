@@ -392,6 +392,17 @@ router.post("/register", async (req, res) => {
     }
 
 
+    const prioritySettingRows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
+      SELECT "booleanValue" FROM "AppSetting" WHERE "key" = 'priority_service_enabled' LIMIT 1
+    `
+    const priorityFeatureEnabled = prioritySettingRows[0]?.booleanValue ?? true
+
+    // Check if any selected service is a priority service (auto-set isPriority)
+    const priorityServices = await prisma.$queryRaw`
+      SELECT id FROM "Service" WHERE "code" = ANY(${serviceTypes}::text[]) AND "isPriorityService" = true LIMIT 1
+    ` as any[]
+    const autoPriority = priorityFeatureEnabled && priorityServices.length > 0
+
     // Use a database transaction to prevent race conditions
     const token = await prisma.$transaction(async (tx) => {
       /* Check if customer already has an active token for this outlet
@@ -446,6 +457,7 @@ router.post("/register", async (req, res) => {
           serviceTypes,
           outletId,
           status: "waiting",
+          isPriority: autoPriority,
           // Store preferredLanguages as a JSON array (not a string) for easier matching
           preferredLanguages: Array.isArray(preferredLanguages) && preferredLanguages.length > 0
             ? preferredLanguages

@@ -108,7 +108,7 @@ router.get("/services", async (req, res) => {
   try {
     // Use raw query to avoid Prisma client issues before regeneration
     const services = await prisma.$queryRaw`
-      SELECT "id", "code", "title", "description", "order"
+      SELECT "id", "code", "title", "description", "order", "isPriorityService"
       FROM "Service" 
       WHERE "isActive" = true 
       ORDER BY "order" ASC, "createdAt" ASC
@@ -125,6 +125,16 @@ router.post("/tokens", async (req: any, res: any) => {
   try {
     const { outletId } = req.kiosk
     const { name, mobileNumber, serviceTypes, preferredLanguages, nicNumber, email, sltMobileNumber, accountRef, sltTelephoneNumber, billPaymentIntent, billPaymentAmount, billPaymentMethod } = req.body
+
+    const prioritySettingRows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
+      SELECT "booleanValue" FROM "AppSetting" WHERE "key" = 'priority_service_enabled' LIMIT 1
+    `
+    const priorityFeatureEnabled = prioritySettingRows[0]?.booleanValue ?? true
+
+    const priorityServices = await prisma.$queryRaw`
+      SELECT id FROM "Service" WHERE "code" = ANY(${serviceTypes}::text[]) AND "isPriorityService" = true LIMIT 1
+    ` as any[]
+    const autoPriority = priorityFeatureEnabled && priorityServices.length > 0
 
     // Validate bill payment intent if provided
     if (billPaymentIntent && !['full', 'partial'].includes(billPaymentIntent)) {
@@ -211,6 +221,7 @@ router.post("/tokens", async (req: any, res: any) => {
         preferredLanguages,
         accountRef: accountRef?.trim() || null,
         status: "waiting",
+        isPriority: autoPriority,
         outletId: outletId,
         sltTelephoneNumber: sltTelephoneNumber?.trim() || null,
         billPaymentIntent: billPaymentIntent || null,

@@ -3,6 +3,18 @@ import { prisma } from "../server"
 import { getLastDailyReset } from "../utils/resetWindow"
 
 const router = Router()
+const PRIORITY_SERVICE_SETTING_KEY = 'priority_service_enabled'
+
+async function getPriorityServiceEnabled() {
+  const rows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
+    SELECT "booleanValue"
+    FROM "AppSetting"
+    WHERE "key" = ${PRIORITY_SERVICE_SETTING_KEY}
+    LIMIT 1
+  `
+
+  return rows[0]?.booleanValue ?? true
+}
 
 // Shared in-memory store for manager QR tokens (use Redis or database in production)
 interface ManagerQRTokenData {
@@ -181,8 +193,8 @@ router.get('/services', async (req, res) => {
   try {
     const showAll = req.query.all === 'true'
     const services = showAll
-      ? await prisma.$queryRaw`SELECT * FROM "Service" ORDER BY "order" ASC, "createdAt" ASC`
-      : await prisma.$queryRaw`SELECT * FROM "Service" WHERE "isActive" = true ORDER BY "order" ASC, "createdAt" ASC`
+      ? await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","createdAt" FROM "Service" ORDER BY "order" ASC, "createdAt" ASC`
+      : await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","createdAt" FROM "Service" WHERE "isActive" = true ORDER BY "order" ASC, "createdAt" ASC`
     res.set('Cache-Control', 'no-store')
     res.json(services)
   } catch (error) {
@@ -191,20 +203,49 @@ router.get('/services', async (req, res) => {
   }
 })
 
+router.get('/settings/priority-service', async (_req, res) => {
+  try {
+    const enabled = await getPriorityServiceEnabled()
+    res.json({ enabled })
+  } catch (error) {
+    console.error('Priority service setting fetch error:', error)
+    res.status(500).json({ error: 'Failed to fetch priority service setting' })
+  }
+})
+
+router.patch('/settings/priority-service', async (req, res) => {
+  try {
+    const enabled = req.body?.enabled === true
+
+    await prisma.$executeRaw`
+      INSERT INTO "AppSetting" ("id", "key", "booleanValue", "createdAt", "updatedAt")
+      VALUES (gen_random_uuid()::text, ${PRIORITY_SERVICE_SETTING_KEY}, ${enabled}, now(), now())
+      ON CONFLICT ("key")
+      DO UPDATE SET "booleanValue" = EXCLUDED."booleanValue", "updatedAt" = now()
+    `
+
+    res.json({ success: true, enabled })
+  } catch (error) {
+    console.error('Priority service setting update error:', error)
+    res.status(500).json({ error: 'Failed to update priority service setting' })
+  }
+})
+
 // Create service
 router.post('/services', async (req, res) => {
   try {
-    const { code, title, description, order } = req.body
+    const { code, title, description, order, isPriorityService } = req.body
     if (!code || !title) return res.status(400).json({ error: 'code and title are required' })
 
     const orderValue = order !== undefined ? order : 999
+    const priorityValue = isPriorityService === true
 
     const service = await prisma.$executeRaw`
-      INSERT INTO "Service" ("id","code","title","description","order","isActive","createdAt")
-      VALUES (gen_random_uuid()::text, ${code}, ${title}, ${description || null}, ${orderValue}, true, now())`
+      INSERT INTO "Service" ("id","code","title","description","order","isActive","isPriorityService","createdAt")
+      VALUES (gen_random_uuid()::text, ${code}, ${title}, ${description || null}, ${orderValue}, true, ${priorityValue}, now())`
 
     // return created row
-    const created = await prisma.$queryRaw`SELECT * FROM "Service" WHERE "code" = ${code} LIMIT 1` as any[]
+    const created = await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","createdAt" FROM "Service" WHERE "code" = ${code} LIMIT 1` as any[]
     res.json({ success: true, service: created[0] })
   } catch (error) {
     console.error('Create service error:', error)
@@ -217,7 +258,7 @@ router.post('/services', async (req, res) => {
 router.patch('/services/:id', async (req, res) => {
   try {
     const { id } = req.params
-    const { title, description, isActive, order } = req.body
+    const { title, description, isActive, order, isPriorityService } = req.body
 
     // build update query dynamically
     const data: any = {}
@@ -225,6 +266,7 @@ router.patch('/services/:id', async (req, res) => {
     if (description !== undefined) data.description = description
     if (isActive !== undefined) data.isActive = isActive
     if (order !== undefined) data.order = order
+    if (isPriorityService !== undefined) data.isPriorityService = isPriorityService
 
     // use prisma.$executeRaw for simplicity
     const sets = Object.keys(data).map((k, idx) => `"${k}" = $${idx + 2}`).join(', ')
