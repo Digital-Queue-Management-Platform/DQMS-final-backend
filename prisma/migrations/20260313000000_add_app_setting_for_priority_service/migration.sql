@@ -1,5 +1,5 @@
 -- CreateTable: AppSetting
-CREATE TABLE "AppSetting" (
+CREATE TABLE IF NOT EXISTS "AppSetting" (
   "id" TEXT NOT NULL,
   "key" TEXT NOT NULL,
   "booleanValue" BOOLEAN,
@@ -8,7 +8,10 @@ CREATE TABLE "AppSetting" (
   CONSTRAINT "AppSetting_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "AppSetting_key_key" ON "AppSetting"("key");
+CREATE UNIQUE INDEX IF NOT EXISTS "AppSetting_key_key" ON "AppSetting"("key");
 
 INSERT INTO "AppSetting" ("id", "key", "booleanValue", "createdAt", "updatedAt")
-VALUES (gen_random_uuid()::text, 'priority_service_enabled', true, now(), now());
+SELECT gen_random_uuid()::text, 'priority_service_enabled', true, now(), now()
+WHERE NOT EXISTS (
+  SELECT 1 FROM "AppSetting" WHERE "key" = 'priority_service_enabled'
+);

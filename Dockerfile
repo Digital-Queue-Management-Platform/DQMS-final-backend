@@ -60,5 +60,6 @@ EXPOSE 3001
 # Use dumb-init to handle signals properly
 ENTRYPOINT ["dumb-init", "--"]
 
-# Run migrations and start server
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/server.js"]
+# Migrations are handled by the deployment workflow before the container starts.
+# Keep an opt-in flag for environments that still want startup migrations.
+CMD ["sh", "-c", "if [ \"${RUN_MIGRATIONS_ON_START:-false}\" = \"true\" ]; then npx prisma migrate deploy; fi; exec node dist/server.js"]

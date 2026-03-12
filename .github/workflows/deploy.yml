@@ -155,6 +155,20 @@ jobs:
             echo "DIRECT_URL=$DIRECT_URL" >> /tmp/docker.env
             echo "DIRECT_URL=$DIRECT_URL" >> .env
 
+            # Recover from the earlier failed deploy where these two migrations were
+            # manually applied to the database before Prisma could record them.
+            # The SQL is now idempotent, so marking any failed attempt as rolled back
+            # is safe and lets `migrate deploy` re-run cleanly.
+            for migration in \
+              20260312000000_add_is_priority_service \
+              20260313000000_add_app_setting_for_priority_service
+            do
+              echo "Attempting migration recovery for $migration..."
+              sudo docker run --rm --env-file /tmp/docker.env "$DOCKER_IMAGE" sh -c "
+                npx prisma migrate resolve --rolled-back $migration >/dev/null 2>&1 || true
+              "
+            done
+
             # Neon auto-suspends inactive branches; the advisory-lock query times out
             # during cold-start. Retry up to 3 times (15s apart) to let the branch resume.
             # DIRECT_URL is set above so Prisma uses the direct (non-pooled) connection,
