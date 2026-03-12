@@ -374,6 +374,23 @@ router.get("/outlet/:outletId/counters", async (req, res) => {
       })
     }
 
+    // Also include officers whose counterNumber is null or outside the configured range
+    const slottedIds = new Set(activeOfficers.filter(o => o.counterNumber && o.counterNumber >= 1 && o.counterNumber <= totalCount).map(o => o.id))
+    for (const officer of activeOfficers) {
+      if (!slottedIds.has(officer.id)) {
+        counters.push({
+          number: null,
+          isStaffed: true,
+          officer: {
+            id: officer.id,
+            name: officer.name,
+            status: officer.status,
+            services: officer.assignedServices
+          }
+        })
+      }
+    }
+
     res.json(counters)
   } catch (error) {
     console.error("Fetch counters error:", error)
