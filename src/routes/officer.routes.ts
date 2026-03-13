@@ -918,6 +918,107 @@ router.post("/call-token", async (req, res) => {
   }
 })
 
+// Announce a transferred token to its target counter without changing ownership.
+router.post("/call-transferred-token", async (req, res) => {
+  try {
+    const { officerId, tokenId } = req.body
+
+    if (!officerId || !tokenId) {
+      return res.status(400).json({ error: 'officerId and tokenId required' })
+    }
+
+    const officer = await prisma.officer.findUnique({ where: { id: officerId } })
+    if (!officer) return res.status(404).json({ error: 'Officer not found' })
+
+    const token = await prisma.token.findUnique({
+      where: { id: tokenId },
+      include: { customer: true, outlet: true },
+    })
+
+    if (!token) return res.status(404).json({ error: 'Token not found' })
+    if (token.status !== 'waiting') {
+      return res.status(400).json({ error: 'Only waiting tokens can be called to counter' })
+    }
+    if (!token.isTransferred) {
+      return res.status(400).json({ error: 'This token is not a transferred token' })
+    }
+
+    // Security: only the officer who transferred this token can trigger this call action.
+    const latestTransfer = await prisma.transferLog.findFirst({
+      where: { tokenId: token.id },
+      orderBy: { createdAt: 'desc' },
+    })
+
+    if (!latestTransfer || latestTransfer.fromOfficerId !== officerId) {
+      return res.status(403).json({ error: 'You can only call tokens transferred by you' })
+    }
+
+    const targetCounter = token.counterNumber || latestTransfer.toCounterNumber || null
+    if (!targetCounter) {
+      return res.status(400).json({ error: 'Transferred token has no target counter' })
+    }
+
+    // Mark call timestamp for audit/visibility, keep token waiting for the target officer.
+    const calledTransfer = await prisma.token.update({
+      where: { id: token.id },
+      data: { calledAt: new Date() },
+      include: { customer: true, outlet: true },
+    })
+
+    // Send customer SMS that token is now called to the transferred counter.
+    try {
+      const firstName = calledTransfer.customer.name.split(' ')[0]
+      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+      let baseUrl = origins[0] || ''
+      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+      if (vercelUrl) {
+        baseUrl = vercelUrl
+      } else if (process.env.NODE_ENV === 'production') {
+        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
+      }
+      const shortId = calledTransfer.id.substring(0, 8)
+      const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+
+      const prefs = (calledTransfer as any).preferredLanguages
+      let customerLang: 'en' | 'si' | 'ta' = 'en'
+      if (Array.isArray(prefs) && prefs.length > 0) {
+        const firstPref = String(prefs[0]).toLowerCase()
+        if (['en', 'si', 'ta'].includes(firstPref)) {
+          customerLang = firstPref as 'en' | 'si' | 'ta'
+        }
+      } else if (typeof prefs === 'string') {
+        if (prefs.includes('si')) customerLang = 'si'
+        else if (prefs.includes('ta')) customerLang = 'ta'
+      }
+
+      await sltSmsService.sendCustomerCalled(calledTransfer.customer.mobileNumber, {
+        firstName,
+        tokenNumber: calledTransfer.tokenNumber,
+        counterNumber: targetCounter,
+        outletName: calledTransfer.outlet?.name || 'SLT Office',
+        recoveryUrl,
+      }, customerLang)
+      console.log(`✓ Transfer-call SMS sent to customer ${calledTransfer.customer.mobileNumber} for token #${calledTransfer.tokenNumber}`)
+    } catch (smsError) {
+      console.error('Transfer-call SMS sending failed:', smsError)
+    }
+
+    // Trigger UI refreshes; token remains in waiting state until target officer actually picks it.
+    broadcast({ type: 'TOKEN_UPDATED', data: calledTransfer })
+
+    res.json({
+      success: true,
+      message: `Customer called to Counter ${targetCounter}`,
+      token: calledTransfer,
+      counterNumber: targetCounter,
+    })
+  } catch (error) {
+    console.error('Call transferred token error:', error)
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    res.status(500).json({ error: 'Failed to call transferred token', details: errorMessage })
+  }
+})
+
 // Complete service
 router.post("/complete-service", async (req, res) => {
   try {
