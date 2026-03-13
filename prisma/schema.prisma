@@ -110,6 +110,8 @@ model Outlet {
   createdAt         DateTime           @default(now())
   counterCount      Int?               @default(0)
   kioskPassword     String?
+  displaySettings   Json?
+
   appointments      Appointment[]
   closureNotices    ClosureNotice[]
   completedServices CompletedService[]

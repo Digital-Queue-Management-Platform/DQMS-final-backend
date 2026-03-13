@@ -58,8 +58,8 @@ router.get("/outlet/:outletId", async (req, res) => {
       ]
     }
 
-    // Run the three independent queries in parallel — cuts sequential round-trips from ~3s to ~800ms
-    const [waitingTokens, inServiceTokens, availableOfficers] = await Promise.all([
+    // Run the four independent queries in parallel
+    const [waitingTokens, inServiceTokens, availableOfficers, recentlyCalledTokens] = await Promise.all([
       prisma.token.findMany({
         where: waitingTokensFilter,
         orderBy: { tokenNumber: "asc" },
@@ -75,8 +75,29 @@ router.get("/outlet/:outletId", async (req, res) => {
         include: { customer: true, officer: true },
       }),
       prisma.officer.count({
-        where: { outletId, status: "available" },
+        where: {
+          outletId,
+          status: { in: ["available", "serving"] },
+          lastLoginAt: { gte: lastReset }
+        },
       }),
+      prisma.token.findMany({
+        where: {
+          outletId,
+          calledAt: { gte: lastReset },
+          status: { in: ["in_service", "completed", "skipped"] }
+        },
+        orderBy: { calledAt: "desc" },
+        take: 10,
+        select: {
+          id: true,
+          tokenNumber: true,
+          counterNumber: true,
+          calledAt: true,
+          serviceTypes: true,
+          status: true
+        }
+      })
     ])
 
     // Appointment and transfer-log lookups are only needed when there are waiting tokens
@@ -107,11 +128,20 @@ router.get("/outlet/:outletId", async (req, res) => {
       lastTransferByOfficerId: lastTransferMap.get(t.id) || null,
     }))
 
+    // Fetch outlet metadata including display settings
+    const outlet = await prisma.outlet.findUnique({
+      where: { id: outletId },
+      select: { name: true, location: true, displaySettings: true }
+    })
+
     res.json({
       waiting: filteredWaitingTokens,
       inService: inServiceTokens,
+      recentlyCalled: recentlyCalledTokens,
       availableOfficers,
       totalWaiting: filteredWaitingTokens.length,
+      displaySettings: outlet?.displaySettings || null,
+      outletMeta: outlet ? { name: outlet.name, location: outlet.location } : null
     })
   } catch (error) {
     console.error("Queue fetch error:", error)
@@ -451,11 +481,13 @@ router.get("/outlet/:outletId/counters", async (req, res) => {
 
     if (!outlet) return res.status(404).json({ error: "Outlet not found" })
 
-    // Get all officers in this outlet that are not offline
+    // Get all officers in this outlet that are not offline and have logged in since the last reset
+    const lastReset = getLastDailyReset()
     const activeOfficers = await prisma.officer.findMany({
       where: {
         outletId,
-        status: { not: "offline" }
+        status: { not: "offline" },
+        lastLoginAt: { gte: lastReset }
       },
       select: {
         name: true,

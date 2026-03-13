@@ -473,10 +473,14 @@ function scheduleDailyResetTick() {
       // Reset all officer counter assignments
       await prisma.officer.updateMany({
         where: {
-          counterNumber: { not: null }
+          OR: [
+            { counterNumber: { not: null } },
+            { status: { not: "offline" } }
+          ]
         },
         data: {
-          counterNumber: null
+          counterNumber: null,
+          status: "offline"
         }
       })
       logger.info('All officer counter assignments reset')
