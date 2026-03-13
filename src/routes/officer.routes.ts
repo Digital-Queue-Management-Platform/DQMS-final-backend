@@ -2387,7 +2387,7 @@ async function getOfficerFromRequest(req: any): Promise<any | null> {
   }
 }
 
-// Branch Notices — officer can view, create and delete notices for their outlet
+// Branch Notices — officer can only view notices for their outlet
 router.get("/branch-notices", async (req: any, res) => {
   try {
     const officer = await getOfficerFromRequest(req)
@@ -2402,93 +2402,6 @@ router.get("/branch-notices", async (req: any, res) => {
   } catch (error) {
     console.error("Officer get branch notices error:", error)
     res.status(500).json({ error: "Failed to fetch notices" })
-  }
-})
-
-router.post("/branch-notices", async (req: any, res) => {
-  try {
-    const officer = await getOfficerFromRequest(req)
-    if (!officer) return res.status(401).json({ error: "Authentication required" })
-    if (!officer.outletId) return res.status(400).json({ error: "Officer is not assigned to an outlet" })
-
-    const { title, message, startsAt, endsAt, noticeType, isRecurring, recurringType, recurringDays, recurringEndDate } = req.body
-    if (!title || !message || !startsAt || !endsAt) {
-      return res.status(400).json({ error: "title, message, startsAt, and endsAt are required" })
-    }
-    if (!isRecurring && new Date(startsAt) >= new Date(endsAt)) {
-      return res.status(400).json({ error: "endsAt must be after startsAt" })
-    }
-    const type = noticeType === "standard" ? "standard" : "closure"
-    const notice = await (prisma as any).closureNotice.create({
-      data: {
-        outletId: officer.outletId,
-        title,
-        message,
-        startsAt: new Date(startsAt),
-        endsAt: new Date(endsAt),
-        createdBy: "officer",
-        createdById: officer.id,
-        noticeType: type,
-        isRecurring: Boolean(isRecurring),
-        recurringType: isRecurring ? (recurringType || "weekly") : null,
-        recurringDays: isRecurring && Array.isArray(recurringDays) ? recurringDays : [],
-        recurringEndDate: recurringEndDate ? new Date(recurringEndDate) : null
-      }
-    })
-    res.json({ success: true, notice })
-  } catch (error) {
-    console.error("Officer create branch notice error:", error)
-    res.status(500).json({ error: "Failed to create notice" })
-  }
-})
-
-router.put("/branch-notices/:noticeId", async (req: any, res) => {
-  try {
-    const officer = await getOfficerFromRequest(req)
-    if (!officer) return res.status(401).json({ error: "Authentication required" })
-    if (!officer.outletId) return res.status(400).json({ error: "Officer is not assigned to an outlet" })
-    const { noticeId } = req.params
-    const existing = await (prisma as any).closureNotice.findFirst({ where: { id: noticeId, outletId: officer.outletId } })
-    if (!existing) return res.status(404).json({ error: "Notice not found or not at your outlet" })
-    const { title, message, startsAt, endsAt, noticeType, isRecurring, recurringType, recurringDays, recurringEndDate } = req.body
-    const type = noticeType === "standard" ? "standard" : "closure"
-    const updated = await (prisma as any).closureNotice.update({
-      where: { id: noticeId },
-      data: {
-        title, message,
-        startsAt: new Date(startsAt),
-        endsAt: new Date(endsAt),
-        noticeType: type,
-        isRecurring: Boolean(isRecurring),
-        recurringType: isRecurring ? (recurringType || "weekly") : null,
-        recurringDays: isRecurring && Array.isArray(recurringDays) ? recurringDays : [],
-        recurringEndDate: recurringEndDate ? new Date(recurringEndDate) : null,
-      }
-    })
-    res.json({ success: true, notice: updated })
-  } catch (error) {
-    console.error("Officer update branch notice error:", error)
-    res.status(500).json({ error: "Failed to update notice" })
-  }
-})
-
-router.delete("/branch-notices/:noticeId", async (req: any, res) => {
-  try {
-    const officer = await getOfficerFromRequest(req)
-    if (!officer) return res.status(401).json({ error: "Authentication required" })
-    if (!officer.outletId) return res.status(400).json({ error: "Officer is not assigned to an outlet" })
-
-    const { noticeId } = req.params
-    const existing = await (prisma as any).closureNotice.findFirst({
-      where: { id: noticeId, outletId: officer.outletId }
-    })
-    if (!existing) return res.status(404).json({ error: "Notice not found or not at your outlet" })
-
-    await (prisma as any).closureNotice.delete({ where: { id: noticeId } })
-    res.json({ success: true })
-  } catch (error) {
-    console.error("Officer delete branch notice error:", error)
-    res.status(500).json({ error: "Failed to delete notice" })
   }
 })
 
