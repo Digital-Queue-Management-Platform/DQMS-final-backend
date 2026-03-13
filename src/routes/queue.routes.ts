@@ -88,7 +88,7 @@ router.get("/outlet/:outletId", async (req, res) => {
           status: { in: ["in_service", "completed", "skipped"] }
         },
         orderBy: { calledAt: "desc" },
-        take: 10,
+        take: 30,
         select: {
           id: true,
           tokenNumber: true,
