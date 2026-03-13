@@ -255,7 +255,14 @@ router.get("/me", async (req: any, res) => {
     const profile = await prisma.teleshopManager.findUnique({
       where: { id: teleshopManager.id },
       include: {
-        region: true
+        region: true,
+        branch: {
+          select: {
+            id: true,
+            name: true,
+            location: true,
+          },
+        },
       }
     })
 
