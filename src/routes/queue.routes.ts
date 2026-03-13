@@ -4,6 +4,7 @@ import { getLastDailyReset } from "../utils/resetWindow"
 
 const router = Router()
 const PRIORITY_SERVICE_SETTING_KEY = 'priority_service_enabled'
+const SHOW_SERVICE_TYPE_IN_QUEUE_KEY = 'show_service_type_in_queue'
 
 async function getPriorityServiceEnabled() {
   const rows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
@@ -228,6 +229,40 @@ router.patch('/settings/priority-service', async (req, res) => {
   } catch (error) {
     console.error('Priority service setting update error:', error)
     res.status(500).json({ error: 'Failed to update priority service setting' })
+  }
+})
+
+router.get('/settings/show-service-type', async (_req, res) => {
+  try {
+    const rows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
+      SELECT "booleanValue" FROM "AppSetting"
+      WHERE "key" = ${SHOW_SERVICE_TYPE_IN_QUEUE_KEY}
+      LIMIT 1
+    `
+    // Default to false (hidden) if not set
+    const enabled = rows[0]?.booleanValue ?? false
+    res.json({ enabled })
+  } catch (error) {
+    console.error('Show service type setting fetch error:', error)
+    res.status(500).json({ error: 'Failed to fetch show service type setting' })
+  }
+})
+
+router.patch('/settings/show-service-type', async (req, res) => {
+  try {
+    const enabled = req.body?.enabled === true
+
+    await prisma.$executeRaw`
+      INSERT INTO "AppSetting" ("id", "key", "booleanValue", "createdAt", "updatedAt")
+      VALUES (gen_random_uuid()::text, ${SHOW_SERVICE_TYPE_IN_QUEUE_KEY}, ${enabled}, now(), now())
+      ON CONFLICT ("key")
+      DO UPDATE SET "booleanValue" = EXCLUDED."booleanValue", "updatedAt" = now()
+    `
+
+    res.json({ success: true, enabled })
+  } catch (error) {
+    console.error('Show service type setting update error:', error)
+    res.status(500).json({ error: 'Failed to update show service type setting' })
   }
 })
 
