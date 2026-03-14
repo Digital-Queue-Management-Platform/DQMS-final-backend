@@ -129,6 +129,7 @@ model Region {
   managerId        String?
   managerEmail     String?
   managerMobile    String?
+  managerLastLoginAt DateTime?
   createdAt        DateTime          @default(now())
   managerPassword  String?
   outlets          Outlet[]

@@ -15,6 +15,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
 const ADMIN_EMAIL = "adminqms@slt.lk"
 const ADMIN_PASSWORD = "ABcd123#"
+const STAFF_PRESENCE_WINDOW_MINUTES = Math.max(1, Number(process.env.ADMIN_STAFF_PRESENCE_MINUTES || 30))
 
 // Interface for manager credentials
 interface ManagerCredentials {
@@ -22,6 +23,85 @@ interface ManagerCredentials {
   temporaryPassword: string
   message: string
   emailSent?: boolean
+}
+
+type StaffPresenceStatus = 'online' | 'break' | 'offline'
+
+const toStringArray = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+}
+
+const getPresenceMeta = ({
+  rawStatus,
+  lastLoginAt,
+  breakStartedAt,
+  isActive = true,
+}: {
+  rawStatus?: string | null
+  lastLoginAt?: Date | null
+  breakStartedAt?: Date | null
+  isActive?: boolean
+}): { status: StaffPresenceStatus; label: string; source: 'tracked' | 'derived' } => {
+  if (breakStartedAt || rawStatus === 'on_break' || rawStatus === 'break') {
+    return { status: 'break', label: 'At Break', source: 'tracked' }
+  }
+
+  if (rawStatus === 'available' || rawStatus === 'serving' || rawStatus === 'busy') {
+    return { status: 'online', label: 'Online', source: 'tracked' }
+  }
+
+  if (rawStatus === 'offline') {
+    return { status: 'offline', label: 'Offline', source: 'tracked' }
+  }
+
+  if (!isActive) {
+    return { status: 'offline', label: 'Inactive', source: 'derived' }
+  }
+
+  const isRecentlyActive = !!lastLoginAt && (Date.now() - new Date(lastLoginAt).getTime()) <= STAFF_PRESENCE_WINDOW_MINUTES * 60 * 1000
+  return isRecentlyActive
+    ? { status: 'online', label: 'Online', source: 'derived' }
+    : { status: 'offline', label: 'Offline', source: 'derived' }
+}
+
+const isMissingManagerLastLoginFieldError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error || '')
+  return message.includes('managerLastLoginAt') || message.includes('Unknown field') || message.includes('P2022')
+}
+
+const fetchRegionsForStaffStatus = async () => {
+  try {
+    return await prisma.region.findMany({
+      orderBy: { name: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        managerId: true,
+        managerEmail: true,
+        managerMobile: true,
+        managerLastLoginAt: true,
+      }
+    })
+  } catch (error) {
+    if (!isMissingManagerLastLoginFieldError(error)) throw error
+
+    const fallbackRegions = await prisma.region.findMany({
+      orderBy: { name: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        managerId: true,
+        managerEmail: true,
+        managerMobile: true,
+      }
+    })
+
+    return fallbackRegions.map(region => ({
+      ...region,
+      managerLastLoginAt: null as Date | null,
+    }))
+  }
 }
 
 // Admin authentication middleware
@@ -1026,6 +1106,373 @@ router.get("/system-health", async (req, res) => {
 })
 
 // --- Admin: Officers endpoints ---
+router.get('/staff-status', async (req, res) => {
+  try {
+    const [regions, outlets, officers, teleshopManagers, gms, dgms] = await Promise.all([
+      fetchRegionsForStaffStatus(),
+      prisma.outlet.findMany({
+        orderBy: [{ region: { name: 'asc' } }, { name: 'asc' }],
+        select: {
+          id: true,
+          name: true,
+          location: true,
+          regionId: true,
+          region: { select: { id: true, name: true } },
+        }
+      }),
+      prisma.officer.findMany({
+        orderBy: [{ outlet: { region: { name: 'asc' } } }, { outlet: { name: 'asc' } }, { name: 'asc' }],
+        select: {
+          id: true,
+          name: true,
+          mobileNumber: true,
+          status: true,
+          counterNumber: true,
+          isTraining: true,
+          createdAt: true,
+          lastLoginAt: true,
+          assignedServices: true,
+          languages: true,
+          outlet: {
+            select: {
+              id: true,
+              name: true,
+              location: true,
+              regionId: true,
+              region: { select: { id: true, name: true } },
+            }
+          },
+          BreakLog: {
+            where: { endedAt: null },
+            orderBy: { startedAt: 'desc' },
+            take: 1,
+            select: { startedAt: true }
+          }
+        }
+      }),
+      prisma.teleshopManager.findMany({
+        orderBy: [{ region: { name: 'asc' } }, { name: 'asc' }],
+        select: {
+          id: true,
+          name: true,
+          mobileNumber: true,
+          email: true,
+          isActive: true,
+          createdAt: true,
+          lastLoginAt: true,
+          regionId: true,
+          region: { select: { id: true, name: true } },
+          branchId: true,
+          branch: { select: { id: true, name: true, location: true } },
+        }
+      }),
+      (prisma as any).gM.findMany({
+        orderBy: { name: 'asc' },
+        select: {
+          id: true,
+          name: true,
+          mobileNumber: true,
+          email: true,
+          isActive: true,
+          createdAt: true,
+          lastLoginAt: true,
+        }
+      }),
+      (prisma as any).dGM.findMany({
+        orderBy: { name: 'asc' },
+        select: {
+          id: true,
+          name: true,
+          mobileNumber: true,
+          email: true,
+          isActive: true,
+          createdAt: true,
+          lastLoginAt: true,
+          gmId: true,
+          regionIds: true,
+        }
+      }),
+    ])
+
+    const regionMap = new Map(regions.map(region => [region.id, region]))
+    const outletsByRegion = new Map<string, Array<(typeof outlets)[number]>>()
+    for (const outlet of outlets) {
+      if (!outletsByRegion.has(outlet.regionId)) outletsByRegion.set(outlet.regionId, [])
+      outletsByRegion.get(outlet.regionId)!.push(outlet)
+    }
+
+    const roleOrder: Record<string, number> = {
+      gm: 1,
+      dgm: 2,
+      manager: 3,
+      teleshop_manager: 4,
+      officer: 5,
+    }
+
+    const staff = [
+      ...officers.map((officer) => {
+        const activeBreak = officer.BreakLog[0]?.startedAt || null
+        const presence = getPresenceMeta({
+          rawStatus: officer.status,
+          lastLoginAt: officer.lastLoginAt,
+          breakStartedAt: activeBreak,
+        })
+        const assignedServices = Array.isArray(officer.assignedServices) ? officer.assignedServices.length : 0
+        const languages = toStringArray(officer.languages)
+
+        return {
+          id: officer.id,
+          name: officer.name,
+          mobileNumber: officer.mobileNumber,
+          email: null,
+          roleKey: 'officer',
+          roleLabel: 'Customer Service Officer',
+          status: presence.status,
+          statusLabel: presence.label,
+          statusSource: presence.source,
+          rawStatus: officer.status,
+          accountState: 'active',
+          accountStateLabel: 'Active',
+          lastLoginAt: officer.lastLoginAt,
+          createdAt: officer.createdAt,
+          regionId: officer.outlet.regionId,
+          regionName: officer.outlet.region.name,
+          outletId: officer.outlet.id,
+          outletName: officer.outlet.name,
+          outletLocation: officer.outlet.location,
+          primaryRegionId: officer.outlet.regionId,
+          primaryRegionName: officer.outlet.region.name,
+          coverageRegionIds: [officer.outlet.regionId],
+          coverageOutletIds: [officer.outlet.id],
+          scopeLabel: officer.counterNumber ? `Counter ${officer.counterNumber}` : 'Outlet coverage',
+          counterNumber: officer.counterNumber,
+          breakStartedAt: activeBreak,
+          breakDurationMinutes: activeBreak ? Math.max(0, Math.floor((Date.now() - new Date(activeBreak).getTime()) / 60000)) : 0,
+          languages,
+          assignedServicesCount: assignedServices,
+          isTraining: officer.isTraining,
+          isActive: true,
+          roleOrder: roleOrder.officer,
+        }
+      }),
+      ...teleshopManagers.map((manager) => {
+        const presence = getPresenceMeta({
+          lastLoginAt: manager.lastLoginAt,
+          isActive: manager.isActive,
+        })
+
+        return {
+          id: manager.id,
+          name: manager.name,
+          mobileNumber: manager.mobileNumber,
+          email: manager.email,
+          roleKey: 'teleshop_manager',
+          roleLabel: 'Teleshop Manager',
+          status: presence.status,
+          statusLabel: presence.label,
+          statusSource: presence.source,
+          rawStatus: null,
+          accountState: manager.isActive ? 'active' : 'inactive',
+          accountStateLabel: manager.isActive ? 'Active' : 'Inactive',
+          lastLoginAt: manager.lastLoginAt,
+          createdAt: manager.createdAt,
+          regionId: manager.regionId,
+          regionName: manager.region.name,
+          outletId: manager.branch?.id || null,
+          outletName: manager.branch?.name || null,
+          outletLocation: manager.branch?.location || null,
+          primaryRegionId: manager.regionId,
+          primaryRegionName: manager.region.name,
+          coverageRegionIds: [manager.regionId],
+          coverageOutletIds: manager.branchId ? [manager.branchId] : (outletsByRegion.get(manager.regionId) || []).map(outlet => outlet.id),
+          scopeLabel: manager.branch?.name ? 'Branch oversight' : 'Regional support',
+          counterNumber: null,
+          breakStartedAt: null,
+          breakDurationMinutes: 0,
+          languages: [],
+          assignedServicesCount: 0,
+          isTraining: false,
+          isActive: manager.isActive,
+          roleOrder: roleOrder.teleshop_manager,
+        }
+      }),
+      ...regions
+        .filter(region => !!region.managerId || !!region.managerMobile || !!region.managerEmail)
+        .map((region) => {
+          const presence = getPresenceMeta({ lastLoginAt: region.managerLastLoginAt })
+          const coveredOutlets = (outletsByRegion.get(region.id) || []).map(outlet => outlet.id)
+
+          return {
+            id: `manager:${region.id}`,
+            name: region.managerId || region.name,
+            mobileNumber: region.managerMobile || null,
+            email: region.managerEmail || null,
+            roleKey: 'manager',
+            roleLabel: 'RTOM',
+            status: presence.status,
+            statusLabel: presence.label,
+            statusSource: presence.source,
+            rawStatus: null,
+            accountState: 'active',
+            accountStateLabel: 'Configured',
+            lastLoginAt: region.managerLastLoginAt,
+            createdAt: null,
+            regionId: region.id,
+            regionName: region.name,
+            outletId: null,
+            outletName: null,
+            outletLocation: null,
+            primaryRegionId: region.id,
+            primaryRegionName: region.name,
+            coverageRegionIds: [region.id],
+            coverageOutletIds: coveredOutlets,
+            scopeLabel: `${coveredOutlets.length} outlet${coveredOutlets.length === 1 ? '' : 's'} in region`,
+            counterNumber: null,
+            breakStartedAt: null,
+            breakDurationMinutes: 0,
+            languages: [],
+            assignedServicesCount: 0,
+            isTraining: false,
+            isActive: true,
+            roleOrder: roleOrder.manager,
+          }
+        }),
+      ...dgms.map((dgm: any) => {
+        const presence = getPresenceMeta({
+          lastLoginAt: dgm.lastLoginAt,
+          isActive: dgm.isActive,
+        })
+        const coverageRegionIds = toStringArray(dgm.regionIds)
+        const coverageOutletIds = coverageRegionIds.flatMap((regionId) => (outletsByRegion.get(regionId) || []).map(outlet => outlet.id))
+        const primaryRegion = regionMap.get(coverageRegionIds[0] || '')
+
+        return {
+          id: dgm.id,
+          name: dgm.name,
+          mobileNumber: dgm.mobileNumber,
+          email: dgm.email,
+          roleKey: 'dgm',
+          roleLabel: 'DGM',
+          status: presence.status,
+          statusLabel: presence.label,
+          statusSource: presence.source,
+          rawStatus: null,
+          accountState: dgm.isActive ? 'active' : 'inactive',
+          accountStateLabel: dgm.isActive ? 'Active' : 'Inactive',
+          lastLoginAt: dgm.lastLoginAt,
+          createdAt: dgm.createdAt,
+          regionId: null,
+          regionName: null,
+          outletId: null,
+          outletName: null,
+          outletLocation: null,
+          primaryRegionId: primaryRegion?.id || '__multi_region__',
+          primaryRegionName: primaryRegion?.name || 'Multi-region Coverage',
+          coverageRegionIds,
+          coverageOutletIds,
+          scopeLabel: `${coverageRegionIds.length} region${coverageRegionIds.length === 1 ? '' : 's'} assigned`,
+          counterNumber: null,
+          breakStartedAt: null,
+          breakDurationMinutes: 0,
+          languages: [],
+          assignedServicesCount: 0,
+          isTraining: false,
+          isActive: dgm.isActive,
+          roleOrder: roleOrder.dgm,
+        }
+      }),
+      ...gms.map((gm: any) => {
+        const presence = getPresenceMeta({
+          lastLoginAt: gm.lastLoginAt,
+          isActive: gm.isActive,
+        })
+
+        return {
+          id: gm.id,
+          name: gm.name,
+          mobileNumber: gm.mobileNumber,
+          email: gm.email,
+          roleKey: 'gm',
+          roleLabel: 'GM',
+          status: presence.status,
+          statusLabel: presence.label,
+          statusSource: presence.source,
+          rawStatus: null,
+          accountState: gm.isActive ? 'active' : 'inactive',
+          accountStateLabel: gm.isActive ? 'Active' : 'Inactive',
+          lastLoginAt: gm.lastLoginAt,
+          createdAt: gm.createdAt,
+          regionId: null,
+          regionName: null,
+          outletId: null,
+          outletName: null,
+          outletLocation: null,
+          primaryRegionId: '__islandwide__',
+          primaryRegionName: 'Island-wide Coverage',
+          coverageRegionIds: regions.map(region => region.id),
+          coverageOutletIds: outlets.map(outlet => outlet.id),
+          scopeLabel: 'All regions',
+          counterNumber: null,
+          breakStartedAt: null,
+          breakDurationMinutes: 0,
+          languages: [],
+          assignedServicesCount: 0,
+          isTraining: false,
+          isActive: gm.isActive,
+          roleOrder: roleOrder.gm,
+        }
+      }),
+    ].sort((left, right) => {
+      const regionCompare = (left.primaryRegionName || '').localeCompare(right.primaryRegionName || '')
+      if (regionCompare !== 0) return regionCompare
+      if (left.roleOrder !== right.roleOrder) return left.roleOrder - right.roleOrder
+      return left.name.localeCompare(right.name)
+    })
+
+    const summary = staff.reduce((acc, member) => {
+      acc.total += 1
+      if (member.status === 'online') acc.online += 1
+      if (member.status === 'break') acc.onBreak += 1
+      if (member.status === 'offline') acc.offline += 1
+      acc.byRole[member.roleKey] = (acc.byRole[member.roleKey] || 0) + 1
+      return acc
+    }, {
+      total: 0,
+      online: 0,
+      onBreak: 0,
+      offline: 0,
+      byRole: {} as Record<string, number>,
+    })
+
+    res.json({
+      staff,
+      summary,
+      filters: {
+        regions: regions.map(region => ({ id: region.id, name: region.name })),
+        outlets: outlets.map(outlet => ({
+          id: outlet.id,
+          name: outlet.name,
+          location: outlet.location,
+          regionId: outlet.regionId,
+          regionName: outlet.region.name,
+        })),
+        roles: [
+          { id: 'gm', label: 'GM' },
+          { id: 'dgm', label: 'DGM' },
+          { id: 'manager', label: 'RTOM' },
+          { id: 'teleshop_manager', label: 'Teleshop Manager' },
+          { id: 'officer', label: 'Customer Service Officer' },
+        ],
+      },
+      presenceWindowMinutes: STAFF_PRESENCE_WINDOW_MINUTES,
+      generatedAt: new Date().toISOString(),
+    })
+  } catch (error) {
+    console.error('Failed to fetch staff status', error)
+    res.status(500).json({ error: 'Failed to fetch staff status' })
+  }
+})
+
 // Get all officers with outlet info
 router.get('/officers', async (req, res) => {
   try {
