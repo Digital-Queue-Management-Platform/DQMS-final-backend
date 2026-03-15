@@ -392,6 +392,17 @@ router.post("/register", async (req, res) => {
     }
 
 
+    const prioritySettingRows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
+      SELECT "booleanValue" FROM "AppSetting" WHERE "key" = 'priority_service_enabled' LIMIT 1
+    `
+    const priorityFeatureEnabled = prioritySettingRows[0]?.booleanValue ?? true
+
+    // Check if any selected service is a priority service (auto-set isPriority)
+    const priorityServices = await prisma.$queryRaw`
+      SELECT id FROM "Service" WHERE "code" = ANY(${serviceTypes}::text[]) AND "isPriorityService" = true LIMIT 1
+    ` as any[]
+    const autoPriority = priorityFeatureEnabled && priorityServices.length > 0
+
     // Use a database transaction to prevent race conditions
     const token = await prisma.$transaction(async (tx) => {
       /* Check if customer already has an active token for this outlet
@@ -446,6 +457,7 @@ router.post("/register", async (req, res) => {
           serviceTypes,
           outletId,
           status: "waiting",
+          isPriority: autoPriority,
           // Store preferredLanguages as a JSON array (not a string) for easier matching
           preferredLanguages: Array.isArray(preferredLanguages) && preferredLanguages.length > 0
             ? preferredLanguages
@@ -481,43 +493,7 @@ router.post("/register", async (req, res) => {
 
     const estimatedWait = Math.max(1, queuePosition * 5) // 5 min per person, minimum 1 min
 
-    // Send token confirmation SMS
-    try {
-      // Build tracking URL for customer lookup
-      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      let baseUrl = origins[0] || ''
-
-      // Always prioritize Vercel URLs if available
-      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-      if (vercelUrl) {
-        baseUrl = vercelUrl
-      } else if (process.env.NODE_ENV === 'production') {
-        // In production, prefer any HTTPS URL over localhost
-        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-      }
-
-      const shortId = token.id.substring(0, 8)
-      const trackingUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
-
-      // Pass customer's preferred language choice to the SMS service
-      const lang = Array.isArray(preferredLanguages) && preferredLanguages.length > 0
-        ? normalizeLang(preferredLanguages[0])
-        : normalizeLang(preferredLanguages);
-
-      await sltSmsService.sendTokenConfirmation(token.customer.mobileNumber, {
-        tokenNumber: token.tokenNumber,
-        queuePosition,
-        outletName: token.outlet?.name || 'SLT Office',
-        trackingUrl,
-        estimatedWait
-      }, lang)
-      console.log(`✓ Token confirmation SMS sent to ${token.customer.mobileNumber}`)
-    } catch (smsError) {
-      console.error('Token confirmation SMS failed:', smsError)
-      // Continue execution even if SMS fails
-    }
-
-    // Broadcast update after successful transaction
+    // Broadcast update immediately so officer dashboards refresh without waiting on SMS delivery.
     broadcast({ type: "NEW_TOKEN", data: token })
 
     res.json({
@@ -527,6 +503,40 @@ router.post("/register", async (req, res) => {
       queuePosition,
       estimatedWait,
     })
+
+    // Send token confirmation SMS off the request path.
+    void (async () => {
+      try {
+        const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+        let baseUrl = origins[0] || ''
+
+        // Always prioritize Vercel URLs if available
+        const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+        if (vercelUrl) {
+          baseUrl = vercelUrl
+        } else if (process.env.NODE_ENV === 'production') {
+          // In production, prefer any HTTPS URL over localhost
+          baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
+        }
+
+        const shortId = token.id.substring(0, 8)
+        const trackingUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+        const lang = Array.isArray(preferredLanguages) && preferredLanguages.length > 0
+          ? normalizeLang(preferredLanguages[0])
+          : normalizeLang(preferredLanguages)
+
+        await sltSmsService.sendTokenConfirmation(token.customer.mobileNumber, {
+          tokenNumber: token.tokenNumber,
+          queuePosition,
+          outletName: token.outlet?.name || 'SLT Office',
+          trackingUrl,
+          estimatedWait,
+        }, lang)
+        console.log(`✓ Token confirmation SMS sent to ${token.customer.mobileNumber}`)
+      } catch (smsError) {
+        console.error('Token confirmation SMS failed:', smsError)
+      }
+    })()
   } catch (error: any) {
     console.error("Registration error:", error)
 

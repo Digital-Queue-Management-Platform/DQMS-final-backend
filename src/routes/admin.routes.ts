@@ -1,6 +1,7 @@
 import { Router } from "express"
 import * as jwt from "jsonwebtoken"
 import * as bcrypt from "bcrypt"
+import { randomUUID } from "crypto"
 import { prisma } from "../server"
 import emailService from "../services/emailService"
 import sltSmsService from "../services/sltSmsService"
@@ -15,6 +16,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
 const ADMIN_EMAIL = "adminqms@slt.lk"
 const ADMIN_PASSWORD = "ABcd123#"
+const STAFF_PRESENCE_WINDOW_MINUTES = Math.max(1, Number(process.env.ADMIN_STAFF_PRESENCE_MINUTES || 30))
 
 // Interface for manager credentials
 interface ManagerCredentials {
@@ -22,6 +24,85 @@ interface ManagerCredentials {
   temporaryPassword: string
   message: string
   emailSent?: boolean
+}
+
+type StaffPresenceStatus = 'online' | 'break' | 'offline'
+
+const toStringArray = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+}
+
+const getPresenceMeta = ({
+  rawStatus,
+  lastLoginAt,
+  breakStartedAt,
+  isActive = true,
+}: {
+  rawStatus?: string | null
+  lastLoginAt?: Date | null
+  breakStartedAt?: Date | null
+  isActive?: boolean
+}): { status: StaffPresenceStatus; label: string; source: 'tracked' | 'derived' } => {
+  if (breakStartedAt || rawStatus === 'on_break' || rawStatus === 'break') {
+    return { status: 'break', label: 'At Break', source: 'tracked' }
+  }
+
+  if (rawStatus === 'available' || rawStatus === 'serving' || rawStatus === 'busy') {
+    return { status: 'online', label: 'Online', source: 'tracked' }
+  }
+
+  if (rawStatus === 'offline') {
+    return { status: 'offline', label: 'Offline', source: 'tracked' }
+  }
+
+  if (!isActive) {
+    return { status: 'offline', label: 'Inactive', source: 'derived' }
+  }
+
+  const isRecentlyActive = !!lastLoginAt && (Date.now() - new Date(lastLoginAt).getTime()) <= STAFF_PRESENCE_WINDOW_MINUTES * 60 * 1000
+  return isRecentlyActive
+    ? { status: 'online', label: 'Online', source: 'derived' }
+    : { status: 'offline', label: 'Offline', source: 'derived' }
+}
+
+const isMissingManagerLastLoginFieldError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error || '')
+  return message.includes('managerLastLoginAt') || message.includes('Unknown field') || message.includes('P2022')
+}
+
+const fetchRegionsForStaffStatus = async () => {
+  try {
+    return await prisma.region.findMany({
+      orderBy: { name: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        managerId: true,
+        managerEmail: true,
+        managerMobile: true,
+        managerLastLoginAt: true,
+      }
+    })
+  } catch (error) {
+    if (!isMissingManagerLastLoginFieldError(error)) throw error
+
+    const fallbackRegions = await prisma.region.findMany({
+      orderBy: { name: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        managerId: true,
+        managerEmail: true,
+        managerMobile: true,
+      }
+    })
+
+    return fallbackRegions.map(region => ({
+      ...region,
+      managerLastLoginAt: null as Date | null,
+    }))
+  }
 }
 
 // Admin authentication middleware
@@ -90,6 +171,114 @@ router.post("/login", async (req, res) => {
 
 // Apply authentication middleware to all other admin routes
 router.use(authenticateAdmin)
+
+const logBackupRestoreHistory = async ({
+  req,
+  action,
+  status,
+  filename,
+  totalRecords,
+  tableCounts,
+  errorMessage,
+}: {
+  req: any
+  action: 'backup' | 'restore'
+  status: 'success' | 'failed'
+  filename?: string
+  totalRecords?: number
+  tableCounts?: Record<string, number>
+  errorMessage?: string
+}) => {
+  try {
+    const historyDelegate = getBackupRestoreHistoryDelegate()
+
+    if (historyDelegate && typeof historyDelegate.create === 'function') {
+      await historyDelegate.create({
+        data: {
+          action,
+          status,
+          filename,
+          totalRecords: totalRecords ?? 0,
+          tableCounts: tableCounts as any,
+          errorMessage,
+          createdByRole: req?.user?.role || null,
+          createdById: req?.user?.email || req?.user?.id || null,
+        },
+      })
+      return
+    }
+
+    const rawTableCounts = tableCounts ? JSON.stringify(tableCounts) : null
+    await prisma.$executeRaw`
+      INSERT INTO "BackupRestoreHistory"
+      ("id", "action", "status", "filename", "totalRecords", "tableCounts", "errorMessage", "createdByRole", "createdById", "createdAt")
+      VALUES
+      (
+        ${randomUUID()},
+        ${action},
+        ${status},
+        ${filename ?? null},
+        ${totalRecords ?? 0},
+        CAST(${rawTableCounts} AS jsonb),
+        ${errorMessage ?? null},
+        ${req?.user?.role || null},
+        ${req?.user?.email || req?.user?.id || null},
+        NOW()
+      )
+    `
+  } catch (error) {
+    console.error('Backup/restore history log error:', error)
+  }
+}
+
+const isHistoryTableMissingError = (error: unknown) => {
+  const prismaCode = (error as any)?.code
+  const message = error instanceof Error ? error.message : String(error || '')
+
+  return (
+    prismaCode === 'P2021' ||
+    prismaCode === 'P2022' ||
+    message.includes('BackupRestoreHistory') ||
+    message.includes('does not exist')
+  )
+}
+
+const getBackupRestoreHistoryDelegate = () => {
+  const delegate = (prisma as any)?.backupRestoreHistory
+  return delegate && typeof delegate.findMany === 'function' ? delegate : null
+}
+
+const getBackupRestoreHistoryRaw = async ({
+  action,
+  take,
+}: {
+  action?: 'backup' | 'restore'
+  take: number
+}) => {
+  const query = `
+    SELECT
+      "id",
+      "action",
+      "status",
+      "filename",
+      "totalRecords",
+      "tableCounts",
+      "errorMessage",
+      "createdByRole",
+      "createdById",
+      "createdAt"
+    FROM "BackupRestoreHistory"
+    ${action ? 'WHERE "action" = $1' : ''}
+    ORDER BY "createdAt" DESC
+    LIMIT ${action ? '$2' : '$1'}
+  `
+
+  if (action) {
+    return prisma.$queryRawUnsafe(query, action, take)
+  }
+
+  return prisma.$queryRawUnsafe(query, take)
+}
 
 // Get dashboard analytics
 router.get("/analytics", async (req, res) => {
@@ -1026,6 +1215,373 @@ router.get("/system-health", async (req, res) => {
 })
 
 // --- Admin: Officers endpoints ---
+router.get('/staff-status', async (req, res) => {
+  try {
+    const [regions, outlets, officers, teleshopManagers, gms, dgms] = await Promise.all([
+      fetchRegionsForStaffStatus(),
+      prisma.outlet.findMany({
+        orderBy: [{ region: { name: 'asc' } }, { name: 'asc' }],
+        select: {
+          id: true,
+          name: true,
+          location: true,
+          regionId: true,
+          region: { select: { id: true, name: true } },
+        }
+      }),
+      prisma.officer.findMany({
+        orderBy: [{ outlet: { region: { name: 'asc' } } }, { outlet: { name: 'asc' } }, { name: 'asc' }],
+        select: {
+          id: true,
+          name: true,
+          mobileNumber: true,
+          status: true,
+          counterNumber: true,
+          isTraining: true,
+          createdAt: true,
+          lastLoginAt: true,
+          assignedServices: true,
+          languages: true,
+          outlet: {
+            select: {
+              id: true,
+              name: true,
+              location: true,
+              regionId: true,
+              region: { select: { id: true, name: true } },
+            }
+          },
+          BreakLog: {
+            where: { endedAt: null },
+            orderBy: { startedAt: 'desc' },
+            take: 1,
+            select: { startedAt: true }
+          }
+        }
+      }),
+      prisma.teleshopManager.findMany({
+        orderBy: [{ region: { name: 'asc' } }, { name: 'asc' }],
+        select: {
+          id: true,
+          name: true,
+          mobileNumber: true,
+          email: true,
+          isActive: true,
+          createdAt: true,
+          lastLoginAt: true,
+          regionId: true,
+          region: { select: { id: true, name: true } },
+          branchId: true,
+          branch: { select: { id: true, name: true, location: true } },
+        }
+      }),
+      (prisma as any).gM.findMany({
+        orderBy: { name: 'asc' },
+        select: {
+          id: true,
+          name: true,
+          mobileNumber: true,
+          email: true,
+          isActive: true,
+          createdAt: true,
+          lastLoginAt: true,
+        }
+      }),
+      (prisma as any).dGM.findMany({
+        orderBy: { name: 'asc' },
+        select: {
+          id: true,
+          name: true,
+          mobileNumber: true,
+          email: true,
+          isActive: true,
+          createdAt: true,
+          lastLoginAt: true,
+          gmId: true,
+          regionIds: true,
+        }
+      }),
+    ])
+
+    const regionMap = new Map(regions.map(region => [region.id, region]))
+    const outletsByRegion = new Map<string, Array<(typeof outlets)[number]>>()
+    for (const outlet of outlets) {
+      if (!outletsByRegion.has(outlet.regionId)) outletsByRegion.set(outlet.regionId, [])
+      outletsByRegion.get(outlet.regionId)!.push(outlet)
+    }
+
+    const roleOrder: Record<string, number> = {
+      gm: 1,
+      dgm: 2,
+      manager: 3,
+      teleshop_manager: 4,
+      officer: 5,
+    }
+
+    const staff = [
+      ...officers.map((officer) => {
+        const activeBreak = officer.BreakLog[0]?.startedAt || null
+        const presence = getPresenceMeta({
+          rawStatus: officer.status,
+          lastLoginAt: officer.lastLoginAt,
+          breakStartedAt: activeBreak,
+        })
+        const assignedServices = Array.isArray(officer.assignedServices) ? officer.assignedServices.length : 0
+        const languages = toStringArray(officer.languages)
+
+        return {
+          id: officer.id,
+          name: officer.name,
+          mobileNumber: officer.mobileNumber,
+          email: null,
+          roleKey: 'officer',
+          roleLabel: 'Customer Service Officer',
+          status: presence.status,
+          statusLabel: presence.label,
+          statusSource: presence.source,
+          rawStatus: officer.status,
+          accountState: 'active',
+          accountStateLabel: 'Active',
+          lastLoginAt: officer.lastLoginAt,
+          createdAt: officer.createdAt,
+          regionId: officer.outlet.regionId,
+          regionName: officer.outlet.region.name,
+          outletId: officer.outlet.id,
+          outletName: officer.outlet.name,
+          outletLocation: officer.outlet.location,
+          primaryRegionId: officer.outlet.regionId,
+          primaryRegionName: officer.outlet.region.name,
+          coverageRegionIds: [officer.outlet.regionId],
+          coverageOutletIds: [officer.outlet.id],
+          scopeLabel: officer.counterNumber ? `Counter ${officer.counterNumber}` : 'Outlet coverage',
+          counterNumber: officer.counterNumber,
+          breakStartedAt: activeBreak,
+          breakDurationMinutes: activeBreak ? Math.max(0, Math.floor((Date.now() - new Date(activeBreak).getTime()) / 60000)) : 0,
+          languages,
+          assignedServicesCount: assignedServices,
+          isTraining: officer.isTraining,
+          isActive: true,
+          roleOrder: roleOrder.officer,
+        }
+      }),
+      ...teleshopManagers.map((manager) => {
+        const presence = getPresenceMeta({
+          lastLoginAt: manager.lastLoginAt,
+          isActive: manager.isActive,
+        })
+
+        return {
+          id: manager.id,
+          name: manager.name,
+          mobileNumber: manager.mobileNumber,
+          email: manager.email,
+          roleKey: 'teleshop_manager',
+          roleLabel: 'Teleshop Manager',
+          status: presence.status,
+          statusLabel: presence.label,
+          statusSource: presence.source,
+          rawStatus: null,
+          accountState: manager.isActive ? 'active' : 'inactive',
+          accountStateLabel: manager.isActive ? 'Active' : 'Inactive',
+          lastLoginAt: manager.lastLoginAt,
+          createdAt: manager.createdAt,
+          regionId: manager.regionId,
+          regionName: manager.region.name,
+          outletId: manager.branch?.id || null,
+          outletName: manager.branch?.name || null,
+          outletLocation: manager.branch?.location || null,
+          primaryRegionId: manager.regionId,
+          primaryRegionName: manager.region.name,
+          coverageRegionIds: [manager.regionId],
+          coverageOutletIds: manager.branchId ? [manager.branchId] : (outletsByRegion.get(manager.regionId) || []).map(outlet => outlet.id),
+          scopeLabel: manager.branch?.name ? 'Branch oversight' : 'Regional support',
+          counterNumber: null,
+          breakStartedAt: null,
+          breakDurationMinutes: 0,
+          languages: [],
+          assignedServicesCount: 0,
+          isTraining: false,
+          isActive: manager.isActive,
+          roleOrder: roleOrder.teleshop_manager,
+        }
+      }),
+      ...regions
+        .filter(region => !!region.managerId || !!region.managerMobile || !!region.managerEmail)
+        .map((region) => {
+          const presence = getPresenceMeta({ lastLoginAt: region.managerLastLoginAt })
+          const coveredOutlets = (outletsByRegion.get(region.id) || []).map(outlet => outlet.id)
+
+          return {
+            id: `manager:${region.id}`,
+            name: region.managerId || region.name,
+            mobileNumber: region.managerMobile || null,
+            email: region.managerEmail || null,
+            roleKey: 'manager',
+            roleLabel: 'RTOM',
+            status: presence.status,
+            statusLabel: presence.label,
+            statusSource: presence.source,
+            rawStatus: null,
+            accountState: 'active',
+            accountStateLabel: 'Configured',
+            lastLoginAt: region.managerLastLoginAt,
+            createdAt: null,
+            regionId: region.id,
+            regionName: region.name,
+            outletId: null,
+            outletName: null,
+            outletLocation: null,
+            primaryRegionId: region.id,
+            primaryRegionName: region.name,
+            coverageRegionIds: [region.id],
+            coverageOutletIds: coveredOutlets,
+            scopeLabel: `${coveredOutlets.length} outlet${coveredOutlets.length === 1 ? '' : 's'} in region`,
+            counterNumber: null,
+            breakStartedAt: null,
+            breakDurationMinutes: 0,
+            languages: [],
+            assignedServicesCount: 0,
+            isTraining: false,
+            isActive: true,
+            roleOrder: roleOrder.manager,
+          }
+        }),
+      ...dgms.map((dgm: any) => {
+        const presence = getPresenceMeta({
+          lastLoginAt: dgm.lastLoginAt,
+          isActive: dgm.isActive,
+        })
+        const coverageRegionIds = toStringArray(dgm.regionIds)
+        const coverageOutletIds = coverageRegionIds.flatMap((regionId) => (outletsByRegion.get(regionId) || []).map(outlet => outlet.id))
+        const primaryRegion = regionMap.get(coverageRegionIds[0] || '')
+
+        return {
+          id: dgm.id,
+          name: dgm.name,
+          mobileNumber: dgm.mobileNumber,
+          email: dgm.email,
+          roleKey: 'dgm',
+          roleLabel: 'DGM',
+          status: presence.status,
+          statusLabel: presence.label,
+          statusSource: presence.source,
+          rawStatus: null,
+          accountState: dgm.isActive ? 'active' : 'inactive',
+          accountStateLabel: dgm.isActive ? 'Active' : 'Inactive',
+          lastLoginAt: dgm.lastLoginAt,
+          createdAt: dgm.createdAt,
+          regionId: null,
+          regionName: null,
+          outletId: null,
+          outletName: null,
+          outletLocation: null,
+          primaryRegionId: primaryRegion?.id || '__multi_region__',
+          primaryRegionName: primaryRegion?.name || 'Multi-region Coverage',
+          coverageRegionIds,
+          coverageOutletIds,
+          scopeLabel: `${coverageRegionIds.length} region${coverageRegionIds.length === 1 ? '' : 's'} assigned`,
+          counterNumber: null,
+          breakStartedAt: null,
+          breakDurationMinutes: 0,
+          languages: [],
+          assignedServicesCount: 0,
+          isTraining: false,
+          isActive: dgm.isActive,
+          roleOrder: roleOrder.dgm,
+        }
+      }),
+      ...gms.map((gm: any) => {
+        const presence = getPresenceMeta({
+          lastLoginAt: gm.lastLoginAt,
+          isActive: gm.isActive,
+        })
+
+        return {
+          id: gm.id,
+          name: gm.name,
+          mobileNumber: gm.mobileNumber,
+          email: gm.email,
+          roleKey: 'gm',
+          roleLabel: 'GM',
+          status: presence.status,
+          statusLabel: presence.label,
+          statusSource: presence.source,
+          rawStatus: null,
+          accountState: gm.isActive ? 'active' : 'inactive',
+          accountStateLabel: gm.isActive ? 'Active' : 'Inactive',
+          lastLoginAt: gm.lastLoginAt,
+          createdAt: gm.createdAt,
+          regionId: null,
+          regionName: null,
+          outletId: null,
+          outletName: null,
+          outletLocation: null,
+          primaryRegionId: '__islandwide__',
+          primaryRegionName: 'Island-wide Coverage',
+          coverageRegionIds: regions.map(region => region.id),
+          coverageOutletIds: outlets.map(outlet => outlet.id),
+          scopeLabel: 'All regions',
+          counterNumber: null,
+          breakStartedAt: null,
+          breakDurationMinutes: 0,
+          languages: [],
+          assignedServicesCount: 0,
+          isTraining: false,
+          isActive: gm.isActive,
+          roleOrder: roleOrder.gm,
+        }
+      }),
+    ].sort((left, right) => {
+      const regionCompare = (left.primaryRegionName || '').localeCompare(right.primaryRegionName || '')
+      if (regionCompare !== 0) return regionCompare
+      if (left.roleOrder !== right.roleOrder) return left.roleOrder - right.roleOrder
+      return left.name.localeCompare(right.name)
+    })
+
+    const summary = staff.reduce((acc, member) => {
+      acc.total += 1
+      if (member.status === 'online') acc.online += 1
+      if (member.status === 'break') acc.onBreak += 1
+      if (member.status === 'offline') acc.offline += 1
+      acc.byRole[member.roleKey] = (acc.byRole[member.roleKey] || 0) + 1
+      return acc
+    }, {
+      total: 0,
+      online: 0,
+      onBreak: 0,
+      offline: 0,
+      byRole: {} as Record<string, number>,
+    })
+
+    res.json({
+      staff,
+      summary,
+      filters: {
+        regions: regions.map(region => ({ id: region.id, name: region.name })),
+        outlets: outlets.map(outlet => ({
+          id: outlet.id,
+          name: outlet.name,
+          location: outlet.location,
+          regionId: outlet.regionId,
+          regionName: outlet.region.name,
+        })),
+        roles: [
+          { id: 'gm', label: 'GM' },
+          { id: 'dgm', label: 'DGM' },
+          { id: 'manager', label: 'RTOM' },
+          { id: 'teleshop_manager', label: 'Teleshop Manager' },
+          { id: 'officer', label: 'Customer Service Officer' },
+        ],
+      },
+      presenceWindowMinutes: STAFF_PRESENCE_WINDOW_MINUTES,
+      generatedAt: new Date().toISOString(),
+    })
+  } catch (error) {
+    console.error('Failed to fetch staff status', error)
+    res.status(500).json({ error: 'Failed to fetch staff status' })
+  }
+})
+
 // Get all officers with outlet info
 router.get('/officers', async (req, res) => {
   try {
@@ -1416,17 +1972,69 @@ router.get("/backup", async (req, res) => {
     }
 
     const filename = `dqmp-backup-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.json`
+    const totalRecords = Object.values(backup.counts).reduce((sum, value) => sum + value, 0)
+
+    await logBackupRestoreHistory({
+      req,
+      action: 'backup',
+      status: 'success',
+      filename,
+      totalRecords,
+      tableCounts: backup.counts,
+    })
+
     res.setHeader("Content-Type", "application/json")
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`)
     res.send(JSON.stringify(backup, null, 2))
   } catch (error) {
     console.error("Backup error:", error)
+    await logBackupRestoreHistory({
+      req,
+      action: 'backup',
+      status: 'failed',
+      errorMessage: error instanceof Error ? error.message : String(error),
+    })
     res.status(500).json({ error: "Failed to generate backup" })
+  }
+})
+
+// GET /admin/backup-history — get persistent backup and restore history
+router.get("/backup-history", async (req, res) => {
+  try {
+    const historyDelegate = getBackupRestoreHistoryDelegate()
+    if (!historyDelegate) {
+      // Prisma client can be stale if `prisma generate` has not run in this environment.
+      return res.json({ history: [], warning: 'History model is not available in the running backend yet.' })
+    }
+
+    const actionRaw = typeof req.query.action === 'string' ? req.query.action : undefined
+    const action = actionRaw === 'backup' || actionRaw === 'restore' ? actionRaw : undefined
+    const parsedLimit = Number(req.query.limit)
+    const take = Number.isFinite(parsedLimit) ? Math.max(1, Math.min(200, parsedLimit)) : 100
+
+    const history = historyDelegate
+      ? await historyDelegate.findMany({
+        where: action ? { action } : undefined,
+        orderBy: { createdAt: 'desc' },
+        take,
+      })
+      : await getBackupRestoreHistoryRaw({ action, take })
+
+    res.json({ history })
+  } catch (error) {
+    if (isHistoryTableMissingError(error)) {
+      // Keep admin UI functional even when one environment has not run the latest migration yet.
+      return res.json({ history: [], warning: 'History table is not available in this database yet.' })
+    }
+
+    console.error('Backup history fetch error:', error)
+    res.status(500).json({ error: 'Failed to fetch backup history' })
   }
 })
 
 // POST /admin/restore — seed/restore all tables from a backup JSON file
 router.post("/restore", authenticateAdmin, async (req: any, res) => {
+  const sourceFilename = typeof req.body?._meta?.filename === 'string' ? req.body._meta.filename : undefined
   try {
     const { tables } = req.body
     if (!tables || typeof tables !== "object") {
@@ -1435,52 +2043,90 @@ router.post("/restore", authenticateAdmin, async (req: any, res) => {
 
     const results: Record<string, number> = {}
 
-    const ins = async (key: string, prismaCall: () => Promise<{ count: number }>) => {
+    const ins = async (key: string, prismaCall: (safeRows: any[]) => Promise<{ count: number }>) => {
       const rows = (tables as any)[key]
       if (!Array.isArray(rows) || rows.length === 0) return
-      const r = await prismaCall()
-      results[key] = r.count
+
+      let safeRows = rows
+      for (let i = 0; i < 10; i++) {
+        try {
+          const r = await prismaCall(safeRows)
+          results[key] = r.count
+          return
+        } catch (error: any) {
+          // Be tolerant when restoring backups from a slightly different schema.
+          if (error?.code !== 'P2022') throw error
+          const missingColumnRaw = error?.meta?.column as string | undefined
+          if (!missingColumnRaw) throw error
+
+          const missingColumn = missingColumnRaw.replace(/"/g, '')
+          safeRows = safeRows.map((row: any) => {
+            if (!row || typeof row !== 'object' || Array.isArray(row)) return row
+            const copy = { ...row }
+            delete copy[missingColumn]
+            return copy
+          })
+        }
+      }
+
+      throw new Error(`Could not restore table '${key}' after removing missing columns`)
     }
 
     // Level 0 — no FK dependencies
-    await ins("regions",            () => prisma.region.createMany({ data: tables.regions, skipDuplicates: true }))
-    await ins("services",           () => prisma.service.createMany({ data: tables.services, skipDuplicates: true }))
-    await ins("gms",                () => (prisma as any).gM.createMany({ data: tables.gms, skipDuplicates: true }))
-    await ins("customers",          () => prisma.customer.createMany({ data: tables.customers, skipDuplicates: true }))
-    await ins("otps",               () => (prisma as any).oTP.createMany({ data: tables.otps, skipDuplicates: true }))
-    await ins("sltBills",           () => (prisma as any).sltBill.createMany({ data: tables.sltBills, skipDuplicates: true }))
-    await ins("mercantileHolidays", () => (prisma as any).mercantileHoliday.createMany({ data: tables.mercantileHolidays, skipDuplicates: true }))
-    await ins("documents",          () => prisma.document.createMany({ data: tables.documents, skipDuplicates: true }))
-    await ins("alerts",             () => prisma.alert.createMany({ data: tables.alerts, skipDuplicates: true }))
+    await ins("regions",            (safeRows) => prisma.region.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("services",           (safeRows) => prisma.service.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("gms",                (safeRows) => (prisma as any).gM.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("customers",          (safeRows) => prisma.customer.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("otps",               (safeRows) => (prisma as any).oTP.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("sltBills",           (safeRows) => (prisma as any).sltBill.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("mercantileHolidays", (safeRows) => (prisma as any).mercantileHoliday.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("documents",          (safeRows) => prisma.document.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("alerts",             (safeRows) => prisma.alert.createMany({ data: safeRows, skipDuplicates: true }))
 
     // Level 1 — depends on regions
-    await ins("outlets", () => prisma.outlet.createMany({ data: tables.outlets, skipDuplicates: true }))
+    await ins("outlets", (safeRows) => prisma.outlet.createMany({ data: safeRows, skipDuplicates: true }))
 
     // Level 2 — depends on gms / outlets
-    await ins("dgms",             () => (prisma as any).dGM.createMany({ data: tables.dgms, skipDuplicates: true }))
-    await ins("officers",         () => prisma.officer.createMany({ data: tables.officers, skipDuplicates: true }))
-    await ins("teleshopManagers", () => prisma.teleshopManager.createMany({ data: tables.teleshopManagers, skipDuplicates: true }))
-    await ins("managerQRTokens",  () => prisma.managerQRToken.createMany({ data: tables.managerQRTokens, skipDuplicates: true }))
-    await ins("closureNotices",   () => prisma.closureNotice.createMany({ data: tables.closureNotices, skipDuplicates: true }))
-    await ins("appointments",     () => prisma.appointment.createMany({ data: tables.appointments, skipDuplicates: true }))
+    await ins("dgms",             (safeRows) => (prisma as any).dGM.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("officers",         (safeRows) => prisma.officer.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("teleshopManagers", (safeRows) => prisma.teleshopManager.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("managerQRTokens",  (safeRows) => prisma.managerQRToken.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("closureNotices",   (safeRows) => prisma.closureNotice.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("appointments",     (safeRows) => prisma.appointment.createMany({ data: safeRows, skipDuplicates: true }))
 
     // Level 3 — depends on customers + outlets + officers(nullable)
-    await ins("tokens",    () => prisma.token.createMany({ data: tables.tokens, skipDuplicates: true }))
-    await ins("breakLogs", () => prisma.breakLog.createMany({ data: tables.breakLogs, skipDuplicates: true }))
+    await ins("tokens",    (safeRows) => prisma.token.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("breakLogs", (safeRows) => prisma.breakLog.createMany({ data: safeRows, skipDuplicates: true }))
 
     // Level 4 — depends on tokens / officers / services
-    await ins("feedback",          () => prisma.feedback.createMany({ data: tables.feedback, skipDuplicates: true }))
-    await ins("completedServices", () => prisma.completedService.createMany({ data: tables.completedServices, skipDuplicates: true }))
-    await ins("transferLogs",      () => prisma.transferLog.createMany({ data: tables.transferLogs, skipDuplicates: true }))
-    await ins("serviceCases",      () => prisma.serviceCase.createMany({ data: tables.serviceCases, skipDuplicates: true }))
+    await ins("feedback",          (safeRows) => prisma.feedback.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("completedServices", (safeRows) => prisma.completedService.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("transferLogs",      (safeRows) => prisma.transferLog.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("serviceCases",      (safeRows) => prisma.serviceCase.createMany({ data: safeRows, skipDuplicates: true }))
 
     // Level 5 — depends on serviceCases
-    await ins("serviceCaseUpdates", () => prisma.serviceCaseUpdate.createMany({ data: tables.serviceCaseUpdates, skipDuplicates: true }))
+    await ins("serviceCaseUpdates", (safeRows) => prisma.serviceCaseUpdate.createMany({ data: safeRows, skipDuplicates: true }))
 
     const totalRestored = Object.values(results).reduce((a, b) => a + b, 0)
+    await logBackupRestoreHistory({
+      req,
+      action: 'restore',
+      status: 'success',
+      filename: sourceFilename,
+      totalRecords: totalRestored,
+      tableCounts: results,
+    })
+
     res.json({ success: true, restored: results, totalRestored })
   } catch (error: any) {
     console.error("Restore error:", error)
+    await logBackupRestoreHistory({
+      req,
+      action: 'restore',
+      status: 'failed',
+      filename: sourceFilename,
+      errorMessage: error?.message || 'Unknown restore error',
+    })
     res.status(500).json({ error: "Restore failed: " + (error?.message || "Unknown error") })
   }
 })

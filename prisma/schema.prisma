@@ -110,6 +110,8 @@ model Outlet {
   createdAt         DateTime           @default(now())
   counterCount      Int?               @default(0)
   kioskPassword     String?
+  displaySettings   Json?
+
   appointments      Appointment[]
   closureNotices    ClosureNotice[]
   completedServices CompletedService[]
@@ -127,6 +129,7 @@ model Region {
   managerId        String?
   managerEmail     String?
   managerMobile    String?
+  managerLastLoginAt DateTime?
   createdAt        DateTime          @default(now())
   managerPassword  String?
   outlets          Outlet[]
@@ -179,6 +182,22 @@ model Alert {
   @@index([isRead, createdAt])
 }
 
+model BackupRestoreHistory {
+  id            String   @id @default(uuid())
+  action        String
+  status        String   @default("success")
+  filename      String?
+  totalRecords  Int      @default(0)
+  tableCounts   Json?
+  errorMessage  String?
+  createdByRole String?
+  createdById   String?
+  createdAt     DateTime @default(now())
+
+  @@index([action, createdAt])
+  @@index([status, createdAt])
+}
+
 model Service {
   id                String             @id @default(uuid())
   code              String             @unique
@@ -187,9 +206,18 @@ model Service {
   isActive          Boolean            @default(true)
   createdAt         DateTime           @default(now())
   order             Int                @default(999)
+  isPriorityService Boolean            @default(false)
   completedServices CompletedService[]
 
   @@index([order])
+}
+
+model AppSetting {
+  id           String   @id @default(uuid())
+  key          String   @unique
+  booleanValue Boolean?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }
 
 model CompletedService {

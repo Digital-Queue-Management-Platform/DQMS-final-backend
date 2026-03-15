@@ -3,6 +3,20 @@ import { prisma } from "../server"
 import { getLastDailyReset } from "../utils/resetWindow"
 
 const router = Router()
+const PRIORITY_SERVICE_SETTING_KEY = 'priority_service_enabled'
+const SHOW_SERVICE_TYPE_IN_QUEUE_KEY = 'show_service_type_in_queue'
+const DISPLAY_SPEAKER_KEY = 'display_speaker_enabled'
+
+async function getPriorityServiceEnabled() {
+  const rows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
+    SELECT "booleanValue"
+    FROM "AppSetting"
+    WHERE "key" = ${PRIORITY_SERVICE_SETTING_KEY}
+    LIMIT 1
+  `
+
+  return rows[0]?.booleanValue ?? true
+}
 
 // Shared in-memory store for manager QR tokens (use Redis or database in production)
 interface ManagerQRTokenData {
@@ -44,8 +58,8 @@ router.get("/outlet/:outletId", async (req, res) => {
       ]
     }
 
-    // Run the three independent queries in parallel — cuts sequential round-trips from ~3s to ~800ms
-    const [waitingTokens, inServiceTokens, availableOfficers] = await Promise.all([
+    // Run the four independent queries in parallel
+    const [waitingTokens, inServiceTokens, availableOfficers, recentlyCalledTokens] = await Promise.all([
       prisma.token.findMany({
         where: waitingTokensFilter,
         orderBy: { tokenNumber: "asc" },
@@ -61,8 +75,29 @@ router.get("/outlet/:outletId", async (req, res) => {
         include: { customer: true, officer: true },
       }),
       prisma.officer.count({
-        where: { outletId, status: "available" },
+        where: {
+          outletId,
+          status: { in: ["available", "serving"] },
+          lastLoginAt: { gte: lastReset }
+        },
       }),
+      prisma.token.findMany({
+        where: {
+          outletId,
+          calledAt: { gte: lastReset },
+          status: { in: ["in_service", "completed", "skipped"] }
+        },
+        orderBy: { calledAt: "desc" },
+        take: 30,
+        select: {
+          id: true,
+          tokenNumber: true,
+          counterNumber: true,
+          calledAt: true,
+          serviceTypes: true,
+          status: true
+        }
+      })
     ])
 
     // Appointment and transfer-log lookups are only needed when there are waiting tokens
@@ -93,11 +128,20 @@ router.get("/outlet/:outletId", async (req, res) => {
       lastTransferByOfficerId: lastTransferMap.get(t.id) || null,
     }))
 
+    // Fetch outlet metadata including display settings
+    const outlet = await prisma.outlet.findUnique({
+      where: { id: outletId },
+      select: { name: true, location: true, displaySettings: true }
+    })
+
     res.json({
       waiting: filteredWaitingTokens,
       inService: inServiceTokens,
+      recentlyCalled: recentlyCalledTokens,
       availableOfficers,
       totalWaiting: filteredWaitingTokens.length,
+      displaySettings: outlet?.displaySettings || null,
+      outletMeta: outlet ? { name: outlet.name, location: outlet.location } : null
     })
   } catch (error) {
     console.error("Queue fetch error:", error)
@@ -181,8 +225,8 @@ router.get('/services', async (req, res) => {
   try {
     const showAll = req.query.all === 'true'
     const services = showAll
-      ? await prisma.$queryRaw`SELECT * FROM "Service" ORDER BY "order" ASC, "createdAt" ASC`
-      : await prisma.$queryRaw`SELECT * FROM "Service" WHERE "isActive" = true ORDER BY "order" ASC, "createdAt" ASC`
+      ? await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","createdAt" FROM "Service" ORDER BY "order" ASC, "createdAt" ASC`
+      : await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","createdAt" FROM "Service" WHERE "isActive" = true ORDER BY "order" ASC, "createdAt" ASC`
     res.set('Cache-Control', 'no-store')
     res.json(services)
   } catch (error) {
@@ -191,20 +235,114 @@ router.get('/services', async (req, res) => {
   }
 })
 
+router.get('/settings/priority-service', async (_req, res) => {
+  try {
+    const enabled = await getPriorityServiceEnabled()
+    res.json({ enabled })
+  } catch (error) {
+    console.error('Priority service setting fetch error:', error)
+    res.status(500).json({ error: 'Failed to fetch priority service setting' })
+  }
+})
+
+router.patch('/settings/priority-service', async (req, res) => {
+  try {
+    const enabled = req.body?.enabled === true
+
+    await prisma.$executeRaw`
+      INSERT INTO "AppSetting" ("id", "key", "booleanValue", "createdAt", "updatedAt")
+      VALUES (gen_random_uuid()::text, ${PRIORITY_SERVICE_SETTING_KEY}, ${enabled}, now(), now())
+      ON CONFLICT ("key")
+      DO UPDATE SET "booleanValue" = EXCLUDED."booleanValue", "updatedAt" = now()
+    `
+
+    res.json({ success: true, enabled })
+  } catch (error) {
+    console.error('Priority service setting update error:', error)
+    res.status(500).json({ error: 'Failed to update priority service setting' })
+  }
+})
+
+router.get('/settings/show-service-type', async (_req, res) => {
+  try {
+    const rows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
+      SELECT "booleanValue" FROM "AppSetting"
+      WHERE "key" = ${SHOW_SERVICE_TYPE_IN_QUEUE_KEY}
+      LIMIT 1
+    `
+    // Default to false (hidden) if not set
+    const enabled = rows[0]?.booleanValue ?? false
+    res.json({ enabled })
+  } catch (error) {
+    console.error('Show service type setting fetch error:', error)
+    res.status(500).json({ error: 'Failed to fetch show service type setting' })
+  }
+})
+
+router.patch('/settings/show-service-type', async (req, res) => {
+  try {
+    const enabled = req.body?.enabled === true
+
+    await prisma.$executeRaw`
+      INSERT INTO "AppSetting" ("id", "key", "booleanValue", "createdAt", "updatedAt")
+      VALUES (gen_random_uuid()::text, ${SHOW_SERVICE_TYPE_IN_QUEUE_KEY}, ${enabled}, now(), now())
+      ON CONFLICT ("key")
+      DO UPDATE SET "booleanValue" = EXCLUDED."booleanValue", "updatedAt" = now()
+    `
+
+    res.json({ success: true, enabled })
+  } catch (error) {
+    console.error('Show service type setting update error:', error)
+    res.status(500).json({ error: 'Failed to update show service type setting' })
+  }
+})
+
+router.get('/settings/display-speaker', async (_req, res) => {
+  try {
+    const rows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
+      SELECT "booleanValue" FROM "AppSetting"
+      WHERE "key" = ${DISPLAY_SPEAKER_KEY}
+      LIMIT 1
+    `
+    const enabled = rows[0]?.booleanValue ?? true
+    res.json({ enabled })
+  } catch (error) {
+    console.error('Display speaker setting fetch error:', error)
+    res.status(500).json({ error: 'Failed to fetch display speaker setting' })
+  }
+})
+
+router.patch('/settings/display-speaker', async (req, res) => {
+  try {
+    const enabled = req.body?.enabled === true
+    await prisma.$executeRaw`
+      INSERT INTO "AppSetting" ("id", "key", "booleanValue", "createdAt", "updatedAt")
+      VALUES (gen_random_uuid()::text, ${DISPLAY_SPEAKER_KEY}, ${enabled}, now(), now())
+      ON CONFLICT ("key")
+      DO UPDATE SET "booleanValue" = EXCLUDED."booleanValue", "updatedAt" = now()
+    `
+    res.json({ success: true, enabled })
+  } catch (error) {
+    console.error('Display speaker setting update error:', error)
+    res.status(500).json({ error: 'Failed to update display speaker setting' })
+  }
+})
+
 // Create service
 router.post('/services', async (req, res) => {
   try {
-    const { code, title, description, order } = req.body
+    const { code, title, description, order, isPriorityService } = req.body
     if (!code || !title) return res.status(400).json({ error: 'code and title are required' })
 
     const orderValue = order !== undefined ? order : 999
+    const priorityValue = isPriorityService === true
 
     const service = await prisma.$executeRaw`
-      INSERT INTO "Service" ("id","code","title","description","order","isActive","createdAt")
-      VALUES (gen_random_uuid()::text, ${code}, ${title}, ${description || null}, ${orderValue}, true, now())`
+      INSERT INTO "Service" ("id","code","title","description","order","isActive","isPriorityService","createdAt")
+      VALUES (gen_random_uuid()::text, ${code}, ${title}, ${description || null}, ${orderValue}, true, ${priorityValue}, now())`
 
     // return created row
-    const created = await prisma.$queryRaw`SELECT * FROM "Service" WHERE "code" = ${code} LIMIT 1` as any[]
+    const created = await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","createdAt" FROM "Service" WHERE "code" = ${code} LIMIT 1` as any[]
     res.json({ success: true, service: created[0] })
   } catch (error) {
     console.error('Create service error:', error)
@@ -217,7 +355,7 @@ router.post('/services', async (req, res) => {
 router.patch('/services/:id', async (req, res) => {
   try {
     const { id } = req.params
-    const { title, description, isActive, order } = req.body
+    const { title, description, isActive, order, isPriorityService } = req.body
 
     // build update query dynamically
     const data: any = {}
@@ -225,6 +363,7 @@ router.patch('/services/:id', async (req, res) => {
     if (description !== undefined) data.description = description
     if (isActive !== undefined) data.isActive = isActive
     if (order !== undefined) data.order = order
+    if (isPriorityService !== undefined) data.isPriorityService = isPriorityService
 
     // use prisma.$executeRaw for simplicity
     const sets = Object.keys(data).map((k, idx) => `"${k}" = $${idx + 2}`).join(', ')
@@ -342,11 +481,13 @@ router.get("/outlet/:outletId/counters", async (req, res) => {
 
     if (!outlet) return res.status(404).json({ error: "Outlet not found" })
 
-    // Get all officers in this outlet that are not offline
+    // Get all officers in this outlet that are not offline and have logged in since the last reset
+    const lastReset = getLastDailyReset()
     const activeOfficers = await prisma.officer.findMany({
       where: {
         outletId,
-        status: { not: "offline" }
+        status: { not: "offline" },
+        lastLoginAt: { gte: lastReset }
       },
       select: {
         name: true,
@@ -372,6 +513,23 @@ router.get("/outlet/:outletId/counters", async (req, res) => {
           services: officer.assignedServices
         } : null
       })
+    }
+
+    // Also include officers whose counterNumber is null or outside the configured range
+    const slottedIds = new Set(activeOfficers.filter(o => o.counterNumber && o.counterNumber >= 1 && o.counterNumber <= totalCount).map(o => o.id))
+    for (const officer of activeOfficers) {
+      if (!slottedIds.has(officer.id)) {
+        counters.push({
+          number: null,
+          isStaffed: true,
+          officer: {
+            id: officer.id,
+            name: officer.name,
+            status: officer.status,
+            services: officer.assignedServices
+          }
+        })
+      }
     }
 
     res.json(counters)

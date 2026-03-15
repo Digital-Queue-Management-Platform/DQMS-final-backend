@@ -11,6 +11,11 @@ import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
 const router = Router()
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
+
+const isMissingManagerLastLoginFieldError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error || '')
+  return message.includes('managerLastLoginAt') || message.includes('Unknown field') || message.includes('P2022')
+}
 // No expiration for production system - managers need continuous access
 const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
 
@@ -85,6 +90,15 @@ router.post("/login", async (req, res) => {
 
     if (!region) {
       return res.status(401).json({ error: "RTOM not found with this mobile number" })
+    }
+
+    try {
+      await prisma.region.update({
+        where: { id: region.id },
+        data: { managerLastLoginAt: new Date() }
+      })
+    } catch (error) {
+      if (!isMissingManagerLastLoginFieldError(error)) throw error
     }
 
     console.log("RTOM mobile login successful for:", mobileNumber)

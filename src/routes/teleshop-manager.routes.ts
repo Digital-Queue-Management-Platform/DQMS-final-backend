@@ -178,7 +178,7 @@ router.post("/logout", async (req: any, res) => {
         const payload: any = (jwt as any).verify(rawToken, JWT_SECRET)
         managerId = payload?.teleshopManagerId ?? null
       }
-    } catch (_) {}
+    } catch (_) { }
 
     res.clearCookie("dq_teleshop_manager_jwt", {
       httpOnly: true,
@@ -255,7 +255,14 @@ router.get("/me", async (req: any, res) => {
     const profile = await prisma.teleshopManager.findUnique({
       where: { id: teleshopManager.id },
       include: {
-        region: true
+        region: true,
+        branch: {
+          select: {
+            id: true,
+            name: true,
+            location: true,
+          },
+        },
       }
     })
 
@@ -1330,6 +1337,55 @@ router.patch("/feedback/:feedbackId/resolve", async (req: any, res) => {
   }
 })
 
+// Get outlet display settings
+router.get("/display-settings", async (req: any, res) => {
+  try {
+    const tm = req.teleshopManager
+    if (!tm.branchId) {
+      return res.status(400).json({ error: "You are not assigned to any outlet" })
+    }
+
+    const outlet = await prisma.outlet.findUnique({
+      where: { id: tm.branchId },
+      select: { displaySettings: true }
+    })
+
+    res.json({ success: true, settings: outlet?.displaySettings || null })
+  } catch (error) {
+    console.error("Get display settings error:", error)
+    res.status(500).json({ error: "Failed to fetch display settings" })
+  }
+})
+
+// Update outlet display settings
+router.post("/display-settings", async (req: any, res) => {
+  try {
+    const tm = req.teleshopManager
+    if (!tm.branchId) {
+      return res.status(400).json({ error: "You are not assigned to any outlet" })
+    }
+
+    const { settings } = req.body
+    if (!settings) {
+      return res.status(400).json({ error: "Settings are required" })
+    }
+
+    const updated = await prisma.outlet.update({
+      where: { id: tm.branchId },
+      data: { displaySettings: settings }
+    })
+
+    auditLog(tm.id, "DISPLAY_SETTINGS_UPDATED", "outlet", updated.id, {
+      settings,
+    })
+
+    res.json({ success: true, settings: updated.displaySettings })
+  } catch (error) {
+    console.error("Update display settings error:", error)
+    res.status(500).json({ error: "Failed to update display settings" })
+  }
+})
+
 export default router
 
 // Service case updates (Teleshop Manager)
@@ -1441,9 +1497,9 @@ router.get('/service-case/*', async (req: any, res) => {
     const serviceCodes: string[] = sc.serviceTypes || []
     const serviceRecords = serviceCodes.length > 0
       ? await prisma.service.findMany({
-          where: { code: { in: serviceCodes } },
-          select: { code: true, title: true }
-        })
+        where: { code: { in: serviceCodes } },
+        select: { code: true, title: true }
+      })
       : []
     const serviceTitleMap: Record<string, string> = {}
     for (const s of serviceRecords) serviceTitleMap[s.code] = s.title
@@ -1865,120 +1921,120 @@ router.get("/audit-logs", async (req: any, res) => {
       // 1. Completed services
       (logType === "all" || logType === "completed_services")
         ? prisma.completedService.findMany({
-            where: {
-              outletId: tm.branchId,
-              officerId: officerId ? (officerId as string) : { in: officerIds },
-              completedAt: dateRange
-            },
-            include: {
-              token: {
-                select: {
-                  tokenNumber: true,
-                  billPaymentIntent: true,
-                  billPaymentMethod: true,
-                  billPaymentAmount: true,
-                  isPriority: true,
-                  isTransferred: true,
-                  accountRef: true,
-                  sltTelephoneNumber: true,
-                  preferredLanguages: true,
-                  createdAt: true,
-                  calledAt: true,
-                  startedAt: true,
-                  completedAt: true,
-                  customer: { select: { id: true, name: true, mobileNumber: true, nicNumber: true, email: true } },
-                  serviceCases: {
-                    select: {
-                      refNumber: true,
-                      status: true,
-                      createdAt: true,
-                      completedAt: true,
-                      lastUpdatedAt: true,
-                      updates: { orderBy: { createdAt: "desc" }, take: 10 }
-                    },
-                    take: 1
-                  }
+          where: {
+            outletId: tm.branchId,
+            officerId: officerId ? (officerId as string) : { in: officerIds },
+            completedAt: dateRange
+          },
+          include: {
+            token: {
+              select: {
+                tokenNumber: true,
+                billPaymentIntent: true,
+                billPaymentMethod: true,
+                billPaymentAmount: true,
+                isPriority: true,
+                isTransferred: true,
+                accountRef: true,
+                sltTelephoneNumber: true,
+                preferredLanguages: true,
+                createdAt: true,
+                calledAt: true,
+                startedAt: true,
+                completedAt: true,
+                customer: { select: { id: true, name: true, mobileNumber: true, nicNumber: true, email: true } },
+                serviceCases: {
+                  select: {
+                    refNumber: true,
+                    status: true,
+                    createdAt: true,
+                    completedAt: true,
+                    lastUpdatedAt: true,
+                    updates: { orderBy: { createdAt: "desc" }, take: 10 }
+                  },
+                  take: 1
                 }
-              },
-              service: { select: { id: true, code: true, title: true } },
-              officer: { select: { id: true, name: true, counterNumber: true, mobileNumber: true } },
-              outlet: { select: { id: true, name: true, location: true } }
+              }
             },
-            orderBy: { completedAt: "desc" }
-          })
+            service: { select: { id: true, code: true, title: true } },
+            officer: { select: { id: true, name: true, counterNumber: true, mobileNumber: true } },
+            outlet: { select: { id: true, name: true, location: true } }
+          },
+          orderBy: { completedAt: "desc" }
+        })
         : Promise.resolve([]),
 
       // 2. Transfer logs
       (logType === "all" || logType === "transfers")
         ? (prisma as any).transferLog.findMany({
-            where: {
-              fromOfficerId: { in: officerIds },
-              createdAt: dateRange
+          where: {
+            fromOfficerId: { in: officerIds },
+            createdAt: dateRange
+          },
+          include: {
+            token: {
+              select: {
+                tokenNumber: true,
+                outletId: true,
+                customer: { select: { id: true, name: true, mobileNumber: true } }
+              }
             },
-            include: {
-              token: {
-                select: {
-                  tokenNumber: true,
-                  outletId: true,
-                  customer: { select: { id: true, name: true, mobileNumber: true } }
-                }
-              },
-              fromOfficer: { select: { id: true, name: true, counterNumber: true } }
-            },
-            orderBy: { createdAt: "desc" }
-          })
+            fromOfficer: { select: { id: true, name: true, counterNumber: true } }
+          },
+          orderBy: { createdAt: "desc" }
+        })
         : Promise.resolve([]),
 
       // 3. Break logs
       (logType === "all" || logType === "breaks")
         ? (prisma as any).breakLog.findMany({
-            where: {
-              officerId: { in: officerIds },
-              startedAt: dateRange
-            },
-            include: {
-              Officer: { select: { id: true, name: true, counterNumber: true } }
-            },
-            orderBy: { startedAt: "desc" }
-          })
+          where: {
+            officerId: { in: officerIds },
+            startedAt: dateRange
+          },
+          include: {
+            Officer: { select: { id: true, name: true, counterNumber: true } }
+          },
+          orderBy: { startedAt: "desc" }
+        })
         : Promise.resolve([]),
 
       // 4. Service cases
       (logType === "all" || logType === "service_cases")
         ? (prisma as any).serviceCase.findMany({
-            where: {
-              outletId: tm.branchId,
-              officerId: officerId ? (officerId as string) : { in: officerIds },
-              createdAt: dateRange
-            },
-            include: {
-              officer: { select: { id: true, name: true, counterNumber: true, mobileNumber: true } },
-              customer: { select: { id: true, name: true, mobileNumber: true, nicNumber: true, email: true } },
-              outlet: { select: { id: true, name: true, location: true } },
-              token: {
-                select: {
-                  tokenNumber: true,
-                  isPriority: true,
-                  isTransferred: true,
-                  accountRef: true,
-                  sltTelephoneNumber: true,
-                  billPaymentIntent: true,
-                  billPaymentMethod: true,
-                  billPaymentAmount: true,
-                  preferredLanguages: true,
-                  createdAt: true,
-                  calledAt: true,
-                  startedAt: true,
-                  completedAt: true
-                }
-              },
-              updates: {
-                orderBy: { createdAt: "desc" },
-                take: 20
+          where: {
+            outletId: tm.branchId,
+            officerId: officerId ? (officerId as string) : { in: officerIds },
+            createdAt: dateRange
+          },
+          include: {
+            officer: { select: { id: true, name: true, counterNumber: true, mobileNumber: true } },
+            customer: { select: { id: true, name: true, mobileNumber: true, nicNumber: true, email: true } },
+            outlet: { select: { id: true, name: true, location: true } },
+            token: {
+              select: {
+                tokenNumber: true,
+                isPriority: true,
+                isTransferred: true,
+                accountRef: true,
+                sltTelephoneNumber: true,
+                billPaymentIntent: true,
+                billPaymentMethod: true,
+                billPaymentAmount: true,
+                preferredLanguages: true,
+                createdAt: true,
+                calledAt: true,
+                startedAt: true,
+                completedAt: true
               }
             },
-            orderBy: { createdAt: "desc" }
-          })
+            updates: {
+              orderBy: { createdAt: "desc" },
+              take: 20
+            }
+          },
+          orderBy: { createdAt: "desc" }
+        })
         : Promise.resolve([])
     ])
 
@@ -2058,13 +2114,13 @@ router.get("/audit-logs", async (req: any, res) => {
           // Service case
           serviceCase: sc
             ? {
-                refNumber: sc.refNumber,
-                status: sc.status,
-                createdAt: sc.createdAt,
-                completedAt: sc.completedAt,
-                lastUpdatedAt: sc.lastUpdatedAt,
-                updates: sc.updates ?? []
-              }
+              refNumber: sc.refNumber,
+              status: sc.status,
+              createdAt: sc.createdAt,
+              completedAt: sc.completedAt,
+              lastUpdatedAt: sc.lastUpdatedAt,
+              updates: sc.updates ?? []
+            }
             : null
         }
       })

@@ -13,6 +13,7 @@ services:
     environment:
       PORT: 3001
       NODE_ENV: production
+      RUN_MIGRATIONS_ON_START: "false"
     volumes:
       - ./uploads:/app/uploads
     # Uses the healthcheck defined inside the Dockerfile

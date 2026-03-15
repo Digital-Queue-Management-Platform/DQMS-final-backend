@@ -186,7 +186,7 @@ router.get("/services", async (req, res) => {
   try {
     // Use raw query to avoid Prisma client issues before regeneration
     const services = await prisma.$queryRaw`
-      SELECT "id", "code", "title", "description", "isActive", "order"
+      SELECT "id", "code", "title", "description", "isActive", "order", "isPriorityService"
       FROM "Service" 
       WHERE "isActive" = true 
       ORDER BY "order" ASC, "createdAt" ASC

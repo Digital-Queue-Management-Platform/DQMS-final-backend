@@ -331,33 +331,36 @@ router.post("/next-token", async (req, res) => {
         return res.json({ error: 'You have no assigned languages. Please contact your manager.' })
       }
 
-      // Get candidate tokens that match officer's assigned services
-      // Priority 1: Tokens specifically assigned to THIS counter
-      let candidateTokens = await prisma.token.findMany({
-        where: {
-          outletId: officer.outletId,
-          status: 'waiting',
-          isTransferred: false,
-          counterNumber: officer.counterNumber && officer.counterNumber > 0 ? officer.counterNumber : undefined,
-          serviceTypes: { hasSome: assignedServices },
-          createdAt: { gte: lastReset },
-        },
-        orderBy: [
-          { isPriority: 'desc' },
-          { tokenNumber: 'asc' }
-        ],
-        take: 20,
-        include: { customer: true },
-      })
+      // TRANSFERRED CUSTOMER PRIORITY: Customers transferred to this counter already waited
+      // in another queue — they must be served before new arrivals regardless of token number.
+      if (officer.counterNumber && officer.counterNumber > 0) {
+        const transferredForCounter = await prisma.token.findFirst({
+          where: {
+            outletId: officer.outletId,
+            status: 'waiting',
+            isTransferred: true,
+            counterNumber: officer.counterNumber,
+            serviceTypes: { hasSome: assignedServices },
+            createdAt: { gte: lastReset },
+          },
+          orderBy: { createdAt: 'asc' }, // oldest total wait first
+          include: { customer: true },
+        })
+        if (transferredForCounter) {
+          nextToken = transferredForCounter
+          console.log(`✓ TRANSFER PRIORITY: Token #${transferredForCounter.tokenNumber} served first (customer already waited in a previous queue)`)
+        }
+      }
 
-      // If no counter-specific tokens, look for general pool tokens (counterNumber is null)
-      if (candidateTokens.length === 0) {
-        candidateTokens = await prisma.token.findMany({
+      if (!nextToken) {
+        // Get candidate tokens that match officer's assigned services
+        // Priority 1: Tokens specifically assigned to THIS counter
+        let candidateTokens = await prisma.token.findMany({
           where: {
             outletId: officer.outletId,
             status: 'waiting',
             isTransferred: false,
-            counterNumber: null,
+            counterNumber: officer.counterNumber && officer.counterNumber > 0 ? officer.counterNumber : undefined,
             serviceTypes: { hasSome: assignedServices },
             createdAt: { gte: lastReset },
           },
@@ -365,34 +368,54 @@ router.post("/next-token", async (req, res) => {
             { isPriority: 'desc' },
             { tokenNumber: 'asc' }
           ],
-          take: 50,
+          take: 20,
           include: { customer: true },
         })
-      }
 
-      console.log(`Found ${candidateTokens.length} tokens with matching services`)
-
-      // Filter by language match
-      for (const t of candidateTokens) {
-        const tokenLangs = toLangArray(t.preferredLanguages)
-        console.log(`Token #${t.tokenNumber} - Services:`, t.serviceTypes, 'Languages:', tokenLangs)
-
-        // If token has no language preference, any officer can serve it
-        if (tokenLangs.length === 0) {
-          nextToken = t
-          console.log(`✓ Token #${t.tokenNumber} has no language preference - any officer can serve`)
-          break
+        // If no counter-specific tokens, look for general pool tokens (counterNumber is null)
+        if (candidateTokens.length === 0) {
+          candidateTokens = await prisma.token.findMany({
+            where: {
+              outletId: officer.outletId,
+              status: 'waiting',
+              isTransferred: false,
+              counterNumber: null,
+              serviceTypes: { hasSome: assignedServices },
+              createdAt: { gte: lastReset },
+            },
+            orderBy: [
+              { isPriority: 'desc' },
+              { tokenNumber: 'asc' }
+            ],
+            take: 50,
+            include: { customer: true },
+          })
         }
 
-        // Check if there's a language match
-        if (hasAny(tokenLangs, officerLanguages)) {
-          nextToken = t
-          console.log(`✓ Matched Token #${t.tokenNumber} - Service + Language match`)
-          break
-        } else {
-          console.log(`✗ Token #${t.tokenNumber} language mismatch - Token wants:`, tokenLangs, 'Officer has:', officerLanguages)
+        console.log(`Found ${candidateTokens.length} tokens with matching services`)
+
+        // Filter by language match
+        for (const t of candidateTokens) {
+          const tokenLangs = toLangArray(t.preferredLanguages)
+          console.log(`Token #${t.tokenNumber} - Services:`, t.serviceTypes, 'Languages:', tokenLangs)
+
+          // If token has no language preference, any officer can serve it
+          if (tokenLangs.length === 0) {
+            nextToken = t
+            console.log(`✓ Token #${t.tokenNumber} has no language preference - any officer can serve`)
+            break
+          }
+
+          // Check if there's a language match
+          if (hasAny(tokenLangs, officerLanguages)) {
+            nextToken = t
+            console.log(`✓ Matched Token #${t.tokenNumber} - Service + Language match`)
+            break
+          } else {
+            console.log(`✗ Token #${t.tokenNumber} language mismatch - Token wants:`, tokenLangs, 'Officer has:', officerLanguages)
+          }
         }
-      }
+      } // end if (!nextToken) — skip regular matching when a transferred token was found
 
       if (!nextToken) {
         console.log('No tokens match your assigned services and languages')
@@ -892,6 +915,107 @@ router.post("/call-token", async (req, res) => {
     console.error('Call token error:', error)
     const errorMessage = error instanceof Error ? error.message : String(error)
     res.status(500).json({ error: 'Failed to call token', details: errorMessage })
+  }
+})
+
+// Announce a transferred token to its target counter without changing ownership.
+router.post("/call-transferred-token", async (req, res) => {
+  try {
+    const { officerId, tokenId } = req.body
+
+    if (!officerId || !tokenId) {
+      return res.status(400).json({ error: 'officerId and tokenId required' })
+    }
+
+    const officer = await prisma.officer.findUnique({ where: { id: officerId } })
+    if (!officer) return res.status(404).json({ error: 'Officer not found' })
+
+    const token = await prisma.token.findUnique({
+      where: { id: tokenId },
+      include: { customer: true, outlet: true },
+    })
+
+    if (!token) return res.status(404).json({ error: 'Token not found' })
+    if (token.status !== 'waiting') {
+      return res.status(400).json({ error: 'Only waiting tokens can be called to counter' })
+    }
+    if (!token.isTransferred) {
+      return res.status(400).json({ error: 'This token is not a transferred token' })
+    }
+
+    // Security: only the officer who transferred this token can trigger this call action.
+    const latestTransfer = await prisma.transferLog.findFirst({
+      where: { tokenId: token.id },
+      orderBy: { createdAt: 'desc' },
+    })
+
+    if (!latestTransfer || latestTransfer.fromOfficerId !== officerId) {
+      return res.status(403).json({ error: 'You can only call tokens transferred by you' })
+    }
+
+    const targetCounter = token.counterNumber || latestTransfer.toCounterNumber || null
+    if (!targetCounter) {
+      return res.status(400).json({ error: 'Transferred token has no target counter' })
+    }
+
+    // Mark call timestamp for audit/visibility, keep token waiting for the target officer.
+    const calledTransfer = await prisma.token.update({
+      where: { id: token.id },
+      data: { calledAt: new Date() },
+      include: { customer: true, outlet: true },
+    })
+
+    // Send customer SMS that token is now called to the transferred counter.
+    try {
+      const firstName = calledTransfer.customer.name.split(' ')[0]
+      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+      let baseUrl = origins[0] || ''
+      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+      if (vercelUrl) {
+        baseUrl = vercelUrl
+      } else if (process.env.NODE_ENV === 'production') {
+        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
+      }
+      const shortId = calledTransfer.id.substring(0, 8)
+      const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+
+      const prefs = (calledTransfer as any).preferredLanguages
+      let customerLang: 'en' | 'si' | 'ta' = 'en'
+      if (Array.isArray(prefs) && prefs.length > 0) {
+        const firstPref = String(prefs[0]).toLowerCase()
+        if (['en', 'si', 'ta'].includes(firstPref)) {
+          customerLang = firstPref as 'en' | 'si' | 'ta'
+        }
+      } else if (typeof prefs === 'string') {
+        if (prefs.includes('si')) customerLang = 'si'
+        else if (prefs.includes('ta')) customerLang = 'ta'
+      }
+
+      await sltSmsService.sendCustomerCalled(calledTransfer.customer.mobileNumber, {
+        firstName,
+        tokenNumber: calledTransfer.tokenNumber,
+        counterNumber: targetCounter,
+        outletName: calledTransfer.outlet?.name || 'SLT Office',
+        recoveryUrl,
+      }, customerLang)
+      console.log(`✓ Transfer-call SMS sent to customer ${calledTransfer.customer.mobileNumber} for token #${calledTransfer.tokenNumber}`)
+    } catch (smsError) {
+      console.error('Transfer-call SMS sending failed:', smsError)
+    }
+
+    // Trigger UI refreshes; token remains in waiting state until target officer actually picks it.
+    broadcast({ type: 'TOKEN_UPDATED', data: calledTransfer })
+
+    res.json({
+      success: true,
+      message: `Customer called to Counter ${targetCounter}`,
+      token: calledTransfer,
+      counterNumber: targetCounter,
+    })
+  } catch (error) {
+    console.error('Call transferred token error:', error)
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    res.status(500).json({ error: 'Failed to call transferred token', details: errorMessage })
   }
 })
 
@@ -2263,7 +2387,7 @@ async function getOfficerFromRequest(req: any): Promise<any | null> {
   }
 }
 
-// Branch Notices — officer can view, create and delete notices for their outlet
+// Branch Notices — officer can only view notices for their outlet
 router.get("/branch-notices", async (req: any, res) => {
   try {
     const officer = await getOfficerFromRequest(req)
@@ -2278,93 +2402,6 @@ router.get("/branch-notices", async (req: any, res) => {
   } catch (error) {
     console.error("Officer get branch notices error:", error)
     res.status(500).json({ error: "Failed to fetch notices" })
-  }
-})
-
-router.post("/branch-notices", async (req: any, res) => {
-  try {
-    const officer = await getOfficerFromRequest(req)
-    if (!officer) return res.status(401).json({ error: "Authentication required" })
-    if (!officer.outletId) return res.status(400).json({ error: "Officer is not assigned to an outlet" })
-
-    const { title, message, startsAt, endsAt, noticeType, isRecurring, recurringType, recurringDays, recurringEndDate } = req.body
-    if (!title || !message || !startsAt || !endsAt) {
-      return res.status(400).json({ error: "title, message, startsAt, and endsAt are required" })
-    }
-    if (!isRecurring && new Date(startsAt) >= new Date(endsAt)) {
-      return res.status(400).json({ error: "endsAt must be after startsAt" })
-    }
-    const type = noticeType === "standard" ? "standard" : "closure"
-    const notice = await (prisma as any).closureNotice.create({
-      data: {
-        outletId: officer.outletId,
-        title,
-        message,
-        startsAt: new Date(startsAt),
-        endsAt: new Date(endsAt),
-        createdBy: "officer",
-        createdById: officer.id,
-        noticeType: type,
-        isRecurring: Boolean(isRecurring),
-        recurringType: isRecurring ? (recurringType || "weekly") : null,
-        recurringDays: isRecurring && Array.isArray(recurringDays) ? recurringDays : [],
-        recurringEndDate: recurringEndDate ? new Date(recurringEndDate) : null
-      }
-    })
-    res.json({ success: true, notice })
-  } catch (error) {
-    console.error("Officer create branch notice error:", error)
-    res.status(500).json({ error: "Failed to create notice" })
-  }
-})
-
-router.put("/branch-notices/:noticeId", async (req: any, res) => {
-  try {
-    const officer = await getOfficerFromRequest(req)
-    if (!officer) return res.status(401).json({ error: "Authentication required" })
-    if (!officer.outletId) return res.status(400).json({ error: "Officer is not assigned to an outlet" })
-    const { noticeId } = req.params
-    const existing = await (prisma as any).closureNotice.findFirst({ where: { id: noticeId, outletId: officer.outletId } })
-    if (!existing) return res.status(404).json({ error: "Notice not found or not at your outlet" })
-    const { title, message, startsAt, endsAt, noticeType, isRecurring, recurringType, recurringDays, recurringEndDate } = req.body
-    const type = noticeType === "standard" ? "standard" : "closure"
-    const updated = await (prisma as any).closureNotice.update({
-      where: { id: noticeId },
-      data: {
-        title, message,
-        startsAt: new Date(startsAt),
-        endsAt: new Date(endsAt),
-        noticeType: type,
-        isRecurring: Boolean(isRecurring),
-        recurringType: isRecurring ? (recurringType || "weekly") : null,
-        recurringDays: isRecurring && Array.isArray(recurringDays) ? recurringDays : [],
-        recurringEndDate: recurringEndDate ? new Date(recurringEndDate) : null,
-      }
-    })
-    res.json({ success: true, notice: updated })
-  } catch (error) {
-    console.error("Officer update branch notice error:", error)
-    res.status(500).json({ error: "Failed to update notice" })
-  }
-})
-
-router.delete("/branch-notices/:noticeId", async (req: any, res) => {
-  try {
-    const officer = await getOfficerFromRequest(req)
-    if (!officer) return res.status(401).json({ error: "Authentication required" })
-    if (!officer.outletId) return res.status(400).json({ error: "Officer is not assigned to an outlet" })
-
-    const { noticeId } = req.params
-    const existing = await (prisma as any).closureNotice.findFirst({
-      where: { id: noticeId, outletId: officer.outletId }
-    })
-    if (!existing) return res.status(404).json({ error: "Notice not found or not at your outlet" })
-
-    await (prisma as any).closureNotice.delete({ where: { id: noticeId } })
-    res.json({ success: true })
-  } catch (error) {
-    console.error("Officer delete branch notice error:", error)
-    res.status(500).json({ error: "Failed to delete notice" })
   }
 })
 
