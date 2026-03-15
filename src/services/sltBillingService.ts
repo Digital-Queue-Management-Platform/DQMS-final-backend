@@ -133,7 +133,7 @@ function extractMaskedMobile(message: string): string | null {
 export function normalizeSltBillData(sltBillInfo: SltBillInfo, queriedNumber: string) {
   return {
     telephoneNumber: queriedNumber, // Use the queried number to avoid constraint violations
-    mobileNumber: sltBillInfo.maskedMobile || sltBillInfo.mobileNumber || null,
+    mobileNumber: (sltBillInfo.mobileNumber && !sltBillInfo.mobileNumber.includes('*')) ? sltBillInfo.mobileNumber : null,
     accountName: sltBillInfo.accountName || 'Verified Account',
     accountAddress: sltBillInfo.accountAddress || null,
     currentBill: typeof sltBillInfo.currentBill === 'number'

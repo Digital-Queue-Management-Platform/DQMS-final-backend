@@ -68,7 +68,13 @@ app.use(
   cors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true)
-      if (frontendOrigins.includes(origin)) return callback(null, true)
+      
+      const normalizedOrigin = origin.toLowerCase()
+      const isAllowed = frontendOrigins.some(o => o.toLowerCase() === normalizedOrigin) || 
+                        normalizedOrigin.endsWith("vercel.app") ||
+                        normalizedOrigin.includes("digital-queue-management-platform")
+
+      if (isAllowed) return callback(null, true)
 
       // Log the rejected origin to help find what's missing in FRONTEND_ORIGIN
       logger.warn({ origin }, "CORS_NOT_ALLOWED")

@@ -1054,7 +1054,7 @@ router.post("/complete-service", async (req, res) => {
       // Generate reference number: YYYY-MM-DD/OutletName/TokenNumber for uniqueness
       const refDate = new Date().toISOString().slice(0, 10)
       const outletName = (token.outlet?.name || 'Outlet').replace(/\//g, '-')
-      const refNumber = `${refDate}/${outletName}/${token.tokenNumber}`
+      const refNumber = `${refDate}/${outletName}/${token.tokenNumber}-${token.id.substring(0, 4)}`
 
       // Check if case exists for this token already
       let serviceCase = await (prisma as any).serviceCase.findFirst({ where: { tokenId: token.id } })
