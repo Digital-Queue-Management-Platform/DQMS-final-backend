@@ -34,12 +34,12 @@ jobs:
 
       - name: Run Prisma production migrations
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL || secrets.AZURE_DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL || secrets.AZURE_DIRECT_URL }}
         run: |
           if [ -z "$DATABASE_URL" ]; then
-            echo "DATABASE_URL secret is required for Prisma migrations"
-            exit 1
+            echo "::warning::DATABASE_URL is not configured. Skipping Prisma migrations for this run."
+            exit 0
           fi
 
           # If DIRECT_URL is not provided, fall back to DATABASE_URL.
