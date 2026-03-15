@@ -9,9 +9,6 @@ on:
       - feat/azure
   workflow_dispatch:
 
-env:
-  APP_NAME: Digital-Queue-Management-Platform
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -24,31 +21,13 @@ jobs:
       - name: Set up Node.js version
         uses: actions/setup-node@v3
         with:
-          node-version: '22.x'
+          node-version: '24.x'
 
       - name: npm install, build, and test
         run: |
           npm install
           npm run build --if-present
           npm run test --if-present
-
-      - name: Run Prisma production migrations
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL || secrets.AZURE_DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL || secrets.AZURE_DIRECT_URL }}
-        run: |
-          if [ -z "$DATABASE_URL" ]; then
-            echo "::warning::DATABASE_URL is not configured. Skipping Prisma migrations for this run."
-            exit 0
-          fi
-
-          # If DIRECT_URL is not provided, fall back to DATABASE_URL.
-          # This keeps deploys working while still allowing a dedicated direct connection when available.
-          if [ -z "$DIRECT_URL" ]; then
-            export DIRECT_URL="$DATABASE_URL"
-          fi
-
-          npx prisma migrate deploy
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
@@ -72,15 +51,15 @@ jobs:
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_33B2529A25964D49B9D2570006142C4F }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_C3FD8BBF54BF46E39C139C95E6280771 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_35503E1E42144A58B363775F9372E36E }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_B24F5C7B58AD4CE88968F1E5D387733E }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_2222380709764133B241E66075377561 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_C962849378294560AEAF865B18113770 }}
 
       - name: 'Deploy to Azure Web App'
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v3
         with:
-          app-name: ${{ env.APP_NAME }}
+          app-name: 'Digital-Queue-Management-Platform'
           slot-name: 'Production'
           package: .
           
