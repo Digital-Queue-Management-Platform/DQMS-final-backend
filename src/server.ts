@@ -34,13 +34,29 @@ export const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
 })
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
+
+// Global error handlers for better observability in production
+process.on("unhandledRejection", (reason, promise) => {
+  logger.error({ reason, promise }, "UNHANDLED_REJECTION");
+});
+process.on("uncaughtException", (err) => {
+  logger.fatal({ err }, "UNCAUGHT_EXCEPTION - Process exiting...");
+  process.exit(1);
+});
+
 const app = express()
+app.set("trust proxy", true)
 const server = createServer(app)
 const wss = new WebSocketServer({ server })
 const UPLOAD_DIR = process.env.UPLOAD_DIR || "uploads"
 
 // Ensure upload directory exists at boot (required for fresh cloud instances).
-fs.mkdirSync(UPLOAD_DIR, { recursive: true })
+// Ensure upload directory exists at boot
+try {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true })
+} catch (err) {
+  logger.warn({ err, UPLOAD_DIR }, "UPLOAD_DIR_INIT_WARNING");
+}
 
 // Middleware
 // CORS: allow multiple origins (comma-separated in FRONTEND_ORIGIN) and enable credentials
@@ -114,6 +130,24 @@ export const broadcast = (data: any) => {
     }
   })
 }
+
+// Health checks and root routes for Azure/LB probes
+app.get("/", (req, res) => {
+  res.json({ 
+    status: "ok", 
+    service: "digital-queue-backend", 
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get("/api/health", (req, res) => {
+  res.set('Cache-Control', 'no-store')
+  res.json({ 
+    status: "ok", 
+    timestamp: new Date().toISOString(), 
+    uptime: Number(process.uptime().toFixed(1)) 
+  });
+});
 
 // Routes
 app.use("/api/customer", customerRoutes)
@@ -292,11 +326,7 @@ app.get("/api/outlet-notices/:outletId", async (req, res) => {
   }
 })
 
-// Health check
-app.get("/api/health", (req, res) => {
-  res.set('Cache-Control', 'no-store')
-  res.json({ status: "ok", timestamp: new Date().toISOString() })
-})
+// Diagnostics
 
 app.get('/api/metrics', (req, res) => {
   const out: any = {}
@@ -310,11 +340,28 @@ app.get('/api/metrics', (req, res) => {
   res.json({ generatedAt: new Date().toISOString(), routes: out })
 })
 
-const PORT = process.env.PORT || 3001
+const PORT = Number(process.env.PORT) || 3001
 
-server.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`)
-  healthTracker.start(prisma)
+server.listen(PORT, "0.0.0.0", () => {
+  logger.info({ 
+    port: PORT, 
+    nodeEnv: process.env.NODE_ENV,
+    databaseUrlSet: !!process.env.DATABASE_URL,
+    uploadDir: UPLOAD_DIR
+  }, "SERVER_STARTED");
+  
+  // Early DB connection check
+  prisma.$connect().then(() => {
+    logger.info("DATABASE_CONNECTED");
+  }).catch((err: any) => {
+    logger.error({ err }, "DATABASE_CONNECTION_FAILED_AT_STARTUP");
+  });
+
+  try {
+    healthTracker.start(prisma)
+  } catch (err) {
+    logger.error({ err }, "HEALTH_TRACKER_INIT_FAILED");
+  }
 })
 
 // Periodic job: detect long-wait tokens and create alerts
