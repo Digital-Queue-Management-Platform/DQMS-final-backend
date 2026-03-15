@@ -35,7 +35,20 @@ jobs:
       - name: Run Prisma production migrations
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: npx prisma migrate deploy
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL secret is required for Prisma migrations"
+            exit 1
+          fi
+
+          # If DIRECT_URL is not provided, fall back to DATABASE_URL.
+          # This keeps deploys working while still allowing a dedicated direct connection when available.
+          if [ -z "$DIRECT_URL" ]; then
+            export DIRECT_URL="$DATABASE_URL"
+          fi
+
+          npx prisma migrate deploy
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
