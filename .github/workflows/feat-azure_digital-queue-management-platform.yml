@@ -9,6 +9,9 @@ on:
       - feat/azure
   workflow_dispatch:
 
+env:
+  APP_NAME: Digital-Queue-Management-Platform
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -21,13 +24,18 @@ jobs:
       - name: Set up Node.js version
         uses: actions/setup-node@v3
         with:
-          node-version: '24.x'
+          node-version: '22.x'
 
       - name: npm install, build, and test
         run: |
           npm install
           npm run build --if-present
           npm run test --if-present
+
+      - name: Run Prisma production migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npx prisma migrate deploy
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
@@ -59,7 +67,7 @@ jobs:
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v3
         with:
-          app-name: 'Digital-Queue-Management-Platform'
+          app-name: ${{ env.APP_NAME }}
           slot-name: 'Production'
           package: .
           

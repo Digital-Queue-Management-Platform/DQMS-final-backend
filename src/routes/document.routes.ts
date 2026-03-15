@@ -4,11 +4,12 @@ import path from "path"
 import { prisma } from "../server"
 
 const router = Router()
+const UPLOAD_DIR = process.env.UPLOAD_DIR || "uploads"
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, "uploads/")
+    cb(null, UPLOAD_DIR)
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9)

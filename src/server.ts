@@ -2,6 +2,7 @@ import 'dotenv/config'
 import express from "express"
 import cors from "cors"
 import cookieParser from "cookie-parser"
+import fs from "fs"
 import { WebSocketServer } from "ws"
 import { createServer } from "http"
 import { PrismaClient } from "@prisma/client"
@@ -36,6 +37,10 @@ const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 const app = express()
 const server = createServer(app)
 const wss = new WebSocketServer({ server })
+const UPLOAD_DIR = process.env.UPLOAD_DIR || "uploads"
+
+// Ensure upload directory exists at boot (required for fresh cloud instances).
+fs.mkdirSync(UPLOAD_DIR, { recursive: true })
 
 // Middleware
 // CORS: allow multiple origins (comma-separated in FRONTEND_ORIGIN) and enable credentials
@@ -59,7 +64,7 @@ app.use(
 app.use(compression({ threshold: Number(process.env.COMPRESS_THRESHOLD || 1024) }))
 app.use(cookieParser())
 app.use(express.json({ limit: '20mb' }))
-app.use("/uploads", express.static("uploads"))
+app.use("/uploads", express.static(UPLOAD_DIR))
 
 // Performance instrumentation & aggregation
 const perfLogThreshold = Number(process.env.PERF_LOG_THRESHOLD_MS || 200)
