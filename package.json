@@ -5,9 +5,9 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "prisma generate && tsc",
+    "build": "npx prisma generate && tsc",
     "build:prod": "tsc && npx prisma migrate deploy",
-    "prestart": "prisma generate",
+    "prestart": "node -e \"console.log('Starting Digital Queue Backend...')\"",
     "start": "npx prisma generate && if [ \"$RUN_MIGRATIONS\" = \"true\" ]; then npx prisma migrate deploy; fi; node dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
@@ -18,10 +18,10 @@
     "test:slt-billing": "tsx ./scripts/testSltBilling.ts",
     "test:slt-sms": "tsx ./scripts/testSltSms.ts",
     "test:otp-fallback": "tsx ./scripts/testOtpFallback.ts",
-    "postinstall": "prisma generate"
+    "postinstall": "npx prisma generate"
   },
   "dependencies": {
-    "@prisma/client": "^5.7.0",
+    "@prisma/client": "^5.22.0",
     "@types/bcrypt": "^6.0.0",
     "@types/nodemailer": "^7.0.2",
     "axios": "^1.13.2",
