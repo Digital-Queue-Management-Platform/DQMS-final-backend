@@ -1,6 +1,7 @@
 import { Router } from "express"
 import * as jwt from "jsonwebtoken"
 import * as bcrypt from "bcrypt"
+import { randomUUID } from "crypto"
 import { prisma } from "../server"
 import emailService from "../services/emailService"
 import sltSmsService from "../services/sltSmsService"
@@ -170,6 +171,114 @@ router.post("/login", async (req, res) => {
 
 // Apply authentication middleware to all other admin routes
 router.use(authenticateAdmin)
+
+const logBackupRestoreHistory = async ({
+  req,
+  action,
+  status,
+  filename,
+  totalRecords,
+  tableCounts,
+  errorMessage,
+}: {
+  req: any
+  action: 'backup' | 'restore'
+  status: 'success' | 'failed'
+  filename?: string
+  totalRecords?: number
+  tableCounts?: Record<string, number>
+  errorMessage?: string
+}) => {
+  try {
+    const historyDelegate = getBackupRestoreHistoryDelegate()
+
+    if (historyDelegate && typeof historyDelegate.create === 'function') {
+      await historyDelegate.create({
+        data: {
+          action,
+          status,
+          filename,
+          totalRecords: totalRecords ?? 0,
+          tableCounts: tableCounts as any,
+          errorMessage,
+          createdByRole: req?.user?.role || null,
+          createdById: req?.user?.email || req?.user?.id || null,
+        },
+      })
+      return
+    }
+
+    const rawTableCounts = tableCounts ? JSON.stringify(tableCounts) : null
+    await prisma.$executeRaw`
+      INSERT INTO "BackupRestoreHistory"
+      ("id", "action", "status", "filename", "totalRecords", "tableCounts", "errorMessage", "createdByRole", "createdById", "createdAt")
+      VALUES
+      (
+        ${randomUUID()},
+        ${action},
+        ${status},
+        ${filename ?? null},
+        ${totalRecords ?? 0},
+        CAST(${rawTableCounts} AS jsonb),
+        ${errorMessage ?? null},
+        ${req?.user?.role || null},
+        ${req?.user?.email || req?.user?.id || null},
+        NOW()
+      )
+    `
+  } catch (error) {
+    console.error('Backup/restore history log error:', error)
+  }
+}
+
+const isHistoryTableMissingError = (error: unknown) => {
+  const prismaCode = (error as any)?.code
+  const message = error instanceof Error ? error.message : String(error || '')
+
+  return (
+    prismaCode === 'P2021' ||
+    prismaCode === 'P2022' ||
+    message.includes('BackupRestoreHistory') ||
+    message.includes('does not exist')
+  )
+}
+
+const getBackupRestoreHistoryDelegate = () => {
+  const delegate = (prisma as any)?.backupRestoreHistory
+  return delegate && typeof delegate.findMany === 'function' ? delegate : null
+}
+
+const getBackupRestoreHistoryRaw = async ({
+  action,
+  take,
+}: {
+  action?: 'backup' | 'restore'
+  take: number
+}) => {
+  const query = `
+    SELECT
+      "id",
+      "action",
+      "status",
+      "filename",
+      "totalRecords",
+      "tableCounts",
+      "errorMessage",
+      "createdByRole",
+      "createdById",
+      "createdAt"
+    FROM "BackupRestoreHistory"
+    ${action ? 'WHERE "action" = $1' : ''}
+    ORDER BY "createdAt" DESC
+    LIMIT ${action ? '$2' : '$1'}
+  `
+
+  if (action) {
+    return prisma.$queryRawUnsafe(query, action, take)
+  }
+
+  return prisma.$queryRawUnsafe(query, take)
+}
 
 // Get dashboard analytics
 router.get("/analytics", async (req, res) => {
@@ -1863,17 +1972,69 @@ router.get("/backup", async (req, res) => {
     }
 
     const filename = `dqmp-backup-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.json`
+    const totalRecords = Object.values(backup.counts).reduce((sum, value) => sum + value, 0)
+
+    await logBackupRestoreHistory({
+      req,
+      action: 'backup',
+      status: 'success',
+      filename,
+      totalRecords,
+      tableCounts: backup.counts,
+    })
+
     res.setHeader("Content-Type", "application/json")
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`)
     res.send(JSON.stringify(backup, null, 2))
   } catch (error) {
     console.error("Backup error:", error)
+    await logBackupRestoreHistory({
+      req,
+      action: 'backup',
+      status: 'failed',
+      errorMessage: error instanceof Error ? error.message : String(error),
+    })
     res.status(500).json({ error: "Failed to generate backup" })
+  }
+})
+
+// GET /admin/backup-history — get persistent backup and restore history
+router.get("/backup-history", async (req, res) => {
+  try {
+    const historyDelegate = getBackupRestoreHistoryDelegate()
+    if (!historyDelegate) {
+      // Prisma client can be stale if `prisma generate` has not run in this environment.
+      return res.json({ history: [], warning: 'History model is not available in the running backend yet.' })
+    }
+
+    const actionRaw = typeof req.query.action === 'string' ? req.query.action : undefined
+    const action = actionRaw === 'backup' || actionRaw === 'restore' ? actionRaw : undefined
+    const parsedLimit = Number(req.query.limit)
+    const take = Number.isFinite(parsedLimit) ? Math.max(1, Math.min(200, parsedLimit)) : 100
+
+    const history = historyDelegate
+      ? await historyDelegate.findMany({
+        where: action ? { action } : undefined,
+        orderBy: { createdAt: 'desc' },
+        take,
+      })
+      : await getBackupRestoreHistoryRaw({ action, take })
+
+    res.json({ history })
+  } catch (error) {
+    if (isHistoryTableMissingError(error)) {
+      // Keep admin UI functional even when one environment has not run the latest migration yet.
+      return res.json({ history: [], warning: 'History table is not available in this database yet.' })
+    }
+
+    console.error('Backup history fetch error:', error)
+    res.status(500).json({ error: 'Failed to fetch backup history' })
   }
 })
 
 // POST /admin/restore — seed/restore all tables from a backup JSON file
 router.post("/restore", authenticateAdmin, async (req: any, res) => {
+  const sourceFilename = typeof req.body?._meta?.filename === 'string' ? req.body._meta.filename : undefined
   try {
     const { tables } = req.body
     if (!tables || typeof tables !== "object") {
@@ -1882,52 +2043,90 @@ router.post("/restore", authenticateAdmin, async (req: any, res) => {
 
     const results: Record<string, number> = {}
 
-    const ins = async (key: string, prismaCall: () => Promise<{ count: number }>) => {
+    const ins = async (key: string, prismaCall: (safeRows: any[]) => Promise<{ count: number }>) => {
       const rows = (tables as any)[key]
       if (!Array.isArray(rows) || rows.length === 0) return
-      const r = await prismaCall()
-      results[key] = r.count
+
+      let safeRows = rows
+      for (let i = 0; i < 10; i++) {
+        try {
+          const r = await prismaCall(safeRows)
+          results[key] = r.count
+          return
+        } catch (error: any) {
+          // Be tolerant when restoring backups from a slightly different schema.
+          if (error?.code !== 'P2022') throw error
+          const missingColumnRaw = error?.meta?.column as string | undefined
+          if (!missingColumnRaw) throw error
+
+          const missingColumn = missingColumnRaw.replace(/"/g, '')
+          safeRows = safeRows.map((row: any) => {
+            if (!row || typeof row !== 'object' || Array.isArray(row)) return row
+            const copy = { ...row }
+            delete copy[missingColumn]
+            return copy
+          })
+        }
+      }
+
+      throw new Error(`Could not restore table '${key}' after removing missing columns`)
     }
 
     // Level 0 — no FK dependencies
-    await ins("regions",            () => prisma.region.createMany({ data: tables.regions, skipDuplicates: true }))
-    await ins("services",           () => prisma.service.createMany({ data: tables.services, skipDuplicates: true }))
-    await ins("gms",                () => (prisma as any).gM.createMany({ data: tables.gms, skipDuplicates: true }))
-    await ins("customers",          () => prisma.customer.createMany({ data: tables.customers, skipDuplicates: true }))
-    await ins("otps",               () => (prisma as any).oTP.createMany({ data: tables.otps, skipDuplicates: true }))
-    await ins("sltBills",           () => (prisma as any).sltBill.createMany({ data: tables.sltBills, skipDuplicates: true }))
-    await ins("mercantileHolidays", () => (prisma as any).mercantileHoliday.createMany({ data: tables.mercantileHolidays, skipDuplicates: true }))
-    await ins("documents",          () => prisma.document.createMany({ data: tables.documents, skipDuplicates: true }))
-    await ins("alerts",             () => prisma.alert.createMany({ data: tables.alerts, skipDuplicates: true }))
+    await ins("regions",            (safeRows) => prisma.region.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("services",           (safeRows) => prisma.service.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("gms",                (safeRows) => (prisma as any).gM.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("customers",          (safeRows) => prisma.customer.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("otps",               (safeRows) => (prisma as any).oTP.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("sltBills",           (safeRows) => (prisma as any).sltBill.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("mercantileHolidays", (safeRows) => (prisma as any).mercantileHoliday.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("documents",          (safeRows) => prisma.document.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("alerts",             (safeRows) => prisma.alert.createMany({ data: safeRows, skipDuplicates: true }))
 
     // Level 1 — depends on regions
-    await ins("outlets", () => prisma.outlet.createMany({ data: tables.outlets, skipDuplicates: true }))
+    await ins("outlets", (safeRows) => prisma.outlet.createMany({ data: safeRows, skipDuplicates: true }))
 
     // Level 2 — depends on gms / outlets
-    await ins("dgms",             () => (prisma as any).dGM.createMany({ data: tables.dgms, skipDuplicates: true }))
-    await ins("officers",         () => prisma.officer.createMany({ data: tables.officers, skipDuplicates: true }))
-    await ins("teleshopManagers", () => prisma.teleshopManager.createMany({ data: tables.teleshopManagers, skipDuplicates: true }))
-    await ins("managerQRTokens",  () => prisma.managerQRToken.createMany({ data: tables.managerQRTokens, skipDuplicates: true }))
-    await ins("closureNotices",   () => prisma.closureNotice.createMany({ data: tables.closureNotices, skipDuplicates: true }))
-    await ins("appointments",     () => prisma.appointment.createMany({ data: tables.appointments, skipDuplicates: true }))
+    await ins("dgms",             (safeRows) => (prisma as any).dGM.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("officers",         (safeRows) => prisma.officer.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("teleshopManagers", (safeRows) => prisma.teleshopManager.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("managerQRTokens",  (safeRows) => prisma.managerQRToken.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("closureNotices",   (safeRows) => prisma.closureNotice.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("appointments",     (safeRows) => prisma.appointment.createMany({ data: safeRows, skipDuplicates: true }))
 
     // Level 3 — depends on customers + outlets + officers(nullable)
-    await ins("tokens",    () => prisma.token.createMany({ data: tables.tokens, skipDuplicates: true }))
-    await ins("breakLogs", () => prisma.breakLog.createMany({ data: tables.breakLogs, skipDuplicates: true }))
+    await ins("tokens",    (safeRows) => prisma.token.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("breakLogs", (safeRows) => prisma.breakLog.createMany({ data: safeRows, skipDuplicates: true }))
 
     // Level 4 — depends on tokens / officers / services
-    await ins("feedback",          () => prisma.feedback.createMany({ data: tables.feedback, skipDuplicates: true }))
-    await ins("completedServices", () => prisma.completedService.createMany({ data: tables.completedServices, skipDuplicates: true }))
-    await ins("transferLogs",      () => prisma.transferLog.createMany({ data: tables.transferLogs, skipDuplicates: true }))
-    await ins("serviceCases",      () => prisma.serviceCase.createMany({ data: tables.serviceCases, skipDuplicates: true }))
+    await ins("feedback",          (safeRows) => prisma.feedback.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("completedServices", (safeRows) => prisma.completedService.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("transferLogs",      (safeRows) => prisma.transferLog.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("serviceCases",      (safeRows) => prisma.serviceCase.createMany({ data: safeRows, skipDuplicates: true }))
 
     // Level 5 — depends on serviceCases
-    await ins("serviceCaseUpdates", () => prisma.serviceCaseUpdate.createMany({ data: tables.serviceCaseUpdates, skipDuplicates: true }))
+    await ins("serviceCaseUpdates", (safeRows) => prisma.serviceCaseUpdate.createMany({ data: safeRows, skipDuplicates: true }))
 
     const totalRestored = Object.values(results).reduce((a, b) => a + b, 0)
+    await logBackupRestoreHistory({
+      req,
+      action: 'restore',
+      status: 'success',
+      filename: sourceFilename,
+      totalRecords: totalRestored,
+      tableCounts: results,
+    })
+
     res.json({ success: true, restored: results, totalRestored })
   } catch (error: any) {
     console.error("Restore error:", error)
+    await logBackupRestoreHistory({
+      req,
+      action: 'restore',
+      status: 'failed',
+      filename: sourceFilename,
+      errorMessage: error?.message || 'Unknown restore error',
+    })
     res.status(500).json({ error: "Restore failed: " + (error?.message || "Unknown error") })
   }
 })

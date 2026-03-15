@@ -182,6 +182,22 @@ model Alert {
   @@index([isRead, createdAt])
 }
 
+model BackupRestoreHistory {
+  id            String   @id @default(uuid())
+  action        String
+  status        String   @default("success")
+  filename      String?
+  totalRecords  Int      @default(0)
+  tableCounts   Json?
+  errorMessage  String?
+  createdByRole String?
+  createdById   String?
+  createdAt     DateTime @default(now())
+
+  @@index([action, createdAt])
+  @@index([status, createdAt])
+}
+
 model Service {
   id                String             @id @default(uuid())
   code              String             @unique
