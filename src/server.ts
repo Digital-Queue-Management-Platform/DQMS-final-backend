@@ -38,6 +38,11 @@ const server = createServer(app)
 const wss = new WebSocketServer({ server })
 
 // Middleware
+
+// Health check endpoint (add before other route handling)
+app.get("/health", (_req, res) => {
+  res.status(200).json({ status: "ok" });
+});
 // CORS: allow multiple origins (comma-separated in FRONTEND_ORIGIN) and enable credentials
 const frontendOrigins = (process.env.FRONTEND_ORIGIN || "http://localhost:3000,http://localhost:5173")
   .split(",")
