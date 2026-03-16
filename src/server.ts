@@ -35,15 +35,14 @@ export const prisma = new PrismaClient({
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 const app = express()
 const server = createServer(app)
-const wss = new WebSocketServer({ server })
+const wss = new WebSocketServer({ server, path: "/ws" })
 
-// Middleware
-
-// Health check endpoint (add before other route handling)
+// Health check endpoint
 app.get("/health", (_req, res) => {
-  res.status(200).json({ status: "ok" });
-});
-// CORS: allow multiple origins (comma-separated in FRONTEND_ORIGIN) and enable credentials
+  res.status(200).json({ status: "ok" })
+})
+
+// CORS
 const frontendOrigins = (process.env.FRONTEND_ORIGIN || "http://localhost:3000,http://localhost:5173")
   .split(",")
   .map((s) => s.trim())
@@ -54,26 +53,33 @@ app.use(
       if (!origin) return callback(null, true)
       if (frontendOrigins.includes(origin)) return callback(null, true)
 
-      // Log the rejected origin to help find what's missing in FRONTEND_ORIGIN
       logger.warn({ origin }, "CORS_NOT_ALLOWED")
       return callback(new Error(`CORS not allowed for origin: ${origin}`))
     },
     credentials: true,
   })
 )
+
 app.use(compression({ threshold: Number(process.env.COMPRESS_THRESHOLD || 1024) }))
 app.use(cookieParser())
 app.use(express.json({ limit: '20mb' }))
 app.use("/uploads", express.static("uploads"))
 
-// Performance instrumentation & aggregation
+// Performance instrumentation
 const perfLogThreshold = Number(process.env.PERF_LOG_THRESHOLD_MS || 200)
 interface MetricStats { count: number; total: number; max: number; samples: number[] }
 const routeMetrics = new Map<string, MetricStats>()
+
 function recordMetric(key: string, dur: number) {
   let stats = routeMetrics.get(key)
-  if (!stats) { stats = { count: 0, total: 0, max: 0, samples: [] }; routeMetrics.set(key, stats) }
-  stats.count++; stats.total += dur; if (dur > stats.max) stats.max = dur
+  if (!stats) {
+    stats = { count: 0, total: 0, max: 0, samples: [] }
+    routeMetrics.set(key, stats)
+  }
+  stats.count++
+  stats.total += dur
+  if (dur > stats.max) stats.max = dur
+
   if (stats.samples.length < 50) {
     stats.samples.push(dur)
   } else {
@@ -81,6 +87,7 @@ function recordMetric(key: string, dur: number) {
     stats.samples[idx] = dur
   }
 }
+
 if (process.env.PERF_LOG !== "false") {
   app.use((req, res, next) => {
     const start = process.hrtime.bigint()
@@ -89,14 +96,17 @@ if (process.env.PERF_LOG !== "false") {
       const keyBase = req.route?.path || req.originalUrl.split('?')[0]
       recordMetric(`${req.method} ${keyBase}`, durMs)
       if (durMs >= perfLogThreshold) {
-        logger.warn({ durMs: Number(durMs.toFixed(1)), method: req.method, url: req.originalUrl }, 'slow_request')
+        logger.warn(
+          { durMs: Number(durMs.toFixed(1)), method: req.method, url: req.originalUrl },
+          'slow_request'
+        )
       }
     })
     next()
   })
 }
 
-// WebSocket for real-time updates
+// WebSocket
 wss.on("connection", (ws) => {
   logger.debug("WS client connected")
 
@@ -105,11 +115,9 @@ wss.on("connection", (ws) => {
   })
 })
 
-// Broadcast function for real-time updates
 export const broadcast = (data: any) => {
   wss.clients.forEach((client) => {
     if (client.readyState === 1) {
-      // OPEN
       client.send(JSON.stringify(data))
     }
   })
@@ -134,13 +142,11 @@ app.use("/api/slt-sms", sltSmsRoutes)
 app.use("/api/gm", gmRoutes)
 app.use("/api/dgm", dgmRoutes)
 
-// Helper: parse "HH:MM" string to total minutes
 function parseTimeToMinutes(t: string): number {
   const [h, m] = t.split(":").map(Number)
   return (h || 0) * 60 + (m || 0)
 }
 
-// Helper: check if a recurring closure notice is active right now
 function isRecurringNoticeActive(notice: any, now: Date): boolean {
   if (!notice.isRecurring || notice.recurringType !== "weekly") return false
   if (notice.recurringEndDate && new Date(notice.recurringEndDate) < now) return false
@@ -152,14 +158,12 @@ function isRecurringNoticeActive(notice: any, now: Date): boolean {
 
   const nowMinutes = now.getHours() * 60 + now.getMinutes()
 
-  // Prefer explicit recurringStartTime / recurringEndTime fields (e.g. "12:30", "23:59")
   if (notice.recurringStartTime && notice.recurringEndTime) {
     const startMinutes = parseTimeToMinutes(notice.recurringStartTime)
     const endMinutes = parseTimeToMinutes(notice.recurringEndTime)
     return nowMinutes >= startMinutes && nowMinutes <= endMinutes
   }
 
-  // Fall back to hour/minute from startsAt / endsAt datetime fields
   const startTemplate = new Date(notice.startsAt)
   const endTemplate = new Date(notice.endsAt)
   const startMinutes = startTemplate.getHours() * 60 + startTemplate.getMinutes()
@@ -167,8 +171,6 @@ function isRecurringNoticeActive(notice: any, now: Date): boolean {
   return nowMinutes >= startMinutes && nowMinutes <= endMinutes
 }
 
-// Public: Branch closed status check (no auth required)
-// Checks: mercantile holiday | active closure notice (blocking) | recurring closure notice
 app.get("/api/branch-status/:outletId", async (req, res) => {
   try {
     const { outletId } = req.params
@@ -183,7 +185,6 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
     const todayEnd = new Date(now)
     todayEnd.setHours(23, 59, 59, 999)
 
-    // Run all 5 DB queries in parallel — saves up to 4× sequential round-trip latency
     const [holidays, activeOneTime, recurringClosure, activeStandardOneTime, recurringStandard] = await Promise.all([
       (prisma as any).mercantileHoliday.findMany({ select: { date: true, name: true, isRecurring: true } }),
       (prisma as any).closureNotice.findFirst({
@@ -206,7 +207,6 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
       }),
     ])
 
-    // 1. Mercantile holiday check
     for (const holiday of holidays) {
       const hDate = new Date(holiday.date)
       if (holiday.isRecurring) {
@@ -220,7 +220,6 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
       }
     }
 
-    // 2. Active one-time CLOSURE notice
     if (activeOneTime) {
       return res.json({
         isClosed: true,
@@ -230,7 +229,6 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
       })
     }
 
-    // 3. Recurring CLOSURE notices
     for (const rn of recurringClosure) {
       if (isRecurringNoticeActive(rn, now)) {
         return res.json({
@@ -242,7 +240,6 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
       }
     }
 
-    // 4. Standard (dismissible) notices — branch is NOT closed, but show info banner
     let standardNotice: { title: string; message: string } | null = null
     if (activeStandardOneTime) {
       standardNotice = { title: activeStandardOneTime.title, message: activeStandardOneTime.message }
@@ -263,13 +260,11 @@ app.get("/api/branch-status/:outletId", async (req, res) => {
   }
 })
 
-// Public: Active standard (dismissable) notices for an outlet
 app.get("/api/outlet-notices/:outletId", async (req, res) => {
   try {
     const { outletId } = req.params
     const now = new Date()
 
-    // Fetch both notice types in parallel
     const [oneTime, recurring] = await Promise.all([
       (prisma as any).closureNotice.findMany({
         where: { outletId, noticeType: "standard", isRecurring: false, startsAt: { lte: now }, endsAt: { gte: now } },
@@ -281,8 +276,8 @@ app.get("/api/outlet-notices/:outletId", async (req, res) => {
         select: { title: true, message: true, isRecurring: true, recurringType: true, recurringDays: true, recurringEndDate: true, recurringStartTime: true, recurringEndTime: true, startsAt: true, endsAt: true }
       }),
     ])
-    const activeRecurring = recurring.filter((n: any) => isRecurringNoticeActive(n, now))
 
+    const activeRecurring = recurring.filter((n: any) => isRecurringNoticeActive(n, now))
     const notices = [...oneTime, ...activeRecurring]
     res.set("Cache-Control", "no-store")
     res.json({ notices })
@@ -292,7 +287,6 @@ app.get("/api/outlet-notices/:outletId", async (req, res) => {
   }
 })
 
-// Health check
 app.get("/api/health", (req, res) => {
   res.set('Cache-Control', 'no-store')
   res.json({ status: "ok", timestamp: new Date().toISOString() })
@@ -304,7 +298,12 @@ app.get('/api/metrics', (req, res) => {
     const avg = stats.total / stats.count
     const sorted = [...stats.samples].sort((a, b) => a - b)
     const p95 = sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] : 0
-    out[key] = { count: stats.count, avg: Number(avg.toFixed(2)), max: Number(stats.max.toFixed(2)), p95: Number(p95.toFixed(2)) }
+    out[key] = {
+      count: stats.count,
+      avg: Number(avg.toFixed(2)),
+      max: Number(stats.max.toFixed(2)),
+      p95: Number(p95.toFixed(2))
+    }
   }
   res.set('Cache-Control', 'no-store')
   res.json({ generatedAt: new Date().toISOString(), routes: out })
@@ -317,9 +316,7 @@ server.listen(PORT, () => {
   healthTracker.start(prisma)
 })
 
-// Periodic job: detect long-wait tokens and create alerts
 const LONG_WAIT_MINUTES = Number(process.env.LONG_WAIT_MINUTES || 10)
-// In production, reduce frequency to ease DB connection pressure
 const LONG_WAIT_CHECK_MS = process.env.NODE_ENV === "production" ? 1000 * 60 * 5 : 1000 * 60
 
 const checkLongWait = async () => {
@@ -334,7 +331,6 @@ const checkLongWait = async () => {
     })
     if (tokens.length === 0) return
 
-    // Fetch existing alerts for these tokens in one query
     const tokenIds = tokens.map(t => t.id)
     const existingAlerts = await prisma.alert.findMany({
       where: { type: "long_wait", relatedEntity: { in: tokenIds } },
@@ -355,17 +351,11 @@ const checkLongWait = async () => {
   }
 }
 
-// Allow disabling the job via env if needed (e.g., multi-instance deployments)
 if (process.env.DISABLE_LONG_WAIT_JOB !== "true") {
   setInterval(checkLongWait, LONG_WAIT_CHECK_MS)
 }
 
-// Officer presence monitoring - REMOVED automatic timeout system
-// Officers should only go offline when they explicitly logout or close browser window
-// The timeout-based presence detection has been disabled as requested
-
-// Auto-enqueue upcoming appointments
-const APPOINTMENT_ENQUEUE_AHEAD_MIN = Number(process.env.APPOINTMENT_ENQUEUE_AHEAD_MIN || 15) // minutes before slot
+const APPOINTMENT_ENQUEUE_AHEAD_MIN = Number(process.env.APPOINTMENT_ENQUEUE_AHEAD_MIN || 15)
 const APPOINTMENT_POLL_MS = 60 * 1000
 
 async function processAppointments() {
@@ -373,7 +363,6 @@ async function processAppointments() {
     const now = new Date()
     const ahead = new Date(now.getTime() + APPOINTMENT_ENQUEUE_AHEAD_MIN * 60 * 1000)
 
-    // Fetch due appointments (booked, today, appointmentAt <= ahead)
     const startOfDay = new Date()
     startOfDay.setHours(0, 0, 0, 0)
     const endOfDay = new Date()
@@ -390,12 +379,10 @@ async function processAppointments() {
     for (const appt of dueAppointments as any[]) {
       try {
         const result = await prisma.$transaction(async (tx) => {
-          // Skip if already queued
           const apptRows = await (tx as any).$queryRaw`SELECT * FROM "Appointment" WHERE "id" = ${appt.id} FOR UPDATE`
           const apptRow: any = Array.isArray(apptRows) ? apptRows[0] : null
           if (!apptRow || apptRow.status !== 'booked') return
 
-          // Check existing active token today
           const lastReset = getLastDailyReset()
           const existingToken: any = await tx.token.findFirst({
             where: {
@@ -409,14 +396,13 @@ async function processAppointments() {
 
           let tokenId = existingToken?.id
           let createdTokenId: string | null = null
+
           if (!existingToken) {
-            // Ensure customer exists
             let customer = await tx.customer.findFirst({ where: { mobileNumber: apptRow.mobileNumber } })
             if (!customer) {
               customer = await tx.customer.create({ data: { name: apptRow.name, mobileNumber: apptRow.mobileNumber } })
             }
 
-            // Next token number for outlet today
             const lastToken = await tx.token.findFirst({
               where: { outletId: apptRow.outletId, createdAt: { gte: lastReset } },
               orderBy: { tokenNumber: 'desc' },
@@ -438,7 +424,6 @@ async function processAppointments() {
             createdTokenId = newToken.id
           }
 
-          // Update appointment to queued
           await tx.$executeRaw`
             UPDATE "Appointment"
             SET "status" = 'queued', "queuedAt" = now(), "tokenId" = ${tokenId}
@@ -449,7 +434,6 @@ async function processAppointments() {
         }, { timeout: 10000 })
 
         if (result?.createdTokenId) {
-          // Notify clients so officer queue refreshes automatically
           broadcast({ type: 'NEW_TOKEN', data: { tokenId: result.createdTokenId, outletId: result.outletId } })
         }
       } catch (e) {
@@ -465,7 +449,6 @@ if (process.env.DISABLE_APPOINTMENT_JOB !== 'true') {
   setInterval(processAppointments, APPOINTMENT_POLL_MS)
 }
 
-// Daily reset signal: broadcast an event exactly at the configured reset time
 function scheduleDailyResetTick() {
   const next = getNextDailyReset()
   const ms = Math.max(0, next.getTime() - Date.now())
@@ -475,7 +458,6 @@ function scheduleDailyResetTick() {
       const ts = new Date()
       logger.info(`Daily reset boundary reached: ${ts.toLocaleString()}`)
 
-      // Reset all officer counter assignments
       await prisma.officer.updateMany({
         where: {
           OR: [
@@ -490,12 +472,10 @@ function scheduleDailyResetTick() {
       })
       logger.info('All officer counter assignments reset')
 
-      // Broadcast a lightweight signal; clients may optionally refresh views
       broadcast({ type: "DAILY_RESET", data: { timestamp: ts.toISOString() } })
     } catch (e) {
       logger.error({ err: e }, "Error during daily reset")
     } finally {
-      // Schedule the next tick
       scheduleDailyResetTick()
     }
   }, ms)
@@ -503,7 +483,6 @@ function scheduleDailyResetTick() {
 
 scheduleDailyResetTick()
 
-// Neon free-tier keep-alive: ping DB every 4 minutes to prevent auto-suspend (suspends after ~5 min idle)
 if (process.env.DISABLE_DB_KEEPALIVE !== "true") {
   setInterval(async () => {
     try {
@@ -514,7 +493,6 @@ if (process.env.DISABLE_DB_KEEPALIVE !== "true") {
   }, 4 * 60 * 1000)
 }
 
-// Graceful shutdown
 process.on("SIGINT", async () => {
   await prisma.$disconnect()
   process.exit(0)
