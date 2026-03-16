@@ -288,7 +288,7 @@ router.post("/next-token", async (req, res) => {
       return []
     }
 
-    const hasAny = (a: string[], b: string[]) => a.some(x => b.includes(x))
+    const hasAny = (a: string[], b: string[]) => a.some(x => b.some(y => String(x).toUpperCase() === String(y).toUpperCase()))
 
     let nextToken: any = null
 
@@ -548,7 +548,7 @@ router.get("/unmatched-tokens/:outletId", async (req, res) => {
       return []
     }
 
-    const hasAny = (a: string[], b: string[]) => a.some(x => b.includes(x))
+    const hasAny = (a: string[], b: string[]) => a.some(x => b.some(y => String(x).toUpperCase() === String(y).toUpperCase()))
 
     // Get all waiting AND skipped tokens (skipped tokens should still be visible for recall)
     const waitingTokens = await prisma.token.findMany({
