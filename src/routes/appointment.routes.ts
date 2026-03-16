@@ -60,11 +60,26 @@ router.post("/book", async (req, res) => {
     }
 
     // Validate 24-hour advance booking requirement
-    const appointmentDate = new Date(appointmentAt)
-    const now = new Date()
-    const hoursUntilAppointment = (appointmentDate.getTime() - now.getTime()) / (1000 * 60 * 60)
-    if (hoursUntilAppointment < 24) {
-      return res.status(400).json({ error: "Appointments must be booked at least 24 hours in advance" })
+    // First fetch the system setting
+    const settingRows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
+      SELECT "booleanValue" FROM "AppSetting"
+      WHERE "key" = 'advanced_appointment_required'
+      LIMIT 1
+    `
+    const isAdvancedRequired = settingRows[0]?.booleanValue ?? true
+
+    if (isAdvancedRequired) {
+      const appointmentDate = new Date(appointmentAt)
+      const now = new Date()
+      const hoursUntilAppointment = (appointmentDate.getTime() - now.getTime()) / (1000 * 60 * 60)
+      if (hoursUntilAppointment < 24) {
+        return res.status(400).json({ error: "Appointments must be booked at least 24 hours in advance" })
+      }
+    } else {
+      const appointmentDate = new Date(appointmentAt)
+      if (appointmentDate.getTime() < Date.now()) {
+        return res.status(400).json({ error: "Appointments cannot be booked in the past" })
+      }
     }
 
     // Create appointment using Prisma (handles array types properly)
