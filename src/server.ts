@@ -119,12 +119,21 @@ if (process.env.PERF_LOG !== "false") {
 }
 
 // WebSocket for real-time updates
-wss.on("connection", (ws) => {
-  logger.debug("WS client connected")
+wss.on("connection", (ws, req) => {
+  const ip = req.socket.remoteAddress
+  logger.info({ ip }, "WS_CLIENT_CONNECTED")
+
+  ws.on("error", (err) => {
+    logger.error({ err, ip }, "WS_CLIENT_ERROR")
+  })
 
   ws.on("close", () => {
-    logger.debug("WS client disconnected")
+    logger.info({ ip }, "WS_CLIENT_DISCONNECTED")
   })
+})
+
+wss.on("error", (err) => {
+  logger.error({ err }, "WSS_SERVER_ERROR")
 })
 
 // Broadcast function for real-time updates

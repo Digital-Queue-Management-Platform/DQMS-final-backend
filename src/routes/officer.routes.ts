@@ -686,10 +686,11 @@ router.post("/skip-token", async (req, res) => {
     }
 
     // set officer back to available
-    await prisma.officer.update({ where: { id: officerId }, data: { status: 'available' } })
+    const updatedOfficer = await prisma.officer.update({ where: { id: officerId }, data: { status: 'available' } })
 
     // broadcast update
     broadcast({ type: 'TOKEN_SKIPPED', data: skipped })
+    broadcast({ type: 'OFFICER_STATUS_CHANGE', data: { officerId, status: 'available', timestamp: new Date().toISOString() } })
 
     res.json({ success: true, token: skipped })
   } catch (error) {
@@ -767,10 +768,11 @@ router.post("/recall-token", async (req, res) => {
     }
 
     // set officer to serving
-    await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
+    const updatedOfficer = await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
 
     // broadcast update
     broadcast({ type: 'TOKEN_RECALLED', data: recalled })
+    broadcast({ type: 'OFFICER_STATUS_CHANGE', data: { officerId, status: 'serving', timestamp: new Date().toISOString() } })
 
     res.json({ success: true, token: recalled })
   } catch (error) {
@@ -859,8 +861,9 @@ router.post("/call-token", async (req, res) => {
 
     if (!called) return res.status(404).json({ error: 'Token lost after calling' })
 
-    // Set officer to serving
-    await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
+    // set officer to serving
+    const updatedOfficer = await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
+    broadcast({ type: 'OFFICER_STATUS_CHANGE', data: { officerId, status: 'serving', timestamp: new Date().toISOString() } })
 
     // Send SMS notification to customer
     try {
@@ -1047,6 +1050,7 @@ router.post("/complete-service", async (req, res) => {
 
     // Broadcast update
     broadcast({ type: "TOKEN_COMPLETED", data: token })
+    broadcast({ type: "OFFICER_STATUS_CHANGE", data: { officerId, status: "available", timestamp: new Date().toISOString() } })
 
     // Create or update ServiceCase (tracking), set status to completed, and print SMS to console
     try {
@@ -1331,7 +1335,7 @@ router.post("/transfer-token", async (req, res) => {
       const step3Start = Date.now()
       // 3. Set officer back to available
       console.log("[Transfer-Tx] Resetting officer status to available...")
-      await tx.officer.update({
+      const updatedOfficerTrans = await tx.officer.update({
         where: { id: officerId },
         data: { status: "available" }
       })
@@ -1363,10 +1367,11 @@ router.post("/transfer-token", async (req, res) => {
 
     console.log(`[Transfer] Transaction completed in ${Date.now() - txStart}ms. Token ID: ${result.updatedToken.id}`)
 
-    // Broadcast token update (not completion)
+    // Broadcast token update
     try {
       broadcast({ type: "TOKEN_UPDATED", data: result.updatedToken })
-      console.log("[Transfer] Broadcast sent")
+      broadcast({ type: "OFFICER_STATUS_CHANGE", data: { officerId, status: "available", timestamp: new Date().toISOString() } })
+      console.log("[Transfer] Broadcasts sent")
     } catch (broadcastErr) {
       console.error("[Transfer] Broadcast failed:", broadcastErr)
     }
