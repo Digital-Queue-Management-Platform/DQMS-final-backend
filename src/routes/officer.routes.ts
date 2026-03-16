@@ -699,6 +699,34 @@ router.post("/skip-token", async (req, res) => {
   }
 })
 
+// Re-announce current token (for central display)
+router.post("/reannounce-token", async (req, res) => {
+  try {
+    const { tokenId, officerId } = req.body
+    if (!tokenId) return res.status(400).json({ error: 'tokenId required' })
+
+    const token = await prisma.token.findUnique({
+      where: { id: tokenId },
+      include: { customer: true, officer: true, outlet: true }
+    })
+
+    if (!token) return res.status(404).json({ error: 'Token not found' })
+
+    // Only allow if it's currently in service or called
+    if (token.status !== 'in_service') {
+      return res.status(400).json({ error: 'Only in-service tokens can be re-announced' })
+    }
+
+    // Broadcast again. The central display will speak it.
+    broadcast({ type: 'TOKEN_CALLED', data: token })
+
+    return res.json({ success: true })
+  } catch (err) {
+    console.error('Re-announce error:', err)
+    res.status(500).json({ error: 'Failed to re-announce token' })
+  }
+})
+
 // Recall skipped token
 router.post("/recall-token", async (req, res) => {
   try {
