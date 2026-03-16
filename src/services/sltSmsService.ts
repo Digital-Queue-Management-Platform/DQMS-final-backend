@@ -1,6 +1,7 @@
 import axios, { AxiosInstance } from 'axios'
 import https from 'https'
 import dotenv from 'dotenv'
+import { logger } from '../server'
 
 // Load environment variables
 dotenv.config()
@@ -54,6 +55,7 @@ class SLTSmsService {
    * Returns: 94771234567 (international format without +)
    */
   private normalizeMobileNumber(mobile: string): string {
+    const original = mobile
     // Remove all non-digit characters
     let digits = mobile.replace(/\D/g, '')
 
@@ -64,14 +66,13 @@ class SLTSmsService {
 
     // If starts with 0, remove it and add 94
     if (digits.startsWith('0')) {
-      return '94' + digits.substring(1)
+      digits = '94' + digits.substring(1)
+    } else if (digits.length === 9) {
+      // If it's just the number without prefix, add 94
+      digits = '94' + digits
     }
 
-    // If it's just the number without prefix, add 94
-    if (digits.length === 9) {
-      return '94' + digits
-    }
-
+    console.log(`[SLT SMS] Normalizing ${original} -> ${digits}`)
     return digits
   }
 
@@ -96,7 +97,7 @@ class SLTSmsService {
     try {
       // Validate credentials
       if (!this.config.username || !this.config.password || !this.config.smsAlias) {
-        console.warn('SLT SMS credentials not configured')
+        logger.warn('SLT SMS credentials not configured')
         return {
           success: false,
           error: 'SLT SMS service not configured'
@@ -124,11 +125,13 @@ class SLTSmsService {
         ? this.toHexUnicode(params.message)
         : params.message
 
-      console.log(`[SLT SMS] Sending SMS to ${normalizedMobile}. Unicode: ${isUnicode}, Type: ${messageType}`)
+      logger.info({ to: normalizedMobile, isUnicode, type: messageType }, '[SLT SMS] Sending SMS')
+      if (process.env.DEBUG_SMS === 'true') {
+        logger.debug({ message: params.message }, '[SLT SMS] Message Content')
+      }
 
       // Send request to SLT SMS API using GET with query parameters
-      const response = await this.axiosInstance.get('', {
-        params: {
+      const requestParams = {
           src: this.config.smsAlias,
           dst: normalizedMobile,
           msg: processedMessage,
@@ -136,32 +139,42 @@ class SLTSmsService {
           password: this.config.password,
           dr: 1,  // Delivery report
           type: messageType  // 0 for Text, 2 for Unicode
-        }
+      };
+
+      if (process.env.DEBUG_SMS === 'true') {
+        const queryParams: Record<string, string> = {};
+        Object.entries(requestParams).forEach(([k, v]) => queryParams[k] = String(v));
+        const queryString = new URLSearchParams(queryParams).toString();
+        logger.debug({ url: `${this.config.apiUrl}?${queryString}` }, '[SLT SMS] Full Request URL')
+      }
+
+      const response = await this.axiosInstance.get('', {
+        params: requestParams
       })
 
       // Check response - SLT API typically returns status in response
-      console.log(`[SLT SMS] Response status: ${response.status}, data:`, JSON.stringify(response.data))
+      logger.info({ status: response.status, data: response.data }, '[SLT SMS] Response received')
 
       if (response.status === 200) {
         // Some SLT APIs return success: false inside a 200 response
         if (response.data && response.data.error) {
-          console.error(`[SLT SMS] Error reported in 200 OK:`, response.data.error)
+          logger.error({ error: response.data.error }, '[SLT SMS] Error reported in 200 OK')
           return { success: false, error: response.data.error }
         }
-        console.log(`[SLT SMS] Message sent successfully to ${normalizedMobile}`)
+        logger.info({ to: normalizedMobile }, '[SLT SMS] Message sent successfully')
         return {
           success: true,
           messageId: response.data?.messageId || Date.now().toString()
         }
       } else {
-        console.error(`[SLT SMS] Server returned error status ${response.status}:`, response.data)
+        logger.error({ status: response.status, data: response.data }, '[SLT SMS] Server returned error')
         return {
           success: false,
           error: response.data?.error || `Server error ${response.status}`
         }
       }
     } catch (error: any) {
-      console.error('[SLT SMS] Error sending SMS:', error.message)
+      logger.error({ error: error.message }, '[SLT SMS] Error sending SMS')
       return {
         success: false,
         error: error.message || 'Failed to send SMS'
@@ -627,6 +640,7 @@ class SLTSmsService {
     },
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SMSResponse> {
+    logger.info({ mobileNumber, tokenNumber: details.tokenNumber }, '[SLT SMS] sendTokenConfirmation entry')
     // Format token number to 3 digits (e.g., 001, 018, 123)
     const formattedToken = details.tokenNumber.toString().padStart(3, '0')
     const hasTrackingUrl = !!details.trackingUrl

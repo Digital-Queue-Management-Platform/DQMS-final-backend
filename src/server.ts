@@ -33,7 +33,7 @@ import { healthTracker } from "./services/healthTracker"
 export const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
 })
-const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
+export const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 
 // Global error handlers for better observability in production
 process.on("unhandledRejection", (reason, promise) => {
