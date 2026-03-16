@@ -457,48 +457,38 @@ async function processAppointments() {
           const apptRow: any = Array.isArray(apptRows) ? apptRows[0] : null
           if (!apptRow || apptRow.status !== 'booked') return
 
-          // Check existing active token today
-          const lastReset = getLastDailyReset()
-          const existingToken: any = await tx.token.findFirst({
-            where: {
-              outletId: apptRow.outletId,
-              status: { in: ["waiting", "in_service"] },
-              createdAt: { gte: lastReset },
-              customer: { mobileNumber: apptRow.mobileNumber }
-            },
-            include: { customer: true }
-          })
-
-          let tokenId = existingToken?.id
-          let createdTokenId: string | null = null
-          if (!existingToken) {
-            // Ensure customer exists
-            let customer = await tx.customer.findFirst({ where: { mobileNumber: apptRow.mobileNumber } })
-            if (!customer) {
-              customer = await tx.customer.create({ data: { name: apptRow.name, mobileNumber: apptRow.mobileNumber } })
-            }
-
-            // Next token number for outlet today
-            const lastToken = await tx.token.findFirst({
-              where: { outletId: apptRow.outletId, createdAt: { gte: lastReset } },
-              orderBy: { tokenNumber: 'desc' },
-              select: { tokenNumber: true }
-            })
-            const tokenNumber = (lastToken?.tokenNumber || 0) + 1
-
-            const newToken = await tx.token.create({
-              data: {
-                tokenNumber,
-                customerId: customer.id,
-                serviceTypes: apptRow.serviceTypes,
-                outletId: apptRow.outletId,
-                status: 'waiting',
-                preferredLanguages: apptRow.preferredLanguage ? [apptRow.preferredLanguage] : undefined,
-              }
-            })
-            tokenId = newToken.id
-            createdTokenId = newToken.id
+          // Ensure customer exists
+          let customer = await tx.customer.findFirst({ where: { mobileNumber: apptRow.mobileNumber } })
+          if (!customer) {
+            customer = await tx.customer.create({ data: { name: apptRow.name, mobileNumber: apptRow.mobileNumber } })
           }
+
+          // Next token number for outlet today
+          const lastReset = getLastDailyReset()
+          const lastToken = await tx.token.findFirst({
+            where: { outletId: apptRow.outletId, createdAt: { gte: lastReset } },
+            orderBy: { tokenNumber: 'desc' },
+            select: { tokenNumber: true }
+          })
+          const tokenNumber = (lastToken?.tokenNumber || 0) + 1
+
+          const newToken = await tx.token.create({
+            data: {
+              tokenNumber,
+              customerId: customer.id,
+              serviceTypes: apptRow.serviceTypes,
+              outletId: apptRow.outletId,
+              status: 'waiting',
+              preferredLanguages: apptRow.preferredLanguage ? [apptRow.preferredLanguage] : undefined,
+              sltTelephoneNumber: apptRow.sltTelephoneNumber,
+              billPaymentIntent: apptRow.billPaymentIntent,
+              billPaymentAmount: apptRow.billPaymentAmount,
+              billPaymentMethod: apptRow.billPaymentMethod,
+            }
+          })
+          
+          let tokenId = newToken.id
+          let createdTokenId = newToken.id
 
           // Update appointment to queued
           await tx.$executeRaw`
