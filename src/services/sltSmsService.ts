@@ -919,7 +919,7 @@ class SLTSmsService {
       const amountCompact = paymentLine
         ? `\n${paymentLine.replace('Full Payment', 'Full').replace('Partial Payment', 'Partial')}${methodPart}`
         : ''
-      // Prefer the full "Dear Valued Customer" greeting, but the Vercel URL is ~100 chars which
+      // Prefer the full "Dear Valued Customer" greeting, but the primary tracking URL (e.g. SLT srv)
       // pushes the total past the 160-char GSM-7 limit the SLT gateway silently drops.
       // Fall back progressively: drop greeting first, then drop footer, to stay deliverable.
       const withGreeting = `Dear Valued Customer\nBill payment complete.${amountCompact}\nTrack: ${details.trackingUrl}\n\nSLT-MOBITEL`

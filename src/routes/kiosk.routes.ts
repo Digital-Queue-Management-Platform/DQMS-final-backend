@@ -284,13 +284,13 @@ router.post("/tokens", async (req: any, res: any) => {
 
         // Build tracking URL
         const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-        let baseUrl = origins[0] || ''
-        const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-        if (vercelUrl) {
-          baseUrl = vercelUrl
-        } else if (process.env.NODE_ENV === 'production') {
-          baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-        }
+        
+        // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
+        const sltUrl = origins.find(o => o.includes('slt.lk'))
+        const vercelUrl = origins.find(o => o.includes('vercel.app'))
+        const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
+        
+        let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
 
         const shortId = token.id.substring(0, 8)
         const trackingUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`

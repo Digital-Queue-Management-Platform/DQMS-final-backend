@@ -847,7 +847,7 @@ router.post("/officers", async (req, res) => {
     })
 
     // Send notifications
-    const loginUrl = "https://digital-queue-management-platform.vercel.app/officer/login"
+    const loginUrl = "https://sltsecmanage.slt.lk:7443/officer/login"
 
     // Email (if email is provided in body)
     if (req.body.email) {
@@ -1101,7 +1101,7 @@ router.post("/teleshop-managers", async (req, res) => {
     })
 
     // Send notifications
-    const loginUrl = "https://digital-queue-management-platform.vercel.app/teleshop-manager/login"
+    const loginUrl = "https://sltsecmanage.slt.lk:7443/teleshop-manager/login"
 
     // Email
     if (teleshopManager.email) {

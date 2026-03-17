@@ -459,16 +459,13 @@ router.post("/next-token", async (req, res) => {
 
       // Build recovery URL for customer lookup
       const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      let baseUrl = origins[0] || ''
-
-      // Always prioritize Vercel URLs if available
-      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-      if (vercelUrl) {
-        baseUrl = vercelUrl
-      } else if (process.env.NODE_ENV === 'production') {
-        // In production, prefer any HTTPS URL over localhost
-        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-      }
+      
+      // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
+      const sltUrl = origins.find(o => o.includes('slt.lk'))
+      const vercelUrl = origins.find(o => o.includes('vercel.app'))
+      const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
+      
+      let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
 
       const shortId = updatedToken.id.substring(0, 8)
       const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
@@ -651,14 +648,13 @@ router.post("/skip-token", async (req, res) => {
 
       // Build recovery URL
       const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      let baseUrl = origins[0] || ''
-
-      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-      if (vercelUrl) {
-        baseUrl = vercelUrl
-      } else if (process.env.NODE_ENV === 'production') {
-        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-      }
+      
+      // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
+      const sltUrl = origins.find(o => o.includes('slt.lk'))
+      const vercelUrl = origins.find(o => o.includes('vercel.app'))
+      const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
+      
+      let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
 
       const shortId = skipped.id.substring(0, 8)
       const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
@@ -760,14 +756,13 @@ router.post("/recall-token", async (req, res) => {
 
       // Build recovery URL
       const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      let baseUrl = origins[0] || ''
-
-      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-      if (vercelUrl) {
-        baseUrl = vercelUrl
-      } else if (process.env.NODE_ENV === 'production') {
-        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-      }
+      
+      // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
+      const sltUrl = origins.find(o => o.includes('slt.lk'))
+      const vercelUrl = origins.find(o => o.includes('vercel.app'))
+      const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
+      
+      let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
 
       const shortId = recalled.id.substring(0, 8)
       const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
@@ -899,16 +894,13 @@ router.post("/call-token", async (req, res) => {
 
       // Build recovery URL for customer lookup
       const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      let baseUrl = origins[0] || ''
-
-      // Always prioritize Vercel URLs if available
-      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-      if (vercelUrl) {
-        baseUrl = vercelUrl
-      } else if (process.env.NODE_ENV === 'production') {
-        // In production, prefer any HTTPS URL over localhost
-        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-      }
+      
+      // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
+      const sltUrl = origins.find(o => o.includes('slt.lk'))
+      const vercelUrl = origins.find(o => o.includes('vercel.app'))
+      const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
+      
+      let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
 
       const shortId = called.id.substring(0, 8)
       const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
@@ -1000,13 +992,13 @@ router.post("/call-transferred-token", async (req, res) => {
     try {
       const firstName = calledTransfer.customer.name.split(' ')[0]
       const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      let baseUrl = origins[0] || ''
-      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-      if (vercelUrl) {
-        baseUrl = vercelUrl
-      } else if (process.env.NODE_ENV === 'production') {
-        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-      }
+      
+      // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
+      const sltUrl = origins.find(o => o.includes('slt.lk'))
+      const vercelUrl = origins.find(o => o.includes('vercel.app'))
+      const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
+      
+      let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
       const shortId = calledTransfer.id.substring(0, 8)
       const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
 
@@ -1146,16 +1138,13 @@ router.post("/complete-service", async (req, res) => {
 
         // Build base URL
         const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-        let baseUrl = origins[0] || ''
-
-        // Always prioritize Vercel URLs if available
-        const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-        if (vercelUrl) {
-          baseUrl = vercelUrl
-        } else if (process.env.NODE_ENV === 'production') {
-          // In production, prefer any HTTPS URL over localhost
-          baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-        }
+        
+        // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
+        const sltUrl = origins.find(o => o.includes('slt.lk'))
+        const vercelUrl = origins.find(o => o.includes('vercel.app'))
+        const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
+        
+        let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
 
         // Build feedback URL - use short alias to save space
         const shortTokenId = token.id.substring(0, 8)
@@ -1177,13 +1166,13 @@ router.post("/complete-service", async (req, res) => {
         // Build tracking URL used by all service completion SMS messages
         const trackRef = `/service/status?ref=${encodeURIComponent(serviceCase.refNumber)}`
         const smsOrigins = (process.env.FRONTEND_ORIGIN || '').split(',').map((s: string) => s.trim()).filter(Boolean)
-        let smsBaseUrl = smsOrigins[0] || ''
-        const smsVercelUrl = smsOrigins.find((o: string) => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-        if (smsVercelUrl) {
-          smsBaseUrl = smsVercelUrl
-        } else if (process.env.NODE_ENV === 'production') {
-          smsBaseUrl = smsOrigins.find((o: string) => o.startsWith('https://') && !o.includes('localhost')) || smsBaseUrl
-        }
+        
+        // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
+        const sltSrvUrl = smsOrigins.find((o: string) => o.includes('slt.lk'))
+        const smsVercelUrl = smsOrigins.find((o: string) => o.includes('vercel.app'))
+        const smsProdUrl = smsOrigins.find((o: string) => o.includes('https://') && !o.includes('localhost'))
+        
+        let smsBaseUrl = sltSrvUrl || smsVercelUrl || smsProdUrl || smsOrigins[0] || ''
         const completionTrackingUrl = smsBaseUrl ? `${smsBaseUrl}${trackRef}` : undefined
 
         if (isBillPayment) {
@@ -1243,16 +1232,13 @@ router.post("/complete-service", async (req, res) => {
         // Build absolute tracking URL using same logic as below
         const trackRef = `/service/status?ref=${encodeURIComponent(serviceCase.refNumber)}`
         const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-        let baseUrl = origins[0] || ''
-
-        // Always prioritize Vercel URLs if available
-        const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-        if (vercelUrl) {
-          baseUrl = vercelUrl
-        } else if (process.env.NODE_ENV === 'production') {
-          // In production, prefer any HTTPS URL over localhost
-          baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-        }
+        
+        // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
+        const sltUrl = origins.find(o => o.includes('slt.lk'))
+        const vercelUrl = origins.find(o => o.includes('vercel.app'))
+        const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
+        
+        let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
 
         const trackUrl = baseUrl ? `${baseUrl}${trackRef}` : trackRef
         const msg = `Ref: ${serviceCase.refNumber} | Officer: ${officerName} | Outlet: ${outlet} | Services: ${services}. Track: ${trackUrl}`
@@ -1271,16 +1257,13 @@ router.post("/complete-service", async (req, res) => {
       const trackRef = refNumber ? `/service/status?ref=${encodeURIComponent(refNumber)}` : null
       // Build absolute URL for SMS so it becomes clickable
       const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      let baseUrl = origins[0] || ''
-
-      // Always prioritize Vercel URLs if available
-      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-      if (vercelUrl) {
-        baseUrl = vercelUrl
-      } else if (process.env.NODE_ENV === 'production') {
-        // In production, prefer any HTTPS URL over localhost
-        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-      }
+      
+      // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
+      const sltUrl = origins.find(o => o.includes('slt.lk'))
+      const vercelUrl = origins.find(o => o.includes('vercel.app'))
+      const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
+      
+      let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
 
       const trackUrl = trackRef && baseUrl ? `${baseUrl}${trackRef}` : trackRef
       return res.json({ success: true, token, refNumber, trackRef, trackUrl })
@@ -1440,16 +1423,13 @@ router.post("/transfer-token", async (req, res) => {
 
       // Build recovery URL
       const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      let baseUrl = origins[0] || ''
-
-      // Always prioritize Vercel URLs if available
-      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-      if (vercelUrl) {
-        baseUrl = vercelUrl
-      } else if (process.env.NODE_ENV === 'production') {
-        // In production, prefer any HTTPS URL over localhost
-        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-      }
+      
+      // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
+      const sltUrl = origins.find(o => o.includes('slt.lk'))
+      const vercelUrl = origins.find(o => o.includes('vercel.app'))
+      const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
+      
+      let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
 
       const outlet = result.updatedToken.outlet?.name || "SLT Office"
       const trackRef = `/t/${result.updatedToken.id.substring(0, 8)}`

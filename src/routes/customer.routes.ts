@@ -100,16 +100,13 @@ router.post("/registration/otp/start", async (req, res) => {
 
     // Build recovery URL
     const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-    let baseUrl = origins[0] || ''
-
-    // Always prioritize Vercel URLs if available
-    const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-    if (vercelUrl) {
-      baseUrl = vercelUrl
-    } else if (process.env.NODE_ENV === 'production') {
-      // In production, prefer any HTTPS URL over localhost
-      baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-    }
+    
+    // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
+    const sltUrl = origins.find(o => o.includes('slt.lk'))
+    const vercelUrl = origins.find(o => o.includes('vercel.app'))
+    const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
+    
+    let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
 
     const shortOutlet = outletId ? outletId.substring(0, 8) : 'default'
     const recoveryUrl = baseUrl ? `${baseUrl}/r?o=${shortOutlet}&m=${encodeURIComponent(mobileNumber)}` : `/r?o=${shortOutlet}&m=${encodeURIComponent(mobileNumber)}`
@@ -508,16 +505,13 @@ router.post("/register", async (req, res) => {
     void (async () => {
       try {
         const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-        let baseUrl = origins[0] || ''
-
-        // Always prioritize Vercel URLs if available
-        const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-        if (vercelUrl) {
-          baseUrl = vercelUrl
-        } else if (process.env.NODE_ENV === 'production') {
-          // In production, prefer any HTTPS URL over localhost
-          baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-        }
+        
+        // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
+        const sltUrl = origins.find(o => o.includes('slt.lk'))
+        const vercelUrl = origins.find(o => o.includes('vercel.app'))
+        const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
+        
+        let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
 
         const shortId = token.id.substring(0, 8)
         const trackingUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
@@ -702,16 +696,13 @@ router.post("/lookup", async (req, res) => {
 
     // Build base URL for tracking links
     const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-    let baseUrl = origins[0] || ''
-
-    // Always prioritize Vercel URLs if available
-    const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-    if (vercelUrl) {
-      baseUrl = vercelUrl
-    } else if (process.env.NODE_ENV === 'production') {
-      // In production, prefer any HTTPS URL over localhost
-      baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-    }
+    
+    // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
+    const sltUrl = origins.find(o => o.includes('slt.lk'))
+    const vercelUrl = origins.find(o => o.includes('vercel.app'))
+    const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
+    
+    let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
 
     // Find all active tokens for this mobile number (last 24 hours to avoid too many results)
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000)

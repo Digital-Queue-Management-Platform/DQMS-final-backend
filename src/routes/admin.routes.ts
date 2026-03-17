@@ -567,7 +567,7 @@ router.post("/register-region", async (req, res) => {
 
     // Send notifications if RTOM details are provided
     if (managerMobile) {
-      const loginUrl = "https://digital-queue-management-platform.vercel.app/manager/login"
+      const loginUrl = "https://sltsecmanage.slt.lk:7443/manager/login"
 
       // Email
       if (managerEmail) {
@@ -1694,7 +1694,7 @@ router.post("/gms", async (req, res) => {
     const gm = await (prisma as any).gM.create({ data: { name, mobileNumber, email: email || null } })
 
     // Send notifications
-    const loginUrl = "https://digital-queue-management-platform.vercel.app/gm/login"
+    const loginUrl = "https://sltsecmanage.slt.lk:7443/gm/login"
 
     // Email
     if (email) {
@@ -1794,7 +1794,7 @@ router.post("/dgms", async (req, res) => {
     const dgm = await (prisma as any).dGM.create({ data: { name, mobileNumber, email: email || null, gmId, regionIds: ids } })
 
     // Send notifications
-    const loginUrl = "https://digital-queue-management-platform.vercel.app/dgm/login"
+    const loginUrl = "https://sltsecmanage.slt.lk:7443/dgm/login"
 
     // Email
     if (email) {
