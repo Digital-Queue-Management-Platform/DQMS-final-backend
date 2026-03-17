@@ -1,0 +1,49 @@
+name: Deploy Backend to SLT VM
+
+on:
+  push:
+    branches:
+      - feat/slt-vm-new
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, Windows, X64, backend]
+
+    steps:
+      - name: Update backend working copy
+        shell: cmd
+        run: |
+          cd /d C:\DQMS-final-backend
+          git fetch origin
+          git checkout feat/slt-vm-new
+          git reset --hard origin/feat/slt-vm-new
+
+      - name: Install dependencies
+        shell: cmd
+        run: |
+          cd /d C:\DQMS-final-backend
+          npm install
+
+      - name: Generate Prisma client
+        shell: cmd
+        run: |
+          cd /d C:\DQMS-final-backend
+          npx prisma generate
+
+      - name: Run Prisma migrations
+        shell: cmd
+        run: |
+          cd /d C:\DQMS-final-backend
+          npx prisma migrate deploy
+
+      - name: Build backend
+        shell: cmd
+        run: |
+          cd /d C:\DQMS-final-backend
+          npm run build
+
+      - name: Restart PM2
+        shell: cmd
+        run: |
+          pm2 restart dqms-backend --update-env
