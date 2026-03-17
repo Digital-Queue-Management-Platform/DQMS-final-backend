@@ -11,10 +11,13 @@ jobs:
     runs-on: [self-hosted, Windows, X64, backend]
 
     steps:
+      - name: Mark repo as safe
+        shell: cmd
+        run: git config --global --add safe.directory C:/DQMS-final-backend
+
       - name: Update backend working copy
         shell: cmd
         run: |
-          git config --global --add safe.directory *
           cd /d C:\DQMS-final-backend
           git fetch origin
           git checkout feat/slt-vm-new
@@ -46,5 +49,4 @@ jobs:
 
       - name: Restart PM2
         shell: cmd
-        run: |
-          pm2 restart dqms-backend --update-env
+        run: pm2 restart dqms-backend --update-env
