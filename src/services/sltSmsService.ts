@@ -409,7 +409,7 @@ class SLTSmsService {
     const formattedToken = details.tokenNumber.toString().padStart(3, '0')
 
     const messages = {
-      en: `Dear Valued Customer\n\nYour token number ${formattedToken} is now being called. Please proceed to Counter ${details.counterNumber} for your service at ${details.outletName}.\n\nSLT-MOBITEL`,
+      en: `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active. Please proceed to Counter ${details.counterNumber} immediately.\n\nSLT-Mobitel`,
       si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${formattedToken} සඳහා දැන් කැඳවනු ලැබේ. කරුණාකර කවුන්ටර් ${details.counterNumber} වෙත පැමිණෙන්න.\n\nSLT-MOBITEL`,
       ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} தற்போது அழைக்கப்படுகிறது. தயவுசெய்து கவுண்டர் ${details.counterNumber} க்கு செல்லவும்.\n\nSLT-MOBITEL`
     }
@@ -442,7 +442,7 @@ class SLTSmsService {
     const formattedToken = details.tokenNumber.toString().padStart(3, '0')
 
     const messages = {
-      en: `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} was skipped as you were not available. Please visit the counter to be recalled.\n\nSLT-MOBITEL`,
+      en: `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} was skipped as you were not available. Please visit the counter to be recalled.\n\nSLT-Mobitel`,
       si: `ගරු පාරිභෝගිකයා\n\nඔබ එම අවස්ථාවේ නොසිටි බැවින් ${details.outletName} හි ඔබගේ ටෝකන් අංකය ${formattedToken} මග හැරී ඇත. නැවත කැඳවීම සඳහා කරුණාකර කවුන්ටරය වෙත පැමිණෙන්න.\n\nSLT-MOBITEL`,
       ta: `அன்பு வாடிக்கையாளரே\n\nநீங்கள் அங்கு இல்லாததால் ${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} தவிர்க்கப்பட்டது. மீண்டும் அழைக்கப்பட தயவுசெய்து கவுண்டருக்கு வரவும்.\n\nSLT-MOBITEL`
     }
@@ -476,7 +476,7 @@ class SLTSmsService {
     const formattedToken = details.tokenNumber.toString().padStart(3, '0')
 
     const messages = {
-      en: `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is being recalled. Please proceed to Counter ${details.counterNumber || 'the assigned counter'} immediately.\n\nSLT-MOBITEL`,
+      en: `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is being recalled. Please proceed to Counter ${details.counterNumber || 'the assigned counter'} immediately.\n\nSLT-Mobitel`,
       si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${formattedToken} නැවත කැඳවනු ලැබේ. කරුණාකර වහාම කවුන්ටර් ${details.counterNumber || 'අදාළ'} වෙත පැමිණෙන්න.\n\nSLT-MOBITEL`,
       ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} மீண்டும் அழைக்கப்படுகிறது. தயவுசெய்து உடனடியாக கவுண்டர் ${details.counterNumber || ''} க்கு செல்லவும்.\n\nSLT-MOBITEL`
     }
@@ -645,9 +645,10 @@ class SLTSmsService {
     const formattedToken = details.tokenNumber.toString().padStart(3, '0')
     const hasTrackingUrl = !!details.trackingUrl
 
+    const waitTimeText = details.estimatedWait ? ` with an estimated wait time of ${details.estimatedWait} minutes` : ''
     const fullEnglishMessage = hasTrackingUrl
-      ? `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active (Queue Position: ${details.queuePosition}).\nRecovery link: ${details.trackingUrl}\n\nSLT-MOBITEL`
-      : `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active (Queue Position: ${details.queuePosition}).\n\nSLT-MOBITEL`
+      ? `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active. You are currently in position ${details.queuePosition}${waitTimeText}.\nTrack status: ${details.trackingUrl}\n\nSLT-Mobitel`
+      : `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active. You are currently in position ${details.queuePosition}${waitTimeText}.\n\nSLT-Mobitel`
 
     const buildCompactEnglishMessage = () => {
       const statusSuffix = hasTrackingUrl ? `\nTrack status: ${details.trackingUrl}` : ''
@@ -702,8 +703,9 @@ class SLTSmsService {
     // Format token number to 3 digits (e.g., 001, 018, 123)
     const formattedToken = details.tokenNumber.toString().padStart(3, '0')
 
+    const waitTimeText = details.estimatedWait ? ` with an estimated wait time of ${details.estimatedWait} minutes` : ''
     const messages = {
-      en: `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active (Queue Position: 1).\n\nSLT-MOBITEL`,
+      en: `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active. You are currently in position 1${waitTimeText}.\n\nSLT-Mobitel`,
       si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ ටෝකන් අංකය ${formattedToken} දැන් සක්‍රීයයි (පෝලිමේ ස්ථානය: 1).\n\nSLT-MOBITEL`,
       ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} இப்போது செயலில் உள்ளது (வரிசை நிலை: 1).\n\nSLT-MOBITEL`
     }
@@ -739,8 +741,8 @@ class SLTSmsService {
       const trackPart = details.recoveryUrl ? `\nTrack: ${details.recoveryUrl}` : ""
       return {
         en: details.targetCounterNumber
-          ? `SLT-MOBITEL DQMS: Dear Valued Customer, your token ${formattedToken} at ${details.outletName} has been transferred to Counter ${details.targetCounterNumber} for ${details.serviceNames}. Please proceed for further assistance.${trackPart}\n\nSLT-MOBITEL`
-          : `SLT-MOBITEL DQMS: Dear Valued Customer, your token ${formattedToken} at ${details.outletName} has been transferred for ${details.serviceNames}. Please wait for your turn.${trackPart}\n\nSLT-MOBITEL`,
+          ? `Dear Valued Customer\n\nYour token ${formattedToken} at ${details.outletName} has been transferred to Counter ${details.targetCounterNumber} for ${details.serviceNames}. Please proceed for further assistance.${trackPart}\n\nSLT-Mobitel`
+          : `Dear Valued Customer\n\nYour token ${formattedToken} at ${details.outletName} has been transferred for ${details.serviceNames}. Please wait for your turn.${trackPart}\n\nSLT-Mobitel`,
         si: details.targetCounterNumber
           ? `SLT-MOBITEL DQMS: පාරිභෝගිකයාණනි, ඔබගේ ටෝකන් අංකය ${formattedToken}, ${details.outletName} හිදී කවුන්ටර් ${details.targetCounterNumber} වෙත මාරු කරන ලදී (${details.serviceNames}). කරුණාකර නව කවුන්ටරය වෙත පැමිණෙන්න.${trackPart}\n\nSLT-MOBITEL`
           : `SLT-MOBITEL DQMS: පාරිභෝගිකයාණනි, ඔබගේ ටෝකන් ${formattedToken}, ${details.outletName} හිදී ${details.serviceNames} සඳහා මාරු කරන ලදී. කරුණාකර ඊළඟ කවුන්ටරය තෙක් රැඳී සිටින්න.${trackPart}\n\nSLT-MOBITEL`,

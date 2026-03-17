@@ -619,8 +619,11 @@ router.delete("/regions/:id", async (req, res) => {
     const region = await prisma.region.findUnique({ where: { id }, select: { id: true, name: true } })
     if (!region) return res.status(404).json({ error: "Region not found" })
 
-    // Unlink outlets from this region before deleting
-    await prisma.outlet.updateMany({ where: { regionId: id }, data: { regionId: null } as any })
+    // Outlets must be moved to another region before deleting this region (regionId is non-nullable)
+    const outletCount = await prisma.outlet.count({ where: { regionId: id } })
+    if (outletCount > 0) {
+      return res.status(400).json({ error: `Cannot delete region with ${outletCount} active outlets. Please move them first.` })
+    }
 
     await prisma.region.delete({ where: { id } })
     res.json({ success: true, message: `Region "${region.name}" deleted` })

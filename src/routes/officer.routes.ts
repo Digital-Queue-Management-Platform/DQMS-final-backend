@@ -863,17 +863,7 @@ router.post("/call-token", async (req, res) => {
       const firstName = called.customer.name.split(' ')[0]
 
       // Build recovery URL for customer lookup
-      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      
-      // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
-      const sltUrl = origins.find(o => o.includes('slt.lk'))
-      const vercelUrl = origins.find(o => o.includes('vercel.app'))
-      const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
-      
-      let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
-
-      const shortId = called.id.substring(0, 8)
-      const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+      const trackingUrl = getTrackingUrl(called.id)
 
       console.log(`[CALL-TOKEN] About to send SMS to ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
 
@@ -892,7 +882,7 @@ router.post("/call-token", async (req, res) => {
         tokenNumber: called.tokenNumber,
         counterNumber: officer.counterNumber || 0,
         outletName: called.outlet?.name || 'SLT Office',
-        recoveryUrl
+        recoveryUrl: trackingUrl
       }, customerLang)
       console.log(`✓ Call-to-counter SMS sent to customer ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
     } catch (smsError) {
@@ -961,16 +951,7 @@ router.post("/call-transferred-token", async (req, res) => {
     // Send customer SMS that token is now called to the transferred counter.
     try {
       const firstName = calledTransfer.customer.name.split(' ')[0]
-      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      
-      // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
-      const sltUrl = origins.find(o => o.includes('slt.lk'))
-      const vercelUrl = origins.find(o => o.includes('vercel.app'))
-      const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
-      
-      let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
-      const shortId = calledTransfer.id.substring(0, 8)
-      const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+      const trackingUrl = getTrackingUrl(calledTransfer.id)
 
       const prefs = (calledTransfer as any).preferredLanguages
       let customerLang: 'en' | 'si' | 'ta' = 'en'
@@ -989,7 +970,7 @@ router.post("/call-transferred-token", async (req, res) => {
         tokenNumber: calledTransfer.tokenNumber,
         counterNumber: targetCounter,
         outletName: calledTransfer.outlet?.name || 'SLT Office',
-        recoveryUrl,
+        recoveryUrl: trackingUrl,
       }, customerLang)
       console.log(`✓ Transfer-call SMS sent to customer ${calledTransfer.customer.mobileNumber} for token #${calledTransfer.tokenNumber}`)
     } catch (smsError) {
@@ -1203,17 +1184,7 @@ router.post("/complete-service", async (req, res) => {
       const caseRecord = await (prisma as any).serviceCase.findFirst({ where: { tokenId: token.id } })
       const refNumber = caseRecord?.refNumber || null
       const trackRef = refNumber ? `/service/status?ref=${encodeURIComponent(refNumber)}` : null
-      // Build absolute URL for SMS so it becomes clickable
-      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      
-      // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
-      const sltUrl = origins.find(o => o.includes('slt.lk'))
-      const vercelUrl = origins.find(o => o.includes('vercel.app'))
-      const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
-      
-      let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
-
-      const trackUrl = trackRef && baseUrl ? `${baseUrl}${trackRef}` : trackRef
+      const trackUrl = getServiceStatusUrl(refNumber || "")
       return res.json({ success: true, token, refNumber, trackRef, trackUrl })
     } catch {
       return res.json({ success: true, token, refNumber: null, trackRef: null, trackUrl: null })
@@ -1370,23 +1341,13 @@ router.post("/transfer-token", async (req, res) => {
       }
 
       // Build recovery URL
-      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      
-      // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
-      const sltUrl = origins.find(o => o.includes('slt.lk'))
-      const vercelUrl = origins.find(o => o.includes('vercel.app'))
-      const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
-      
-      let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
-
-      const outlet = result.updatedToken.outlet?.name || "SLT Office"
-      const trackRef = `/t/${result.updatedToken.id.substring(0, 8)}`
-      const recoveryUrl = baseUrl ? `${baseUrl}${trackRef}` : trackRef
+      const recoveryUrl = getTrackingUrl(result.updatedToken.id)
 
       // Fetch refNumber for tracking
       const sc: any = await (prisma as any).serviceCase.findFirst({ where: { tokenId: result.updatedToken.id } })
       const refNumber = sc?.refNumber || undefined
 
+      const outlet = result.updatedToken.outlet?.name || "SLT Office"
       await sltSmsService.sendTokenTransfer(result.updatedToken.customer.mobileNumber, {
         tokenNumber: result.updatedToken.tokenNumber,
         outletName: outlet,
