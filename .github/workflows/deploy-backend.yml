@@ -25,7 +25,7 @@ jobs:
 
       - name: Stop PM2 app before install
         shell: cmd
-        run: pm2 stop dqms-backend
+        run: C:\Users\Administrator\AppData\Roaming\npm\pm2.cmd stop dqms-backend
 
       - name: Install dependencies
         shell: cmd
@@ -53,4 +53,4 @@ jobs:
 
       - name: Restart PM2
         shell: cmd
-        run: pm2 restart dqms-backend --update-env
+        run: C:\Users\Administrator\AppData\Roaming\npm\pm2.cmd restart dqms-backend --update-env
