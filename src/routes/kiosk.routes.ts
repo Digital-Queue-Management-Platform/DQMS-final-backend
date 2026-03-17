@@ -3,6 +3,7 @@ import { prisma, broadcast, logger } from "../server"
 import * as jwt from "jsonwebtoken"
 import { getLastDailyReset } from "../utils/resetWindow"
 import sltSmsService from "../services/sltSmsService"
+import { getTrackingUrl } from "../utils/urlHelper"
 
 const router = Router()
 
@@ -282,18 +283,7 @@ router.post("/tokens", async (req: any, res: any) => {
 
         const estimatedWait = Math.max(1, queuePosition * 5)
 
-        // Build tracking URL
-        const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-        
-        // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
-        const sltUrl = origins.find(o => o.includes('slt.lk'))
-        const vercelUrl = origins.find(o => o.includes('vercel.app'))
-        const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
-        
-        let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
-
-        const shortId = token.id.substring(0, 8)
-        const trackingUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+        const trackingUrl = getTrackingUrl(token.id)
 
         // Detect language precisely like online registration
         const lang = Array.isArray(preferredLanguages) && preferredLanguages.length > 0

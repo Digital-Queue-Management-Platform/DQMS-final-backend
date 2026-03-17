@@ -4,6 +4,7 @@ import * as jwt from "jsonwebtoken"
 import otpService from "../services/otpService"
 import emailService from "../services/emailService"
 import sltSmsService from "../services/sltSmsService"
+import { getFrontendBaseUrl } from "../utils/urlHelper"
 import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
 
 const router = Router()
@@ -478,7 +479,7 @@ router.post("/officers", async (req: any, res) => {
     })
 
     // Send notifications
-    const loginUrl = "https://sltsecmanage.slt.lk:7443/officer/login"
+    const loginUrl = `${getFrontendBaseUrl()}/officer/login`
 
     // Email (if email is provided in body)
     if (req.body.email) {

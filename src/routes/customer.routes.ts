@@ -4,6 +4,7 @@ import { getLastDailyReset } from "../utils/resetWindow"
 import * as jwt from "jsonwebtoken"
 import smsHelper from "../utils/smsHelper"
 import sltSmsService from "../services/sltSmsService"
+import { getTrackingUrl, getRecoveryUrl, getFeedbackUrl } from "../utils/urlHelper"
 
 const router = Router()
 
@@ -98,18 +99,7 @@ router.post("/registration/otp/start", async (req, res) => {
       return res.json({ success: true, message: "OTP sent (dev mode)", ...(OTP_DEV_ECHO ? { devCode: code } : {}) })
     }
 
-    // Build recovery URL
-    const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-    
-    // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
-    const sltUrl = origins.find(o => o.includes('slt.lk'))
-    const vercelUrl = origins.find(o => o.includes('vercel.app'))
-    const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
-    
-    let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
-
-    const shortOutlet = outletId ? outletId.substring(0, 8) : 'default'
-    const recoveryUrl = baseUrl ? `${baseUrl}/r?o=${shortOutlet}&m=${encodeURIComponent(mobileNumber)}` : `/r?o=${shortOutlet}&m=${encodeURIComponent(mobileNumber)}`
+    const recoveryUrl = getRecoveryUrl(mobileNumber, outletId)
 
     // Send enhanced OTP SMS with recovery URL
     try {
@@ -504,28 +494,18 @@ router.post("/register", async (req, res) => {
     // Send token confirmation SMS off the request path.
     void (async () => {
       try {
-        const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-        
-        // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
-        const sltUrl = origins.find(o => o.includes('slt.lk'))
-        const vercelUrl = origins.find(o => o.includes('vercel.app'))
-        const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
-        
-        let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
-
-        const shortId = token.id.substring(0, 8)
-        const trackingUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
-        const lang = Array.isArray(preferredLanguages) && preferredLanguages.length > 0
+        const trackingUrl = getTrackingUrl(token.id)
+        const langStr = Array.isArray(preferredLanguages) && preferredLanguages.length > 0
           ? normalizeLang(preferredLanguages[0])
           : normalizeLang(preferredLanguages)
 
-        await sltSmsService.sendTokenConfirmation(token.customer.mobileNumber, {
+        const result = await sltSmsService.sendTokenConfirmation(token.customer.mobileNumber, {
           tokenNumber: token.tokenNumber,
           queuePosition,
           outletName: token.outlet?.name || 'SLT Office',
           trackingUrl,
           estimatedWait,
-        }, lang)
+        }, langStr as any)
         console.log(`✓ Token confirmation SMS sent to ${token.customer.mobileNumber}`)
       } catch (smsError) {
         console.error('Token confirmation SMS failed:', smsError)
@@ -694,17 +674,7 @@ router.post("/lookup", async (req, res) => {
       return res.status(400).json({ error: "Mobile number is required" })
     }
 
-    // Build base URL for tracking links
-    const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-    
-    // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
-    const sltUrl = origins.find(o => o.includes('slt.lk'))
-    const vercelUrl = origins.find(o => o.includes('vercel.app'))
-    const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
-    
-    let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
-
-    // Find all active tokens for this mobile number (last 24 hours to avoid too many results)
+    // Find all active tokens for this mobile number
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000)
 
     const tokens = await prisma.token.findMany({
@@ -768,7 +738,7 @@ router.post("/lookup", async (req, res) => {
           queuePosition,
           estimatedWaitMinutes: estimatedWait,
           statusMessage: getStatusMessage(token.status, queuePosition || 0, estimatedWait || 0),
-          trackingUrl: baseUrl ? `${baseUrl}/t/${token.id.substring(0, 8)}` : `/t/${token.id.substring(0, 8)}`
+          trackingUrl: getTrackingUrl(token.id)
         }
       })
     )

@@ -6,6 +6,7 @@ import { prisma } from "../server"
 import emailService from "../services/emailService"
 import sltSmsService from "../services/sltSmsService"
 import { generateSecurePassword } from "../utils/passwordGenerator"
+import { getFrontendBaseUrl } from "../utils/urlHelper"
 import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
 import { healthTracker } from "../services/healthTracker"
 
@@ -567,7 +568,7 @@ router.post("/register-region", async (req, res) => {
 
     // Send notifications if RTOM details are provided
     if (managerMobile) {
-      const loginUrl = "https://sltsecmanage.slt.lk:7443/manager/login"
+      const loginUrl = `${getFrontendBaseUrl()}/manager/login`
 
       // Email
       if (managerEmail) {
@@ -1694,7 +1695,7 @@ router.post("/gms", async (req, res) => {
     const gm = await (prisma as any).gM.create({ data: { name, mobileNumber, email: email || null } })
 
     // Send notifications
-    const loginUrl = "https://sltsecmanage.slt.lk:7443/gm/login"
+    const loginUrl = `${getFrontendBaseUrl()}/gm/login`
 
     // Email
     if (email) {
@@ -1794,7 +1795,7 @@ router.post("/dgms", async (req, res) => {
     const dgm = await (prisma as any).dGM.create({ data: { name, mobileNumber, email: email || null, gmId, regionIds: ids } })
 
     // Send notifications
-    const loginUrl = "https://sltsecmanage.slt.lk:7443/dgm/login"
+    const loginUrl = `${getFrontendBaseUrl()}/dgm/login`
 
     // Email
     if (email) {
