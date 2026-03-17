@@ -23,6 +23,10 @@ jobs:
           git checkout feat/slt-vm-new
           git reset --hard origin/feat/slt-vm-new
 
+      - name: Stop PM2 app before install
+        shell: cmd
+        run: pm2 stop dqms-backend
+
       - name: Install dependencies
         shell: cmd
         run: |
