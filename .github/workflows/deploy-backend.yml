@@ -14,6 +14,8 @@ jobs:
       - name: Update backend working copy
         shell: cmd
         run: |
+          takeown /f C:\DQMS-final-backend /r /d y
+          icacls C:\DQMS-final-backend /grant "NT AUTHORITY\NETWORK SERVICE":F /t /q
           git config --global --add safe.directory C:/DQMS-final-backend
           cd /d C:\DQMS-final-backend
           git fetch origin
