@@ -2,6 +2,7 @@ import 'dotenv/config'
 import express from "express"
 import cors from "cors"
 import cookieParser from "cookie-parser"
+import fs from "fs"
 import { WebSocketServer } from "ws"
 import { createServer } from "http"
 import { PrismaClient } from "@prisma/client"
@@ -32,10 +33,30 @@ import { healthTracker } from "./services/healthTracker"
 export const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
 })
-const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
+export const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
+
+// Global error handlers for better observability in production
+process.on("unhandledRejection", (reason, promise) => {
+  logger.error({ reason, promise }, "UNHANDLED_REJECTION");
+});
+process.on("uncaughtException", (err) => {
+  logger.fatal({ err }, "UNCAUGHT_EXCEPTION - Process exiting...");
+  process.exit(1);
+});
+
 const app = express()
+app.set("trust proxy", true)
 const server = createServer(app)
 const wss = new WebSocketServer({ server })
+const UPLOAD_DIR = process.env.UPLOAD_DIR || "uploads"
+
+// Ensure upload directory exists at boot (required for fresh cloud instances).
+// Ensure upload directory exists at boot
+try {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true })
+} catch (err) {
+  logger.warn({ err, UPLOAD_DIR }, "UPLOAD_DIR_INIT_WARNING");
+}
 
 // Middleware
 // CORS: allow multiple origins (comma-separated in FRONTEND_ORIGIN) and enable credentials
@@ -47,7 +68,13 @@ app.use(
   cors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true)
-      if (frontendOrigins.includes(origin)) return callback(null, true)
+      
+      const normalizedOrigin = origin.toLowerCase()
+      const isAllowed = frontendOrigins.some(o => o.toLowerCase() === normalizedOrigin) || 
+                        normalizedOrigin.endsWith("vercel.app") ||
+                        normalizedOrigin.includes("digital-queue-management-platform")
+
+      if (isAllowed) return callback(null, true)
 
       // Log the rejected origin to help find what's missing in FRONTEND_ORIGIN
       logger.warn({ origin }, "CORS_NOT_ALLOWED")
@@ -59,7 +86,7 @@ app.use(
 app.use(compression({ threshold: Number(process.env.COMPRESS_THRESHOLD || 1024) }))
 app.use(cookieParser())
 app.use(express.json({ limit: '20mb' }))
-app.use("/uploads", express.static("uploads"))
+app.use("/uploads", express.static(UPLOAD_DIR))
 
 // Performance instrumentation & aggregation
 const perfLogThreshold = Number(process.env.PERF_LOG_THRESHOLD_MS || 200)
@@ -92,12 +119,21 @@ if (process.env.PERF_LOG !== "false") {
 }
 
 // WebSocket for real-time updates
-wss.on("connection", (ws) => {
-  logger.debug("WS client connected")
+wss.on("connection", (ws, req) => {
+  const ip = req.socket.remoteAddress
+  logger.info({ ip }, "WS_CLIENT_CONNECTED")
+
+  ws.on("error", (err) => {
+    logger.error({ err, ip }, "WS_CLIENT_ERROR")
+  })
 
   ws.on("close", () => {
-    logger.debug("WS client disconnected")
+    logger.info({ ip }, "WS_CLIENT_DISCONNECTED")
   })
+})
+
+wss.on("error", (err) => {
+  logger.error({ err }, "WSS_SERVER_ERROR")
 })
 
 // Broadcast function for real-time updates
@@ -109,6 +145,24 @@ export const broadcast = (data: any) => {
     }
   })
 }
+
+// Health checks and root routes for Azure/LB probes
+app.get("/", (req, res) => {
+  res.json({ 
+    status: "ok", 
+    service: "digital-queue-backend", 
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get("/api/health", (req, res) => {
+  res.set('Cache-Control', 'no-store')
+  res.json({ 
+    status: "ok", 
+    timestamp: new Date().toISOString(), 
+    uptime: Number(process.uptime().toFixed(1)) 
+  });
+});
 
 // Routes
 app.use("/api/customer", customerRoutes)
@@ -287,11 +341,7 @@ app.get("/api/outlet-notices/:outletId", async (req, res) => {
   }
 })
 
-// Health check
-app.get("/api/health", (req, res) => {
-  res.set('Cache-Control', 'no-store')
-  res.json({ status: "ok", timestamp: new Date().toISOString() })
-})
+// Diagnostics
 
 app.get('/api/metrics', (req, res) => {
   const out: any = {}
@@ -305,11 +355,28 @@ app.get('/api/metrics', (req, res) => {
   res.json({ generatedAt: new Date().toISOString(), routes: out })
 })
 
-const PORT = process.env.PORT || 3001
+const PORT = Number(process.env.PORT) || 3001
 
-server.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`)
-  healthTracker.start(prisma)
+server.listen(PORT, "0.0.0.0", () => {
+  logger.info({ 
+    port: PORT, 
+    nodeEnv: process.env.NODE_ENV,
+    databaseUrlSet: !!process.env.DATABASE_URL,
+    uploadDir: UPLOAD_DIR
+  }, "SERVER_STARTED");
+  
+  // Early DB connection check
+  prisma.$connect().then(() => {
+    logger.info("DATABASE_CONNECTED");
+  }).catch((err: any) => {
+    logger.error({ err }, "DATABASE_CONNECTION_FAILED_AT_STARTUP");
+  });
+
+  try {
+    healthTracker.start(prisma)
+  } catch (err) {
+    logger.error({ err }, "HEALTH_TRACKER_INIT_FAILED");
+  }
 })
 
 // Periodic job: detect long-wait tokens and create alerts
@@ -390,48 +457,38 @@ async function processAppointments() {
           const apptRow: any = Array.isArray(apptRows) ? apptRows[0] : null
           if (!apptRow || apptRow.status !== 'booked') return
 
-          // Check existing active token today
-          const lastReset = getLastDailyReset()
-          const existingToken: any = await tx.token.findFirst({
-            where: {
-              outletId: apptRow.outletId,
-              status: { in: ["waiting", "in_service"] },
-              createdAt: { gte: lastReset },
-              customer: { mobileNumber: apptRow.mobileNumber }
-            },
-            include: { customer: true }
-          })
-
-          let tokenId = existingToken?.id
-          let createdTokenId: string | null = null
-          if (!existingToken) {
-            // Ensure customer exists
-            let customer = await tx.customer.findFirst({ where: { mobileNumber: apptRow.mobileNumber } })
-            if (!customer) {
-              customer = await tx.customer.create({ data: { name: apptRow.name, mobileNumber: apptRow.mobileNumber } })
-            }
-
-            // Next token number for outlet today
-            const lastToken = await tx.token.findFirst({
-              where: { outletId: apptRow.outletId, createdAt: { gte: lastReset } },
-              orderBy: { tokenNumber: 'desc' },
-              select: { tokenNumber: true }
-            })
-            const tokenNumber = (lastToken?.tokenNumber || 0) + 1
-
-            const newToken = await tx.token.create({
-              data: {
-                tokenNumber,
-                customerId: customer.id,
-                serviceTypes: apptRow.serviceTypes,
-                outletId: apptRow.outletId,
-                status: 'waiting',
-                preferredLanguages: apptRow.preferredLanguage ? [apptRow.preferredLanguage] : undefined,
-              }
-            })
-            tokenId = newToken.id
-            createdTokenId = newToken.id
+          // Ensure customer exists
+          let customer = await tx.customer.findFirst({ where: { mobileNumber: apptRow.mobileNumber } })
+          if (!customer) {
+            customer = await tx.customer.create({ data: { name: apptRow.name, mobileNumber: apptRow.mobileNumber } })
           }
+
+          // Next token number for outlet today
+          const lastReset = getLastDailyReset()
+          const lastToken = await tx.token.findFirst({
+            where: { outletId: apptRow.outletId, createdAt: { gte: lastReset } },
+            orderBy: { tokenNumber: 'desc' },
+            select: { tokenNumber: true }
+          })
+          const tokenNumber = (lastToken?.tokenNumber || 0) + 1
+
+          const newToken = await tx.token.create({
+            data: {
+              tokenNumber,
+              customerId: customer.id,
+              serviceTypes: apptRow.serviceTypes,
+              outletId: apptRow.outletId,
+              status: 'waiting',
+              preferredLanguages: apptRow.preferredLanguage ? [apptRow.preferredLanguage] : undefined,
+              sltTelephoneNumber: apptRow.sltTelephoneNumber,
+              billPaymentIntent: apptRow.billPaymentIntent,
+              billPaymentAmount: apptRow.billPaymentAmount,
+              billPaymentMethod: apptRow.billPaymentMethod,
+            }
+          })
+          
+          let tokenId = newToken.id
+          let createdTokenId = newToken.id
 
           // Update appointment to queued
           await tx.$executeRaw`

@@ -2,7 +2,7 @@ services:
   - type: web
     name: dqms-backend
     env: node
-    buildCommand: npm install && npm run build:prod
+    buildCommand: npm install && npm run build:prod && npx prisma generate
     startCommand: npm start
     envVars:
       - key: NODE_VERSION

@@ -288,7 +288,7 @@ router.post("/next-token", async (req, res) => {
       return []
     }
 
-    const hasAny = (a: string[], b: string[]) => a.some(x => b.includes(x))
+    const hasAny = (a: string[], b: string[]) => a.some(x => b.some(y => String(x).toUpperCase() === String(y).toUpperCase()))
 
     let nextToken: any = null
 
@@ -548,7 +548,7 @@ router.get("/unmatched-tokens/:outletId", async (req, res) => {
       return []
     }
 
-    const hasAny = (a: string[], b: string[]) => a.some(x => b.includes(x))
+    const hasAny = (a: string[], b: string[]) => a.some(x => b.some(y => String(x).toUpperCase() === String(y).toUpperCase()))
 
     // Get all waiting AND skipped tokens (skipped tokens should still be visible for recall)
     const waitingTokens = await prisma.token.findMany({
@@ -686,15 +686,44 @@ router.post("/skip-token", async (req, res) => {
     }
 
     // set officer back to available
-    await prisma.officer.update({ where: { id: officerId }, data: { status: 'available' } })
+    const updatedOfficer = await prisma.officer.update({ where: { id: officerId }, data: { status: 'available' } })
 
     // broadcast update
     broadcast({ type: 'TOKEN_SKIPPED', data: skipped })
+    broadcast({ type: 'OFFICER_STATUS_CHANGE', data: { officerId, status: 'available', timestamp: new Date().toISOString() } })
 
     res.json({ success: true, token: skipped })
   } catch (error) {
     console.error('Skip token error:', error)
     res.status(500).json({ error: 'Failed to skip token' })
+  }
+})
+
+// Re-announce current token (for central display)
+router.post("/reannounce-token", async (req, res) => {
+  try {
+    const { tokenId, officerId } = req.body
+    if (!tokenId) return res.status(400).json({ error: 'tokenId required' })
+
+    const token = await prisma.token.findUnique({
+      where: { id: tokenId },
+      include: { customer: true, officer: true, outlet: true }
+    })
+
+    if (!token) return res.status(404).json({ error: 'Token not found' })
+
+    // Only allow if it's currently in service or called
+    if (token.status !== 'in_service') {
+      return res.status(400).json({ error: 'Only in-service tokens can be re-announced' })
+    }
+
+    // Broadcast again. The central display will speak it.
+    broadcast({ type: 'TOKEN_CALLED', data: token })
+
+    return res.json({ success: true })
+  } catch (err) {
+    console.error('Re-announce error:', err)
+    res.status(500).json({ error: 'Failed to re-announce token' })
   }
 })
 
@@ -767,10 +796,11 @@ router.post("/recall-token", async (req, res) => {
     }
 
     // set officer to serving
-    await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
+    const updatedOfficer = await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
 
     // broadcast update
     broadcast({ type: 'TOKEN_RECALLED', data: recalled })
+    broadcast({ type: 'OFFICER_STATUS_CHANGE', data: { officerId, status: 'serving', timestamp: new Date().toISOString() } })
 
     res.json({ success: true, token: recalled })
   } catch (error) {
@@ -859,8 +889,9 @@ router.post("/call-token", async (req, res) => {
 
     if (!called) return res.status(404).json({ error: 'Token lost after calling' })
 
-    // Set officer to serving
-    await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
+    // set officer to serving
+    const updatedOfficer = await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
+    broadcast({ type: 'OFFICER_STATUS_CHANGE', data: { officerId, status: 'serving', timestamp: new Date().toISOString() } })
 
     // Send SMS notification to customer
     try {
@@ -1047,6 +1078,7 @@ router.post("/complete-service", async (req, res) => {
 
     // Broadcast update
     broadcast({ type: "TOKEN_COMPLETED", data: token })
+    broadcast({ type: "OFFICER_STATUS_CHANGE", data: { officerId, status: "available", timestamp: new Date().toISOString() } })
 
     // Create or update ServiceCase (tracking), set status to completed, and print SMS to console
     try {
@@ -1054,7 +1086,7 @@ router.post("/complete-service", async (req, res) => {
       // Generate reference number: YYYY-MM-DD/OutletName/TokenNumber for uniqueness
       const refDate = new Date().toISOString().slice(0, 10)
       const outletName = (token.outlet?.name || 'Outlet').replace(/\//g, '-')
-      const refNumber = `${refDate}/${outletName}/${token.tokenNumber}`
+      const refNumber = `${refDate}/${outletName}/${token.tokenNumber}-${token.id.substring(0, 4)}`
 
       // Check if case exists for this token already
       let serviceCase = await (prisma as any).serviceCase.findFirst({ where: { tokenId: token.id } })
@@ -1331,7 +1363,7 @@ router.post("/transfer-token", async (req, res) => {
       const step3Start = Date.now()
       // 3. Set officer back to available
       console.log("[Transfer-Tx] Resetting officer status to available...")
-      await tx.officer.update({
+      const updatedOfficerTrans = await tx.officer.update({
         where: { id: officerId },
         data: { status: "available" }
       })
@@ -1363,10 +1395,11 @@ router.post("/transfer-token", async (req, res) => {
 
     console.log(`[Transfer] Transaction completed in ${Date.now() - txStart}ms. Token ID: ${result.updatedToken.id}`)
 
-    // Broadcast token update (not completion)
+    // Broadcast token update
     try {
       broadcast({ type: "TOKEN_UPDATED", data: result.updatedToken })
-      console.log("[Transfer] Broadcast sent")
+      broadcast({ type: "OFFICER_STATUS_CHANGE", data: { officerId, status: "available", timestamp: new Date().toISOString() } })
+      console.log("[Transfer] Broadcasts sent")
     } catch (broadcastErr) {
       console.error("[Transfer] Broadcast failed:", broadcastErr)
     }
@@ -1791,6 +1824,190 @@ router.get("/stats/:officerId", async (req, res) => {
   } catch (error) {
     console.error("Stats error:", error)
     res.status(500).json({ error: "Failed to fetch stats" })
+  }
+})
+
+// Get combined officer dashboard data (Performance optimization)
+router.get("/dashboard-combined", async (req, res) => {
+  try {
+    // 1. Authenticate
+    let token = req.cookies?.dq_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.substring(7)
+    }
+    if (!token) return res.status(401).json({ error: "Not authenticated" })
+
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch (e) {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    const { officerId } = payload
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const lastReset = getLastDailyReset()
+
+    // 2. Fetch basic officer data first
+    const officer = await prisma.officer.findUnique({ 
+      where: { id: officerId }, 
+      include: { outlet: true } 
+    })
+    
+    if (!officer) return res.status(404).json({ error: "Officer not found" })
+
+    const outletId = officer.outletId
+
+    // 3. Run all other queries in parallel
+    const [
+      tokensHandled,
+      avgRatingAgg,
+      currentToken,
+      breaks,
+      feedbackTokens,
+      waitingTokens,
+      allInServiceTokens,
+      availableOfficersCount,
+      servedTokens
+    ] = await Promise.all([
+      // Stats: Handled today
+      prisma.token.count({ 
+        where: { assignedTo: officerId, status: { in: ['completed', 'served'] }, completedAt: { gte: today } } 
+      }),
+      // Stats: Avg Rating
+      prisma.feedback.aggregate({
+        where: { token: { assignedTo: officerId, completedAt: { gte: today } } },
+        _avg: { rating: true },
+      }),
+      // Current token for this officer
+      prisma.token.findFirst({
+        where: { assignedTo: officerId, status: "in_service" },
+        include: { customer: true },
+      }),
+      // Today\'s breaks
+      prisma.breakLog.findMany({
+        where: { officerId, startedAt: { gte: today } },
+        orderBy: { startedAt: 'desc' }
+      }),
+      // Today\'s feedback (with comments)
+      prisma.token.findMany({
+        where: {
+          assignedTo: officerId,
+          status: { in: ["completed", "served"] },
+          completedAt: { gte: today },
+          feedback: { isNot: null },
+        },
+        include: { customer: true, feedback: true },
+        orderBy: { completedAt: "desc" },
+      }),
+      // Queue: Waiting tokens for this outlet
+      prisma.token.findMany({
+        where: {
+          outletId,
+          status: { in: ["waiting", "skipped"] },
+          createdAt: { gte: lastReset },
+        },
+        orderBy: { tokenNumber: "asc" },
+        include: { customer: true },
+        take: 50
+      }),
+      // Queue: All in-service tokens for this outlet
+      prisma.token.findMany({
+        where: {
+          outletId,
+          status: "in_service",
+          createdAt: { gte: lastReset },
+        },
+        include: { customer: true, officer: true },
+      }),
+      // Queue: Online officers count
+      prisma.officer.count({
+        where: {
+          outletId,
+          status: { in: ["available", "serving"] },
+          lastLoginAt: { gte: lastReset }
+        },
+      }),
+      // Summary: Last 10 served tokens for dash list
+      prisma.token.findMany({
+        where: {
+          assignedTo: officerId,
+          status: { in: ["completed", "served"] },
+          completedAt: { gte: today },
+        },
+        include: { customer: true },
+        orderBy: { completedAt: "desc" },
+        take: 10
+      })
+    ])
+
+    // Format Response
+    const breakData = breaks.map(brk => {
+      const duration = brk.endedAt 
+        ? Math.floor((brk.endedAt.getTime() - brk.startedAt.getTime()) / (1000 * 60))
+        : Math.floor((Date.now() - brk.startedAt.getTime()) / (1000 * 60))
+      return {
+        id: brk.id,
+        startedAt: brk.startedAt.toISOString(),
+        endedAt: brk.endedAt?.toISOString() || null,
+        durationMinutes: duration,
+        isActive: !brk.endedAt
+      }
+    })
+
+    const feedbackList = feedbackTokens.map(token => ({
+      tokenId: token.id,
+      tokenNumber: token.tokenNumber,
+      rating: token.feedback!.rating,
+      comment: token.feedback!.comment || "",
+      customerName: token.customer?.name || "Anonymous",
+      createdAt: token.feedback!.createdAt.toISOString(),
+    }))
+
+    // Calculate avg handle time for servedSummary
+    const totalMinutes = servedTokens.reduce((sum, t) => {
+      if (t.startedAt && t.completedAt) {
+        return sum + (t.completedAt.getTime() - t.startedAt.getTime()) / (1000 * 60)
+      }
+      return sum
+    }, 0)
+    const avgHandleMinutes = servedTokens.length > 0 ? Math.round(totalMinutes / servedTokens.length * 10) / 10 : 0
+
+    res.json({
+      officer,
+      stats: {
+        tokensHandled,
+        avgRating: Math.round((avgRatingAgg._avg.rating || 0) * 10) / 10,
+        currentToken,
+      },
+      queue: {
+        waiting: waitingTokens,
+        inService: allInServiceTokens.filter(t => t.assignedTo === officerId), // Dashboard only cares about self in summary cards?
+        availableOfficers: availableOfficersCount,
+        totalWaiting: waitingTokens.length,
+      },
+      servedSummary: {
+        total: servedTokens.length,
+        avgHandleMinutes,
+        tokens: servedTokens,
+      },
+      breaksSummary: {
+        totalBreaks: breakData.length,
+        totalMinutes: breakData.reduce((s, b) => s + b.durationMinutes, 0),
+        breaks: breakData,
+        activeBreak: breakData.find(b => b.isActive) || null
+      },
+      feedbackSummary: {
+        total: feedbackList.length,
+        avgRating: feedbackList.length > 0 ? Math.round((feedbackList.reduce((s, f) => s + f.rating, 0) / feedbackList.length) * 10) / 10 : 0,
+        feedback: feedbackList
+      }
+    })
+  } catch (error) {
+    console.error("Dashboard combined error:", error)
+    res.status(500).json({ error: "Failed to fetch dashboard data" })
   }
 })
 

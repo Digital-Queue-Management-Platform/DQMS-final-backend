@@ -1,7 +1,8 @@
 import { Router } from "express"
-import { prisma, broadcast } from "../server"
+import { prisma, broadcast, logger } from "../server"
 import * as jwt from "jsonwebtoken"
 import { getLastDailyReset } from "../utils/resetWindow"
+import sltSmsService from "../services/sltSmsService"
 
 const router = Router()
 
@@ -126,6 +127,7 @@ router.post("/tokens", async (req: any, res: any) => {
   try {
     const { outletId } = req.kiosk
     const { name, mobileNumber, serviceTypes, preferredLanguages, nicNumber, email, sltMobileNumber, accountRef, sltTelephoneNumber, billPaymentIntent, billPaymentAmount, billPaymentMethod } = req.body
+    logger.info({ mobileNumber, serviceTypes }, '[KIOSK] Received token generation request')
 
     const prioritySettingRows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
       SELECT "booleanValue" FROM "AppSetting" WHERE "key" = 'priority_service_enabled' LIMIT 1
@@ -261,8 +263,63 @@ router.post("/tokens", async (req: any, res: any) => {
       }
     }
 
-    console.log('Sending token response:', response)
+    logger.info({ tokenId: token.id, tokenNumber: token.tokenNumber }, '[KIOSK] Sending token response')
+    logger.info({ mobileNumber: token.customer.mobileNumber }, `[KIOSK] Triggering SMS flow`)
     res.status(201).json(response)
+
+    // Send token confirmation SMS off the request path
+    void (async () => {
+      try {
+        const lastReset = getLastDailyReset()
+        const queuePosition = await prisma.token.count({
+          where: {
+            outletId: token.outletId,
+            status: "waiting",
+            tokenNumber: { lt: token.tokenNumber },
+            createdAt: { gte: lastReset },
+          },
+        }) + 1
+
+        const estimatedWait = Math.max(1, queuePosition * 5)
+
+        // Build tracking URL
+        const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
+        let baseUrl = origins[0] || ''
+        const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
+        if (vercelUrl) {
+          baseUrl = vercelUrl
+        } else if (process.env.NODE_ENV === 'production') {
+          baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
+        }
+
+        const shortId = token.id.substring(0, 8)
+        const trackingUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+
+        // Detect language precisely like online registration
+        const lang = Array.isArray(preferredLanguages) && preferredLanguages.length > 0
+          ? preferredLanguages[0]
+          : preferredLanguages || 'en'
+
+        console.log(`[KIOSK] Preparing SMS for ${token.customer.mobileNumber}. Pos: ${queuePosition}, Lang: ${lang}, URL: ${trackingUrl}`)
+
+        // Use sltSmsService directly but with better error reporting
+        const result = await sltSmsService.sendTokenConfirmation(token.customer.mobileNumber, {
+          tokenNumber: token.tokenNumber,
+          queuePosition,
+          outletName: token.outlet?.name || 'SLT Office',
+          trackingUrl,
+          estimatedWait,
+        }, lang as any)
+
+        if (result.success) {
+          logger.info({ mobileNumber: token.customer.mobileNumber, messageId: result.messageId }, `✓ Kiosk token confirmation SMS sent`)
+        } else {
+          logger.warn({ mobileNumber: token.customer.mobileNumber, error: result.error }, `✗ Kiosk token confirmation SMS failed`)
+        }
+      } catch (smsError: any) {
+        logger.error({ error: smsError.message }, 'Kiosk token confirmation SMS error')
+      }
+    })()
   } catch (error) {
     console.error("Create walk-in token error:", error)
     res.status(500).json({ error: "Failed to create token" })

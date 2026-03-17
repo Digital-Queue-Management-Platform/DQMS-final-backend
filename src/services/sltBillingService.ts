@@ -120,7 +120,8 @@ export async function fetchBillFromSltApi(sltNumber: string): Promise<SltBillInf
  * e.g., "...ending with ******9227" -> "******9227"
  */
 function extractMaskedMobile(message: string): string | null {
-  const match = message.match(/\*+\d{4}/);
+  // Matches patterns like ******9227, 07*******12, etc.
+  const match = message.match(/\*+\d+/);
   return match ? match[0] : null;
 }
 
@@ -131,9 +132,16 @@ function extractMaskedMobile(message: string): string | null {
  * @returns Normalized bill data
  */
 export function normalizeSltBillData(sltBillInfo: SltBillInfo, queriedNumber: string) {
+  // If we have a full mobile number, use it.
+  // Otherwise, use the masked one. 
+  // If even masked is missing but API was successful, use a placeholder to bypass frontend gaps.
+  const resolvedMobile = (sltBillInfo.mobileNumber && !sltBillInfo.mobileNumber.includes('*'))
+    ? sltBillInfo.mobileNumber
+    : (sltBillInfo.maskedMobile || (sltBillInfo.isSuccess ? '******' : null));
+
   return {
     telephoneNumber: queriedNumber, // Use the queried number to avoid constraint violations
-    mobileNumber: sltBillInfo.maskedMobile || sltBillInfo.mobileNumber || null,
+    mobileNumber: resolvedMobile,
     accountName: sltBillInfo.accountName || 'Verified Account',
     accountAddress: sltBillInfo.accountAddress || null,
     currentBill: typeof sltBillInfo.currentBill === 'number'
