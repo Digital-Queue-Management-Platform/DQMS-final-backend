@@ -23,9 +23,17 @@ jobs:
           git checkout feat/slt-vm-new
           git reset --hard origin/feat/slt-vm-new
 
-      - name: Stop PM2 app before install
+      - name: Stop backend before install
         shell: cmd
-        run: pm2 stop dqms-backend
+        run: |
+          C:\Users\Administrator\AppData\Roaming\npm\pm2.cmd stop dqms-backend
+          taskkill /F /IM node.exe || exit /b 0
+
+      - name: Clean locked Prisma engine files
+        shell: cmd
+        run: |
+          if exist C:\DQMS-final-backend\node_modules\.prisma\client\query_engine-windows.dll.node del /F /Q C:\DQMS-final-backend\node_modules\.prisma\client\query_engine-windows.dll.node
+          del /F /Q C:\DQMS-final-backend\node_modules\.prisma\client\query_engine-windows.dll.node.tmp* 2>nul
 
       - name: Install dependencies
         shell: cmd
@@ -51,6 +59,7 @@ jobs:
           cd /d C:\DQMS-final-backend
           npm run build
 
-      - name: Restart PM2
+      - name: Start backend
         shell: cmd
-        run: pm2 restart dqms-backend --update-env
+        run: |
+          C:\Users\Administrator\AppData\Roaming\npm\pm2.cmd start dist/server.js --name dqms-backend || C:\Users\Administrator\AppData\Roaming\npm\pm2.cmd restart dqms-backend --update-env
