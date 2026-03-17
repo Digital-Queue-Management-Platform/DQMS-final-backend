@@ -1,4 +1,4 @@
-name: Deploy Backend to SLT VM
+name: Sync Backend on SLT VM
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  deploy:
+  sync:
     runs-on: [self-hosted, Windows, X64, backend]
 
     steps:
@@ -23,45 +23,8 @@ jobs:
           git checkout feat/slt-vm-new
           git reset --hard origin/feat/slt-vm-new
 
-      - name: Stop existing backend processes
-        shell: cmd
-        continue-on-error: true
-        run: |
-          echo Stopping any running node processes to unlock files...
-          taskkill /F /IM node.exe /T
-          if %ERRORLEVEL% equ 0 echo Successfully stopped node processes.
-          if %ERRORLEVEL% neq 0 echo No node processes found or stop failed (this is usually fine).
-
-      - name: Install dependencies
+      - name: Show synced commit
         shell: cmd
         run: |
           cd /d C:\DQMS-final-backend
-          npm install
-
-      - name: Run Prisma migrations
-        shell: cmd
-        run: |
-          cd /d C:\DQMS-final-backend
-          npx prisma migrate deploy
-
-      - name: Build backend
-        shell: cmd
-        run: |
-          cd /d C:\DQMS-final-backend
-          npm run build
-
-      - name: Restart backend
-        shell: cmd
-        run: |
-          cd /d C:\DQMS-final-backend
-          echo Starting backend...
-          :: Check if PM2 is available, otherwise use start /B for background
-          where pm2 >nul 2>nul
-          if %ERRORLEVEL% equ 0 (
-            echo Using PM2 to start...
-            pm2 delete dq-backend 2>nul
-            pm2 start dist/server.js --name "dq-backend"
-          ) else (
-            echo PM2 not found, using start /B...
-            start /B node dist/server.js
-          )
+          git log --oneline -1
