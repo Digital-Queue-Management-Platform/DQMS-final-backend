@@ -961,6 +961,29 @@ class SLTSmsService {
   isConfigured(): boolean {
     return !!(this.config.username && this.config.password && this.config.smsAlias)
   }
+
+  /**
+   * Send appointment cancellation notification
+   */
+  async sendAppointmentCancellation(
+    mobileNumber: string,
+    details: {
+      outletName: string
+      dateTime: string
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SMSResponse> {
+    const messages = {
+      en: `Dear Valued Customer\n\nYour appointment at ${details.outletName} for ${details.dateTime} has been cancelled as requested.\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\nඔබගේ ඉල්ලීම පරිදි ${details.outletName} හි ${details.dateTime} සඳහා වූ හමුව අවලංගු කර ඇත.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\nஉங்கள் வேண்டுகோளின்படி ${details.outletName} இல் ${details.dateTime} க்கான உங்கள் சந்திப்பு ரத்து செய்யப்பட்டது.\n\nSLT-MOBITEL`
+    }
+
+    return this.sendSMS({
+      to: mobileNumber,
+      message: this.selectMessageForSMS(messages, language)
+    })
+  }
 }
 
 // Export singleton instance
