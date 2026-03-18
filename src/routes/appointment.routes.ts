@@ -213,4 +213,57 @@ router.get("/services", async (req, res) => {
   }
 })
 
+// Cancel an appointment
+router.post("/:apptId/cancel", async (req, res) => {
+  try {
+    const { apptId } = req.params
+
+    const appt = await prisma.appointment.findUnique({
+      where: { id: apptId },
+    })
+
+    if (!appt) {
+      return res.status(404).json({ error: "Appointment not found" })
+    }
+
+    if (appt.status !== 'booked') {
+      return res.status(400).json({ error: "Only booked appointments can be cancelled" })
+    }
+
+    const updatedAppt = await prisma.appointment.update({
+      where: { id: apptId },
+      data: { status: 'cancelled' },
+    })
+
+    // Send Cancellation SMS
+    try {
+      const outlet = await prisma.outlet.findUnique({ where: { id: appt.outletId } })
+      const when = new Date(appt.appointmentAt)
+      const whenStr = when.toLocaleString('en-GB', {
+        timeZone: 'Asia/Colombo',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      })
+
+      const lang: 'en' | 'si' | 'ta' = (appt.preferredLanguage === 'si' || appt.preferredLanguage === 'ta') ? appt.preferredLanguage : 'en'
+
+      await smsHelper.sendAppointmentCancellation(appt.mobileNumber, {
+        outletName: outlet?.name || 'SLT Office',
+        dateTime: whenStr,
+      }, lang)
+    } catch (smsErr) {
+      console.error("Failed to send cancellation SMS:", smsErr)
+    }
+
+    res.json({ success: true, message: "Appointment cancelled", appointment: updatedAppt })
+  } catch (error) {
+    console.error("Appointment cancel error:", error)
+    res.status(500).json({ error: "Failed to cancel appointment" })
+  }
+})
+
 export default router

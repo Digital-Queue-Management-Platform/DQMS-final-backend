@@ -295,7 +295,7 @@ router.post("/dgms", async (req, res) => {
         })
 
         // Send notifications
-        const loginUrl = "https://digital-queue-management-platform.vercel.app/dgm/login"
+        const loginUrl = "https://sltsecmanage.slt.lk:7443/dgm/login"
 
         // Email
         if (email) {

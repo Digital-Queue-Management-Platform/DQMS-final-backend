@@ -195,6 +195,21 @@ class UnifiedSmsHelper {
     const result = await sltSmsService.sendTokenCancellation(mobileNumber, details, language)
     return { success: result.success, provider: 'slt', error: result.error, messageId: result.messageId }
   }
+
+  /**
+   * Send appointment cancellation confirmation
+   */
+  async sendAppointmentCancellation(
+    mobileNumber: string,
+    details: {
+      outletName: string
+      dateTime: string
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SendSMSResult> {
+    const result = await sltSmsService.sendAppointmentCancellation(mobileNumber, details, language)
+    return { success: result.success, provider: 'slt', error: result.error, messageId: result.messageId }
+  }
 }
 
 // Export singleton instance

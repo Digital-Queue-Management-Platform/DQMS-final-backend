@@ -208,7 +208,7 @@ class EmailService {
                     </div>
                 </div>
                 
-                <a href="https://digital-queue-management-platform.vercel.app/manager/login" class="button">Login to Your Account</a>
+                <a href="https://sltsecmanage.slt.lk:7443/manager/login" class="button">Login to Your Account</a>
                 
                 <h3>Next Steps:</h3>
                 <ol>
@@ -254,7 +254,7 @@ LOGIN CREDENTIALS:
 Mobile Number: ${credentials.managerMobile}
 Note: Simply use your mobile number to log in - no password required
 
-Login URL: https://digital-queue-management-platform.vercel.app/manager/login
+Login URL: https://sltsecmanage.slt.lk:7443/manager/login
 
 NEXT STEPS:
 1. Visit the RTOM portal
@@ -413,7 +413,7 @@ Please do not reply to this email.
                     </div>
                 </div>
                 
-                <a href="https://digital-queue-management-platform.vercel.app/teleshop-manager/login" class="button">Login to Your Account</a>
+                <a href="https://sltsecmanage.slt.lk:7443/teleshop-manager/login" class="button">Login to Your Account</a>
                 
                 <h3>Next Steps:</h3>
                 <ol>
@@ -459,7 +459,7 @@ LOGIN CREDENTIALS:
 Mobile Number: ${credentials.managerMobile}
 Note: Simply use your mobile number to log in - no password required
 
-Login URL: https://digital-queue-management-platform.vercel.app/teleshop-manager/login
+Login URL: https://sltsecmanage.slt.lk:7443/teleshop-manager/login
 
 NEXT STEPS:
 1. Visit the Teleshop Manager portal

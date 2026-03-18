@@ -6,6 +6,7 @@ import { prisma } from "../server"
 import emailService from "../services/emailService"
 import sltSmsService from "../services/sltSmsService"
 import { generateSecurePassword } from "../utils/passwordGenerator"
+import { getFrontendBaseUrl } from "../utils/urlHelper"
 import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
 import { healthTracker } from "../services/healthTracker"
 
@@ -567,7 +568,7 @@ router.post("/register-region", async (req, res) => {
 
     // Send notifications if RTOM details are provided
     if (managerMobile) {
-      const loginUrl = "https://digital-queue-management-platform.vercel.app/manager/login"
+      const loginUrl = `${getFrontendBaseUrl()}/manager/login`
 
       // Email
       if (managerEmail) {
@@ -618,8 +619,11 @@ router.delete("/regions/:id", async (req, res) => {
     const region = await prisma.region.findUnique({ where: { id }, select: { id: true, name: true } })
     if (!region) return res.status(404).json({ error: "Region not found" })
 
-    // Unlink outlets from this region before deleting
-    await prisma.outlet.updateMany({ where: { regionId: id }, data: { regionId: null } as any })
+    // Outlets must be moved to another region before deleting this region (regionId is non-nullable)
+    const outletCount = await prisma.outlet.count({ where: { regionId: id } })
+    if (outletCount > 0) {
+      return res.status(400).json({ error: `Cannot delete region with ${outletCount} active outlets. Please move them first.` })
+    }
 
     await prisma.region.delete({ where: { id } })
     res.json({ success: true, message: `Region "${region.name}" deleted` })
@@ -1694,7 +1698,7 @@ router.post("/gms", async (req, res) => {
     const gm = await (prisma as any).gM.create({ data: { name, mobileNumber, email: email || null } })
 
     // Send notifications
-    const loginUrl = "https://digital-queue-management-platform.vercel.app/gm/login"
+    const loginUrl = `${getFrontendBaseUrl()}/gm/login`
 
     // Email
     if (email) {
@@ -1794,7 +1798,7 @@ router.post("/dgms", async (req, res) => {
     const dgm = await (prisma as any).dGM.create({ data: { name, mobileNumber, email: email || null, gmId, regionIds: ids } })
 
     // Send notifications
-    const loginUrl = "https://digital-queue-management-platform.vercel.app/dgm/login"
+    const loginUrl = `${getFrontendBaseUrl()}/dgm/login`
 
     // Email
     if (email) {

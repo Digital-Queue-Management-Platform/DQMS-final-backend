@@ -1,0 +1,30 @@
+name: Sync Backend on SLT VM
+
+on:
+  push:
+    branches:
+      - feat/slt-vm-new
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: [self-hosted, Windows, X64, backend]
+
+    steps:
+      - name: Mark repo as safe
+        shell: cmd
+        run: git config --global --add safe.directory C:/DQMS-final-backend
+
+      - name: Update backend working copy
+        shell: cmd
+        run: |
+          cd /d C:\DQMS-final-backend
+          git fetch origin
+          git checkout feat/slt-vm-new
+          git reset --hard origin/feat/slt-vm-new
+
+      - name: Show synced commit
+        shell: cmd
+        run: |
+          cd /d C:\DQMS-final-backend
+          git log --oneline -1

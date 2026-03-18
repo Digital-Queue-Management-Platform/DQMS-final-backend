@@ -317,7 +317,7 @@ router.post("/rtoms", async (req, res) => {
         })
 
         // Send notifications
-        const loginUrl = "https://digital-queue-management-platform.vercel.app/manager/login"
+        const loginUrl = "https://sltsecmanage.slt.lk:7443/manager/login"
 
         // Email
         if (email) {

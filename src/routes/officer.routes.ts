@@ -4,6 +4,7 @@ import { getLastDailyReset } from "../utils/resetWindow"
 import * as jwt from "jsonwebtoken"
 import otpService from "../services/otpService"
 import sltSmsService from "../services/sltSmsService"
+import { getTrackingUrl, getFeedbackUrl, getServiceStatusUrl } from "../utils/urlHelper"
 
 const router = Router()
 
@@ -457,21 +458,7 @@ router.post("/next-token", async (req, res) => {
     try {
       const firstName = updatedToken.customer.name.split(' ')[0]
 
-      // Build recovery URL for customer lookup
-      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      let baseUrl = origins[0] || ''
-
-      // Always prioritize Vercel URLs if available
-      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-      if (vercelUrl) {
-        baseUrl = vercelUrl
-      } else if (process.env.NODE_ENV === 'production') {
-        // In production, prefer any HTTPS URL over localhost
-        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-      }
-
-      const shortId = updatedToken.id.substring(0, 8)
-      const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+      const trackingUrl = getTrackingUrl(updatedToken.id)
 
       console.log(`[NEXT-TOKEN] About to send SMS to ${updatedToken.customer.mobileNumber} for token #${updatedToken.tokenNumber}`)
 
@@ -490,7 +477,7 @@ router.post("/next-token", async (req, res) => {
         tokenNumber: updatedToken.tokenNumber,
         counterNumber: officer.counterNumber || 0,
         outletName: updatedToken.outlet?.name || 'SLT Office',
-        recoveryUrl
+        recoveryUrl: trackingUrl
       }, customerLang)
       console.log(`✓ Next-token SMS sent to customer ${updatedToken.customer.mobileNumber} for token #${updatedToken.tokenNumber}`)
     } catch (smsError) {
@@ -650,18 +637,7 @@ router.post("/skip-token", async (req, res) => {
       const firstName = skipped.customer.name.split(' ')[0]
 
       // Build recovery URL
-      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      let baseUrl = origins[0] || ''
-
-      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-      if (vercelUrl) {
-        baseUrl = vercelUrl
-      } else if (process.env.NODE_ENV === 'production') {
-        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-      }
-
-      const shortId = skipped.id.substring(0, 8)
-      const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+      const trackingUrl = getTrackingUrl(skipped.id)
 
       const _skipPrefs = (skipped as any).preferredLanguages
       let customerLang: 'en' | 'si' | 'ta' = 'en'
@@ -677,7 +653,7 @@ router.post("/skip-token", async (req, res) => {
         firstName,
         tokenNumber: skipped.tokenNumber,
         outletName: skipped.outlet?.name || 'SLT Office',
-        recoveryUrl
+        recoveryUrl: trackingUrl
       }, customerLang)
       console.log(`✓ Skip SMS sent to customer ${skipped.customer.mobileNumber} for token #${skipped.tokenNumber}`)
     } catch (smsError) {
@@ -759,18 +735,7 @@ router.post("/recall-token", async (req, res) => {
       const firstName = recalled.customer.name.split(' ')[0]
 
       // Build recovery URL
-      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      let baseUrl = origins[0] || ''
-
-      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-      if (vercelUrl) {
-        baseUrl = vercelUrl
-      } else if (process.env.NODE_ENV === 'production') {
-        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-      }
-
-      const shortId = recalled.id.substring(0, 8)
-      const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+      const trackingUrl = getTrackingUrl(recalled.id)
 
       const _recallPrefs = (recalled as any).preferredLanguages
       let customerLang: 'en' | 'si' | 'ta' = 'en'
@@ -786,7 +751,7 @@ router.post("/recall-token", async (req, res) => {
         firstName,
         tokenNumber: recalled.tokenNumber,
         outletName: recalled.outlet?.name || 'SLT Office',
-        recoveryUrl,
+        recoveryUrl: trackingUrl,
         counterNumber: recalled.counterNumber || undefined
       }, customerLang)
       console.log(`✓ Recall SMS sent to customer ${recalled.customer.mobileNumber} for token #${recalled.tokenNumber}`)
@@ -898,20 +863,7 @@ router.post("/call-token", async (req, res) => {
       const firstName = called.customer.name.split(' ')[0]
 
       // Build recovery URL for customer lookup
-      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      let baseUrl = origins[0] || ''
-
-      // Always prioritize Vercel URLs if available
-      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-      if (vercelUrl) {
-        baseUrl = vercelUrl
-      } else if (process.env.NODE_ENV === 'production') {
-        // In production, prefer any HTTPS URL over localhost
-        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-      }
-
-      const shortId = called.id.substring(0, 8)
-      const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+      const trackingUrl = getTrackingUrl(called.id)
 
       console.log(`[CALL-TOKEN] About to send SMS to ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
 
@@ -930,7 +882,7 @@ router.post("/call-token", async (req, res) => {
         tokenNumber: called.tokenNumber,
         counterNumber: officer.counterNumber || 0,
         outletName: called.outlet?.name || 'SLT Office',
-        recoveryUrl
+        recoveryUrl: trackingUrl
       }, customerLang)
       console.log(`✓ Call-to-counter SMS sent to customer ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
     } catch (smsError) {
@@ -999,16 +951,7 @@ router.post("/call-transferred-token", async (req, res) => {
     // Send customer SMS that token is now called to the transferred counter.
     try {
       const firstName = calledTransfer.customer.name.split(' ')[0]
-      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      let baseUrl = origins[0] || ''
-      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-      if (vercelUrl) {
-        baseUrl = vercelUrl
-      } else if (process.env.NODE_ENV === 'production') {
-        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-      }
-      const shortId = calledTransfer.id.substring(0, 8)
-      const recoveryUrl = baseUrl ? `${baseUrl}/t/${shortId}` : `/t/${shortId}`
+      const trackingUrl = getTrackingUrl(calledTransfer.id)
 
       const prefs = (calledTransfer as any).preferredLanguages
       let customerLang: 'en' | 'si' | 'ta' = 'en'
@@ -1027,7 +970,7 @@ router.post("/call-transferred-token", async (req, res) => {
         tokenNumber: calledTransfer.tokenNumber,
         counterNumber: targetCounter,
         outletName: calledTransfer.outlet?.name || 'SLT Office',
-        recoveryUrl,
+        recoveryUrl: trackingUrl,
       }, customerLang)
       console.log(`✓ Transfer-call SMS sent to customer ${calledTransfer.customer.mobileNumber} for token #${calledTransfer.tokenNumber}`)
     } catch (smsError) {
@@ -1144,22 +1087,7 @@ router.post("/complete-service", async (req, res) => {
         })
         const services = serviceRecords.map(s => s.title).join(', ') || 'Service'
 
-        // Build base URL
-        const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-        let baseUrl = origins[0] || ''
-
-        // Always prioritize Vercel URLs if available
-        const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-        if (vercelUrl) {
-          baseUrl = vercelUrl
-        } else if (process.env.NODE_ENV === 'production') {
-          // In production, prefer any HTTPS URL over localhost
-          baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-        }
-
-        // Build feedback URL - use short alias to save space
-        const shortTokenId = token.id.substring(0, 8)
-        const feedbackUrl = baseUrl ? `${baseUrl}/f/${shortTokenId}` : `/f/${shortTokenId}`
+        const feedbackUrl = getFeedbackUrl(token.id)
 
         // Detect customer language
         let customerLang: 'en' | 'si' | 'ta' = 'en'
@@ -1174,17 +1102,7 @@ router.post("/complete-service", async (req, res) => {
 
         const isBillPayment = Array.isArray((token as any).serviceTypes) && ((token as any).serviceTypes.includes('SVC002') || (token as any).serviceTypes.includes('BILL_PAYMENT'))
 
-        // Build tracking URL used by all service completion SMS messages
-        const trackRef = `/service/status?ref=${encodeURIComponent(serviceCase.refNumber)}`
-        const smsOrigins = (process.env.FRONTEND_ORIGIN || '').split(',').map((s: string) => s.trim()).filter(Boolean)
-        let smsBaseUrl = smsOrigins[0] || ''
-        const smsVercelUrl = smsOrigins.find((o: string) => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-        if (smsVercelUrl) {
-          smsBaseUrl = smsVercelUrl
-        } else if (process.env.NODE_ENV === 'production') {
-          smsBaseUrl = smsOrigins.find((o: string) => o.startsWith('https://') && !o.includes('localhost')) || smsBaseUrl
-        }
-        const completionTrackingUrl = smsBaseUrl ? `${smsBaseUrl}${trackRef}` : undefined
+        const completionTrackingUrl = getServiceStatusUrl(serviceCase.refNumber)
 
         if (isBillPayment) {
           // Resolve the actual payment amount for the SMS
@@ -1243,16 +1161,13 @@ router.post("/complete-service", async (req, res) => {
         // Build absolute tracking URL using same logic as below
         const trackRef = `/service/status?ref=${encodeURIComponent(serviceCase.refNumber)}`
         const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-        let baseUrl = origins[0] || ''
-
-        // Always prioritize Vercel URLs if available
-        const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-        if (vercelUrl) {
-          baseUrl = vercelUrl
-        } else if (process.env.NODE_ENV === 'production') {
-          // In production, prefer any HTTPS URL over localhost
-          baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-        }
+        
+        // Always prioritize SLT URLs if available for tracking; maintain Vercel as backup
+        const sltUrl = origins.find(o => o.includes('slt.lk'))
+        const vercelUrl = origins.find(o => o.includes('vercel.app'))
+        const prodUrl = origins.find(o => o.includes('https://') && !o.includes('localhost'))
+        
+        let baseUrl = sltUrl || vercelUrl || prodUrl || origins[0] || ''
 
         const trackUrl = baseUrl ? `${baseUrl}${trackRef}` : trackRef
         const msg = `Ref: ${serviceCase.refNumber} | Officer: ${officerName} | Outlet: ${outlet} | Services: ${services}. Track: ${trackUrl}`
@@ -1269,20 +1184,7 @@ router.post("/complete-service", async (req, res) => {
       const caseRecord = await (prisma as any).serviceCase.findFirst({ where: { tokenId: token.id } })
       const refNumber = caseRecord?.refNumber || null
       const trackRef = refNumber ? `/service/status?ref=${encodeURIComponent(refNumber)}` : null
-      // Build absolute URL for SMS so it becomes clickable
-      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      let baseUrl = origins[0] || ''
-
-      // Always prioritize Vercel URLs if available
-      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-      if (vercelUrl) {
-        baseUrl = vercelUrl
-      } else if (process.env.NODE_ENV === 'production') {
-        // In production, prefer any HTTPS URL over localhost
-        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-      }
-
-      const trackUrl = trackRef && baseUrl ? `${baseUrl}${trackRef}` : trackRef
+      const trackUrl = getServiceStatusUrl(refNumber || "")
       return res.json({ success: true, token, refNumber, trackRef, trackUrl })
     } catch {
       return res.json({ success: true, token, refNumber: null, trackRef: null, trackUrl: null })
@@ -1439,26 +1341,13 @@ router.post("/transfer-token", async (req, res) => {
       }
 
       // Build recovery URL
-      const origins = (process.env.FRONTEND_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean)
-      let baseUrl = origins[0] || ''
-
-      // Always prioritize Vercel URLs if available
-      const vercelUrl = origins.find(o => o.includes('vercel.app') || (o.includes('https://') && !o.includes('localhost')))
-      if (vercelUrl) {
-        baseUrl = vercelUrl
-      } else if (process.env.NODE_ENV === 'production') {
-        // In production, prefer any HTTPS URL over localhost
-        baseUrl = origins.find(o => o.startsWith('https://') && !o.includes('localhost')) || baseUrl
-      }
-
-      const outlet = result.updatedToken.outlet?.name || "SLT Office"
-      const trackRef = `/t/${result.updatedToken.id.substring(0, 8)}`
-      const recoveryUrl = baseUrl ? `${baseUrl}${trackRef}` : trackRef
+      const recoveryUrl = getTrackingUrl(result.updatedToken.id)
 
       // Fetch refNumber for tracking
       const sc: any = await (prisma as any).serviceCase.findFirst({ where: { tokenId: result.updatedToken.id } })
       const refNumber = sc?.refNumber || undefined
 
+      const outlet = result.updatedToken.outlet?.name || "SLT Office"
       await sltSmsService.sendTokenTransfer(result.updatedToken.customer.mobileNumber, {
         tokenNumber: result.updatedToken.tokenNumber,
         outletName: outlet,

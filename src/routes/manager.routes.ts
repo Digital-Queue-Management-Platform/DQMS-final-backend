@@ -6,6 +6,7 @@ import { generateSecurePassword } from "../utils/passwordGenerator"
 import otpService from "../services/otpService"
 import emailService from "../services/emailService"
 import sltSmsService from "../services/sltSmsService"
+import { getFrontendBaseUrl } from "../utils/urlHelper"
 import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
 
 const router = Router()
@@ -847,7 +848,7 @@ router.post("/officers", async (req, res) => {
     })
 
     // Send notifications
-    const loginUrl = "https://digital-queue-management-platform.vercel.app/officer/login"
+    const loginUrl = `${getFrontendBaseUrl()}/officer/login`
 
     // Email (if email is provided in body)
     if (req.body.email) {
@@ -1101,7 +1102,7 @@ router.post("/teleshop-managers", async (req, res) => {
     })
 
     // Send notifications
-    const loginUrl = "https://digital-queue-management-platform.vercel.app/teleshop-manager/login"
+    const loginUrl = `${getFrontendBaseUrl()}/teleshop-manager/login`
 
     // Email
     if (teleshopManager.email) {
