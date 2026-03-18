@@ -539,6 +539,7 @@ router.get("/token/:tokenId", async (req, res) => {
         customer: true,
         outlet: true,
         officer: true,
+        feedback: true,
       },
     })
 
@@ -774,6 +775,7 @@ router.get("/t/:shortId", async (req, res) => {
         customer: true,
         outlet: true,
         officer: true,
+        feedback: true,
       },
       orderBy: { createdAt: 'desc' } // Get most recent if multiple matches (unlikely but safe)
     })
@@ -820,7 +822,8 @@ router.get("/t/:shortId", async (req, res) => {
         officer: token.officer ? {
           name: token.officer.name,
           counterNumber: token.officer.counterNumber
-        } : null
+        } : null,
+        feedback: (token as any).feedback || null
       },
       queuePosition: token.status === 'waiting' ? queuePosition : null,
       estimatedWaitMinutes: token.status === 'waiting' ? estimatedWait : null,
@@ -845,6 +848,7 @@ router.get("/track/:tokenId", async (req, res) => {
         customer: true,
         outlet: true,
         officer: true,
+        feedback: true,
       },
     })
 
@@ -890,7 +894,8 @@ router.get("/track/:tokenId", async (req, res) => {
         officer: token.officer ? {
           name: token.officer.name,
           counterNumber: token.officer.counterNumber
-        } : null
+        } : null,
+        feedback: (token as any).feedback || null
       },
       queuePosition: token.status === 'waiting' ? queuePosition : null,
       estimatedWaitMinutes: token.status === 'waiting' ? estimatedWait : null,
