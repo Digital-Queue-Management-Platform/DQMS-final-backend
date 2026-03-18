@@ -3,6 +3,7 @@ name: Sync Backend on SLT VM
 on:
   push:
     branches:
+      - main
       - feat/slt-vm-new
   workflow_dispatch:
 
