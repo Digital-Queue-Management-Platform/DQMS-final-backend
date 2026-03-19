@@ -15,8 +15,8 @@ const router = Router()
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 // No expiration for production system - admin needs continuous access
 const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
-const ADMIN_EMAIL = "adminqms@slt.lk"
-const ADMIN_PASSWORD = "ABcd123#"
+const ADMIN_EMAIL = "admindqms@slt.lk"
+const ADMIN_PASSWORD = "dqms2026@"
 const STAFF_PRESENCE_WINDOW_MINUTES = Math.max(1, Number(process.env.ADMIN_STAFF_PRESENCE_MINUTES || 30))
 
 // Interface for manager credentials
@@ -129,14 +129,66 @@ const authenticateAdmin = (req: any, res: any, next: any) => {
   }
 }
 
-// Admin login endpoint (no authentication required)
+// Admin login endpoint (Phase 1: Credentials check + OTP send)
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body
+    const { email, password, mobileNumber } = req.body
 
-    // Validate credentials against hardcoded admin credentials
+    // Validate email/password
     if (email !== ADMIN_EMAIL || password !== ADMIN_PASSWORD) {
       return res.status(401).json({ error: "Invalid email or password" })
+    }
+
+    // Validate mobile number format
+    if (!mobileNumber || !isValidSLMobile(mobileNumber)) {
+      return res.status(400).json({ error: "Valid Sri Lankan mobile number is required (e.g. 0771234567)" })
+    }
+
+    // Generate and send OTP to the provided mobile number
+    const otpResult = await (require("../services/otpService").default).generateOTP(
+      mobileNumber, 
+      'admin', 
+      'Super Admin'
+    )
+
+    if (!otpResult.success) {
+      return res.status(500).json({ error: "Failed to send security code: " + otpResult.message })
+    }
+
+    res.json({
+      success: true,
+      needsOtp: true,
+      message: "Security code sent to your mobile for further verification"
+    })
+  } catch (error) {
+    console.error("Admin login initiation error:", error)
+    res.status(500).json({ error: "Login failed" })
+  }
+})
+
+// Admin login OTP verification (Phase 2)
+router.post("/verify-login-otp", async (req, res) => {
+  try {
+    const { email, password, mobileNumber, otpCode } = req.body
+
+    // Final security check
+    if (email !== ADMIN_EMAIL || password !== ADMIN_PASSWORD) {
+      return res.status(401).json({ error: "Session expired or invalid credentials" })
+    }
+
+    if (!mobileNumber || !otpCode) {
+      return res.status(400).json({ error: "Mobile number and security code are required" })
+    }
+
+    // Verify OTP for the specific number entered
+    const verifyResult = await (require("../services/otpService").default).verifyOTP(
+      mobileNumber, 
+      otpCode, 
+      'admin'
+    )
+
+    if (!verifyResult.success) {
+      return res.status(401).json({ error: verifyResult.message || "Invalid security code" })
     }
 
     // Generate JWT token (no expiration for production)
@@ -161,12 +213,13 @@ router.post("/login", async (req, res) => {
       token,
       user: {
         email: ADMIN_EMAIL,
+        name: "Super Admin",
         role: "admin"
       }
     })
   } catch (error) {
-    console.error("Admin login error:", error)
-    res.status(500).json({ error: "Login failed" })
+    console.error("Admin OTP verification error:", error)
+    res.status(500).json({ error: "Verification failed" })
   }
 })
 
