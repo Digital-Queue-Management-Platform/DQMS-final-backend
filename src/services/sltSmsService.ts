@@ -203,8 +203,8 @@ class SLTSmsService {
 
     const role = userType && roleNames[userType] ? roleNames[userType] : null
 
-    // Extract first name only for personalization
-    const firstName = userName ? userName.split(' ')[0] : null
+    // Extract name for personalization (use full name for Super Admin)
+    const firstName = userName === 'Super Admin' ? 'Super Admin' : (userName ? userName.split(' ')[0] : null)
     const greeting = firstName ? `Dear ${firstName},` : ''
 
     // Keep messages concise and professional

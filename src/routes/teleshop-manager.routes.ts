@@ -43,7 +43,7 @@ router.post("/request-otp", async (req, res) => {
     }
 
     // Check if teleshop manager exists
-    const teleshopManager = await prisma.teleshopManager.findUnique({
+    const teleshopManager = await prisma.teleshopManager.findFirst({
       where: { mobileNumber, isActive: true },
       select: { id: true, name: true }
     })
@@ -87,7 +87,7 @@ router.post("/login", async (req, res) => {
     }
 
     // Find teleshop manager by mobile number
-    const teleshopManager = await prisma.teleshopManager.findUnique({
+    const teleshopManager = await prisma.teleshopManager.findFirst({
       where: {
         mobileNumber: mobileNumber,
         isActive: true
@@ -271,6 +271,33 @@ router.get("/me", async (req: any, res) => {
   } catch (error) {
     console.error("Teleshop Manager profile fetch error:", error)
     res.status(500).json({ error: "Failed to fetch profile" })
+  }
+})
+
+// Trigger a test sound on the outlet display via WebSocket
+router.post("/test-sound", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+    const { type, lang } = req.body
+
+    if (!teleshopManager.branchId) {
+      return res.status(400).json({ error: "You are not assigned to any outlet" })
+    }
+
+    // Broadcast to all clients; displays will filter by outletId
+    broadcast({
+      type: "TEST_SOUND",
+      data: {
+        outletId: teleshopManager.branchId,
+        testType: type, // 'chime' or 'voice'
+        lang: lang || 'en'
+      }
+    })
+
+    res.json({ success: true, message: "Test sound triggered" })
+  } catch (error) {
+    console.error("Test sound error:", error)
+    res.status(500).json({ error: "Failed to trigger test sound" })
   }
 })
 
