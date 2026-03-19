@@ -43,7 +43,7 @@ router.post("/request-otp", async (req, res) => {
     }
 
     // Check if teleshop manager exists
-    const teleshopManager = await prisma.teleshopManager.findUnique({
+    const teleshopManager = await prisma.teleshopManager.findFirst({
       where: { mobileNumber, isActive: true },
       select: { id: true, name: true }
     })
@@ -87,7 +87,7 @@ router.post("/login", async (req, res) => {
     }
 
     // Find teleshop manager by mobile number
-    const teleshopManager = await prisma.teleshopManager.findUnique({
+    const teleshopManager = await prisma.teleshopManager.findFirst({
       where: {
         mobileNumber: mobileNumber,
         isActive: true
