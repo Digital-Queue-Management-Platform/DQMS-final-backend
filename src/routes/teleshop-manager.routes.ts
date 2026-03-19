@@ -274,6 +274,33 @@ router.get("/me", async (req: any, res) => {
   }
 })
 
+// Trigger a test sound on the outlet display via WebSocket
+router.post("/test-sound", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+    const { type, lang } = req.body
+
+    if (!teleshopManager.branchId) {
+      return res.status(400).json({ error: "You are not assigned to any outlet" })
+    }
+
+    // Broadcast to all clients; displays will filter by outletId
+    broadcast({
+      type: "TEST_SOUND",
+      data: {
+        outletId: teleshopManager.branchId,
+        testType: type, // 'chime' or 'voice'
+        lang: lang || 'en'
+      }
+    })
+
+    res.json({ success: true, message: "Test sound triggered" })
+  } catch (error) {
+    console.error("Test sound error:", error)
+    res.status(500).json({ error: "Failed to trigger test sound" })
+  }
+})
+
 // Get kiosk settings for teleshop manager's outlet
 router.get("/kiosk-settings", async (req: any, res) => {
   try {
