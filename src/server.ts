@@ -28,6 +28,7 @@ import dgmRoutes from "./routes/dgm.routes"
 import kioskRoutes from "./routes/kiosk.routes"
 import billRoutes from "./routes/bill.routes"
 import sltSmsRoutes from "./routes/slt-sms.routes"
+import utilsRoutes from "./routes/utils.routes"
 import { healthTracker } from "./services/healthTracker"
 
 export const prisma = new PrismaClient({
@@ -182,6 +183,7 @@ app.use("/api/bills", billRoutes)
 app.use("/api/slt-sms", sltSmsRoutes)
 app.use("/api/gm", gmRoutes)
 app.use("/api/dgm", dgmRoutes)
+app.use("/api/utils", utilsRoutes)
 
 // Helper: parse "HH:MM" string to total minutes
 function parseTimeToMinutes(t: string): number {

@@ -7,6 +7,8 @@ import sltSmsService from "../services/sltSmsService"
 import { getFrontendBaseUrl } from "../utils/urlHelper"
 import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
 
+import { announceToIpSpeaker } from "../utils/announcer"
+
 const router = Router()
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
@@ -278,21 +280,43 @@ router.get("/me", async (req: any, res) => {
 router.post("/test-sound", async (req: any, res) => {
   try {
     const teleshopManager = req.teleshopManager
-    const { type, lang } = req.body
+    const { type, lang, customText } = req.body
 
     if (!teleshopManager.branchId) {
       return res.status(400).json({ error: "You are not assigned to any outlet" })
     }
 
-    // Broadcast to all clients; displays will filter by outletId
+    // Check for IP Speaker config in outlet settings
+    const outlet = await prisma.outlet.findUnique({
+      where: { id: teleshopManager.branchId },
+      select: { displaySettings: true }
+    })
+
+    const settings = (outlet?.displaySettings as any) || {}
+    const useIPSpeaker = settings.useIPSpeaker
+    const ipConfig = settings.ipSpeakerConfig
+
+    // 1. Broadcast to all WebSocket clients (for browser displays)
     broadcast({
       type: "TEST_SOUND",
       data: {
         outletId: teleshopManager.branchId,
-        testType: type, // 'chime' or 'voice'
-        lang: lang || 'en'
+        testType: type,
+        lang: lang || 'en',
+        customText: customText || null
       }
     })
+
+    // 2. If IP Speaker is enabled and this is a voice announcement, trigger hardware cast
+    if (type === 'voice') {
+      const textToSpeak = customText || (lang === 'si' 
+        ? "මෙය ස්පීකර් පරීක්ෂණ නිවේදනයකි." 
+        : lang === 'ta' 
+          ? "இது ஒரு ஒலிபெருக்கி சோதனை அறிவிப்பு." 
+          : "This is a speaker test announcement.")
+      
+      announceToIpSpeaker(teleshopManager.branchId, textToSpeak, lang || 'en')
+    }
 
     res.json({ success: true, message: "Test sound triggered" })
   } catch (error) {
