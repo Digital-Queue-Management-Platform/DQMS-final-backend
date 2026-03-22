@@ -345,172 +345,139 @@ router.get("/analytics", async (req, res) => {
       return res.status(400).json({ error: "Invalid date format provided" })
     }
 
-    const where: any = {
-      status: "completed",
-      completedAt: {
+    // Base query for all tokens in the date range (issued)
+    const baseWhere: any = {
+      createdAt: {
         gte: sDate,
         lte: eDate,
       }
     }
+    if (outletId) baseWhere.outletId = outletId as string
 
-    if (outletId) {
-      where.outletId = outletId as string
-    }
+    // Fetch all tokens for the range once
+    const allTokens = await prisma.token.findMany({
+      where: baseWhere,
+      select: {
+        id: true,
+        tokenNumber: true,
+        status: true,
+        createdAt: true,
+        startedAt: true,
+        completedAt: true,
+        outletId: true,
+        serviceTypes: true,
+        assignedTo: true
+      }
+    })
 
-    // Run independent queries in parallel
-    const [totalTokens, completedTokens, feedbackStats, officerPerformance] = await Promise.all([
-      prisma.token.count({ where }),
-      // Only fetch the fields needed — avoids transferring unused columns
-      prisma.token.findMany({
-        where: { 
-          ...where, 
-          startedAt: { not: null } 
-        },
-        select: { 
-          startedAt: true, 
-          createdAt: true, 
-          completedAt: true, 
-          outletId: true,
-          serviceTypes: true 
-        },
+    const totalIssued = allTokens.length
+    const completedTokens = allTokens.filter(t => t.status === "completed" && t.completedAt && t.startedAt)
+    const totalCompleted = completedTokens.length
+
+    // Run other aggregated queries
+    const [feedbackStats, officerRecords, allServices] = await Promise.all([
+      prisma.feedback.findMany({
+        where: { token: { ...baseWhere, status: "completed" } },
+        select: { rating: true, createdAt: true, tokenId: true }
       }),
-      prisma.feedback.groupBy({
-        by: ["rating"],
-        where: { token: { ...where, status: "completed" } },
-        _count: true,
+      prisma.officer.findMany({ 
+        where: outletId ? { outletId: outletId as string } : {}, 
+        include: { outlet: true } 
       }),
-      prisma.token.groupBy({
-        by: ["assignedTo"],
-        where: { ...where, status: "completed", assignedTo: { not: null } },
-        _count: true,
-      }),
+      prisma.service.findMany({ select: { code: true, title: true } })
     ])
 
-    const avgWaitTime =
-      completedTokens.length > 0
-        ? completedTokens.reduce((sum, token) => {
-          const wait =
-            token.startedAt && token.createdAt
-              ? (token.startedAt.getTime() - token.createdAt.getTime()) / 1000 / 60
-              : 0
+    const avgWaitTime = totalCompleted > 0
+      ? completedTokens.reduce((sum, token) => {
+          const wait = (token.startedAt!.getTime() - token.createdAt.getTime()) / 1000 / 60
           return sum + wait
-        }, 0) / completedTokens.length
-        : 0
+        }, 0) / totalCompleted
+      : 0
 
-    const avgServiceTime =
-      completedTokens.length > 0
-        ? completedTokens.reduce((sum, token) => {
-          const service =
-            token.completedAt && token.startedAt
-              ? (token.completedAt.getTime() - token.startedAt.getTime()) / 1000 / 60
-              : 0
+    const avgServiceTime = totalCompleted > 0
+      ? completedTokens.reduce((sum, token) => {
+          const service = (token.completedAt!.getTime() - token.startedAt!.getTime()) / 1000 / 60
           return sum + service
-        }, 0) / completedTokens.length
-        : 0
+        }, 0) / totalCompleted
+      : 0
 
-    // Batch-fetch all officers and all relevant feedbacks in 2 queries instead of N+N
-    const officerIds = officerPerformance.map(p => p.assignedTo!).filter(Boolean)
-    const [officerRecords, allFeedbacks] = await Promise.all([
-      officerIds.length > 0
-        ? prisma.officer.findMany({ where: { id: { in: officerIds } }, include: { outlet: true } })
-        : Promise.resolve([]),
-      officerIds.length > 0
-        ? prisma.feedback.findMany({
-            where: { token: { assignedTo: { in: officerIds } } },
-            select: { rating: true, token: { select: { assignedTo: true, outletId: true } } }
-          })
-        : Promise.resolve([]),
-    ])
-    
-    // Branch-wise aggregation
-    const branchStats = new Map<string, { total: number; waitSum: number; serviceSum: number; ratings: number[] }>()
-    
-    completedTokens.forEach(token => {
-      if (!token.outletId) return
-      if (!branchStats.has(token.outletId)) {
-        branchStats.set(token.outletId, { total: 0, waitSum: 0, serviceSum: 0, ratings: [] })
+    // Optimized hourly aggregation using single-pass bucketing
+    const hourlyBuckets = new Array(24).fill(null).map(() => ({
+      issued: 0,
+      completed: 0,
+      waitSum: 0,
+      waitCount: 0,
+      serviceSum: 0,
+      serviceCount: 0,
+      ratingSum: 0,
+      ratingCount: 0,
+      activeOfficers: new Set<string>()
+    }))
+
+    allTokens.forEach(t => {
+      const createdHour = t.createdAt.getHours()
+      if (createdHour >= 8 && createdHour <= 18) {
+        hourlyBuckets[createdHour].issued++
+        if (t.assignedTo) hourlyBuckets[createdHour].activeOfficers.add(t.assignedTo)
       }
-      const stats = branchStats.get(token.outletId)!
-      stats.total++
-      stats.waitSum += token.startedAt && token.createdAt ? (token.startedAt.getTime() - token.createdAt.getTime()) / 1000 / 60 : 0
-      stats.serviceSum += token.completedAt && token.startedAt ? (token.completedAt.getTime() - token.startedAt.getTime()) / 1000 / 60 : 0
-    })
 
-    allFeedbacks.forEach(f => {
-      const oid = f.token.outletId
-      if (oid && branchStats.has(oid)) {
-        branchStats.get(oid)!.ratings.push(f.rating)
-      }
-    })
-
-    const allOutlets = await prisma.outlet.findMany({ select: { id: true, name: true } })
-    const branchPerformance = allOutlets.map(outlet => {
-      const stats = branchStats.get(outlet.id) || { total: 0, waitSum: 0, serviceSum: 0, ratings: [] }
-      return {
-        id: outlet.id,
-        name: outlet.name,
-        totalTokens: stats.total,
-        avgWaitTime: stats.total > 0 ? Math.round((stats.waitSum / stats.total) * 10) / 10 : 0,
-        avgServiceTime: stats.total > 0 ? Math.round((stats.serviceSum / stats.total) * 10) / 10 : 0,
-        avgRating: stats.ratings.length > 0 ? Math.round((stats.ratings.reduce((a, b) => a + b, 0) / stats.ratings.length) * 10) / 10 : 0,
-        feedbackCount: stats.ratings.length
-      }
-    }).filter(b => b.totalTokens > 0) // Only show branches with activity
-    const officerMap = new Map(officerRecords.map(o => [o.id, o]))
-    const feedbacksByOfficer = allFeedbacks.reduce<Map<string, number[]>>((acc, f) => {
-      const oid = f.token.assignedTo
-      if (oid) { if (!acc.has(oid)) acc.set(oid, []); acc.get(oid)!.push(f.rating) }
-      return acc
-    }, new Map())
-
-    const officerDetails = officerPerformance.map((perf) => {
-      const ratings = feedbacksByOfficer.get(perf.assignedTo!) ?? []
-      const avgRating = ratings.length > 0 ? ratings.reduce((s, r) => s + r, 0) / ratings.length : 0
-      return {
-        officer: officerMap.get(perf.assignedTo!) ?? null,
-        tokensHandled: perf._count,
-        avgRating,
-        feedbackCount: ratings.length,
+      if (t.status === "completed" && t.completedAt && t.startedAt) {
+        const completedHour = t.completedAt.getHours()
+        const startedHour = t.startedAt.getHours()
+        
+        if (completedHour >= 8 && completedHour <= 18) {
+          hourlyBuckets[completedHour].completed++
+          hourlyBuckets[completedHour].serviceSum += (t.completedAt.getTime() - t.startedAt.getTime()) / 1000 / 60
+          hourlyBuckets[completedHour].serviceCount++
+        }
+        
+        if (startedHour >= 8 && startedHour <= 18) {
+          hourlyBuckets[startedHour].waitSum += (t.startedAt.getTime() - t.createdAt.getTime()) / 1000 / 60
+          hourlyBuckets[startedHour].waitCount++
+          if (t.assignedTo) hourlyBuckets[startedHour].activeOfficers.add(t.assignedTo)
+        }
+      } else if (t.status === 'serving' && t.startedAt) {
+        const startedHour = t.startedAt.getHours()
+        if (startedHour >= 8 && startedHour <= 18 && t.assignedTo) {
+          hourlyBuckets[startedHour].activeOfficers.add(t.assignedTo)
+        }
       }
     })
 
-    // Generate hourly waiting times (8 AM to 6 PM) — in-memory from already-fetched data
-    const hourlyWaitingTimes = []
+    // Aggregate feedbacks hourly
+    const feedbacksRaw = feedbackStats as any[]
+    feedbacksRaw.forEach(f => {
+      const hour = f.createdAt.getHours()
+      if (hour >= 8 && hour <= 18) {
+        hourlyBuckets[hour].ratingSum += f.rating
+        hourlyBuckets[hour].ratingCount++
+      }
+    })
+
+    const hourlyStats = []
+    const serviceTitleMap = new Map(allServices.map(s => [s.code, s.title]))
+    const serviceTypeMap = new Map<string, number>()
+
     for (let hour = 8; hour <= 18; hour++) {
-      const hourStart = new Date(sDate)
-      hourStart.setHours(hour, 0, 0, 0)
-      const hourEnd = new Date(hourStart)
-      hourEnd.setHours(hour, 59, 59, 999)
-
-      const hourTokens = completedTokens.filter(token => {
-        if (!token.startedAt) return false
-        const startedTime = new Date(token.startedAt)
-        return startedTime >= hourStart && startedTime <= hourEnd
-      })
-
-      const avgHourWaitTime = hourTokens.length > 0
-        ? hourTokens.reduce((sum, token) => {
-          const wait = token.startedAt && token.createdAt
-            ? (token.startedAt.getTime() - token.createdAt.getTime()) / 1000 / 60
-            : 0
-          return sum + wait
-        }, 0) / hourTokens.length
-        : 0
-
-      hourlyWaitingTimes.push({
+      const bucket = hourlyBuckets[hour]
+      const avgWaitHour = bucket.waitCount > 0 ? bucket.waitSum / bucket.waitCount : 0
+      const avgServiceHour = bucket.serviceCount > 0 ? bucket.serviceSum / bucket.serviceCount : 0
+      const avgRatingHour = bucket.ratingCount > 0 ? bucket.ratingSum / bucket.ratingCount : 0
+      
+      hourlyStats.push({
         hour: `${hour.toString().padStart(2, '0')}:00`,
-        waitTime: Math.round(avgHourWaitTime * 10) / 10
+        waitTime: Math.round(avgWaitHour * 10) / 10,
+        serviceTime: Math.round(avgServiceHour * 10) / 10,
+        rating: Math.round(avgRatingHour * 10) / 10,
+        feedbackCount: bucket.ratingCount,
+        issued: bucket.issued,
+        completed: bucket.completed,
+        activeCounters: bucket.activeOfficers.size
       })
     }
 
-    // Map service codes to titles for better presentation
-    const allServices = await prisma.service.findMany({
-      select: { code: true, title: true }
-    })
-    const serviceTitleMap = new Map(allServices.map(s => [s.code, s.title]))
-
-    const serviceTypeMap = new Map<string, number>()
-    completedTokens.forEach(token => {
+    // Service Types aggregation
+    allTokens.forEach(token => {
       const types = Array.isArray(token.serviceTypes) ? token.serviceTypes : []
       types.forEach(st => {
         const title = serviceTitleMap.get(st) || st
@@ -523,15 +490,59 @@ router.get("/analytics", async (req, res) => {
       count
     }))
 
+    // Compatibility with existing rating distribution format
+    const ratingDistribution = [1, 2, 3, 4, 5].map(r => ({
+      rating: r,
+      count: feedbacksRaw.filter(f => f.rating === r).length
+    }))
+
+    // Officer Performance
+    const officerMap = new Map(officerRecords.map(o => [o.id, o]))
+    const officerPerformanceMap = new Map<string, { count: number; ratings: number[] }>()
+    
+    allTokens.forEach(t => {
+      if (t.status === "completed" && t.assignedTo) {
+        if (!officerPerformanceMap.has(t.assignedTo)) {
+          officerPerformanceMap.set(t.assignedTo, { count: 0, ratings: [] })
+        }
+        officerPerformanceMap.get(t.assignedTo)!.count++
+      }
+    })
+
+    feedbacksRaw.forEach(f => {
+      const token = allTokens.find(t => t.id === f.tokenId)
+      if (token && token.assignedTo && officerPerformanceMap.has(token.assignedTo)) {
+        officerPerformanceMap.get(token.assignedTo)!.ratings.push(f.rating)
+      }
+    })
+
+    const officerPerformance = Array.from(officerPerformanceMap.entries()).map(([id, stats]) => ({
+      officer: officerMap.get(id) || { id, name: "Unknown Officer", status: "offline" },
+      tokensHandled: stats.count,
+      avgRating: stats.ratings.length > 0 ? stats.ratings.reduce((a, b) => a + b, 0) / stats.ratings.length : 0,
+      feedbackCount: stats.ratings.length
+    }))
+
     res.json({
-      totalTokens,
+      totalTokens: totalIssued,
+      totalCompleted,
       avgWaitTime: Math.round(avgWaitTime * 10) / 10,
       avgServiceTime: Math.round(avgServiceTime * 10) / 10,
-      feedbackStats,
-      officerPerformance: officerDetails,
-      branchPerformance,
-      hourlyWaitingTimes,
+      feedbackStats: ratingDistribution,
       serviceTypes: serviceTypesFormatted,
+      officerPerformance,
+      hourlyWaitingTimes: hourlyStats.map(h => ({ hour: h.hour, value: h.waitTime })),
+      staffUtilizationTrend: hourlyStats.map(h => ({ 
+        time: h.hour, 
+        activeCounters: h.activeCounters, 
+        customerDemand: h.issued 
+      })),
+      tokenFlow: hourlyStats.map(h => ({ 
+        time: h.hour, 
+        issued: h.issued, 
+        completed: h.completed 
+      })),
+      hourlyStats
     })
   } catch (error) {
     console.error("Analytics error:", error)
@@ -551,34 +562,50 @@ router.get("/alerts", async (req, res) => {
     if (type) {
       where.type = type as string
     }
-    if (severity) {
+
+    if (importantOnly === "true") {
+      where.severity = { in: ["high", "critical"] }
+    } else if (severity) {
       where.severity = severity as string
     }
 
-    // initial fetch by simple fields (isRead/type/severity)
+    // Direct outletId filter (for new alerts)
+    if (outletId) {
+      // Show alerts tagged with this outletId
+      where.outletId = outletId as string
+    }
+
     let alerts = await prisma.alert.findMany({
       where,
       orderBy: { createdAt: "desc" },
-      take: 50,
+      take: 200, // Increased from 50
     })
 
-    // If outletId is provided, filter alerts whose relatedEntity token belongs to that outlet
-    if (outletId) {
-      const tokenIds = alerts.map((a) => a.relatedEntity).filter((x): x is string => !!x)
-      if (tokenIds.length > 0) {
-        const tokens = await prisma.token.findMany({
-          where: { id: { in: tokenIds }, outletId: outletId as string },
-          select: { id: true },
-        })
-        const ok = new Set(tokens.map((t) => t.id))
-        alerts = alerts.filter((a) => a.relatedEntity && ok.has(a.relatedEntity))
-      } else {
-        alerts = []
-      }
-    }
-
-    if (importantOnly === "true") {
-      alerts = alerts.filter((a) => a.severity === "high")
+    // Fallback for old alerts if outletId is provided but we didn't find many
+    if (outletId && alerts.length < 5) {
+      // Find latest 1000 tokens for this branch to try matching older alerts
+      const tokens = await prisma.token.findMany({
+        where: { outletId: outletId as string },
+        orderBy: { createdAt: "desc" },
+        take: 500,
+        select: { id: true }
+      })
+      const tokenIds = tokens.map(t => t.id)
+      
+      const oldAlerts = await prisma.alert.findMany({
+        where: {
+          ...where,
+          outletId: null, // Only look at old alerts without outletId
+          relatedEntity: { in: tokenIds }
+        },
+        orderBy: { createdAt: "desc" },
+        take: 50
+      })
+      
+      // Merge and sort
+      alerts = [...alerts, ...oldAlerts].sort((a, b) => 
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      ).slice(0, 200)
     }
 
     res.json(alerts)

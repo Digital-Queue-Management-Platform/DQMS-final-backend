@@ -177,10 +177,12 @@ model Alert {
   severity      String
   message       String
   relatedEntity String?
+  outletId      String?
   isRead        Boolean  @default(false)
   createdAt     DateTime @default(now())
 
   @@index([isRead, createdAt])
+  @@index([outletId])
 }
 
 model BackupRestoreHistory {
