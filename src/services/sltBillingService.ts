@@ -17,28 +17,26 @@ interface SltBillInfo {
   isSuccess?: boolean;
   message?: string;
   referenceId?: string;
-  // Add other fields returned by the API
   [key: string]: any;
 }
 
 interface SltApiResponse {
-  success?: boolean;
+  isSuccess?: boolean;
+  dataBundle?: string;
+  errorMessege?: string;
+  errorShow?: string;
   data?: SltBillInfo;
-  message?: string;
-  error?: string;
-  // Add other fields based on actual API response
   [key: string]: any;
 }
 
 /**
  * Fetch bill information from SLT API
  * @param sltNumber - SLT telephone number (e.g., "0112123456")
- * @param senderMobile - Optional mobile number of the person requesting (may be required for SMS notification)
+ * @param senderMobile - Optional mobile number of the person requesting
  * @returns Bill information from SLT API
  */
 export async function fetchBillFromSltApi(sltNumber: string, senderMobile?: string): Promise<SltBillInfo> {
   try {
-    // Relaxed validation: Just check for 10 digits
     const phoneRegex = /^\d{10}$/;
     if (!phoneRegex.test(sltNumber)) {
       throw new Error('Invalid telephone number. Must be 10 digits.');
@@ -46,44 +44,36 @@ export async function fetchBillFromSltApi(sltNumber: string, senderMobile?: stri
 
     console.log(`Fetching bill info for SLT number: ${sltNumber}${senderMobile ? ` (sender: ${senderMobile})` : ''}`);
 
-    // Make request to SLT API
     const response = await axios.post<SltApiResponse>(
       `${SLT_BILLING_API_URL}?sltNumber=${sltNumber}`,
       {
         sltNumber: sltNumber,
-        senderMobile: senderMobile || "", // Pass the mobile number of the requester
+        senderMobile: senderMobile || "",
       },
       {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        timeout: 10000, // 10 second timeout
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000,
       }
     );
 
-
-    console.log('==========================================');
-    console.log('SLT API Full Response:');
-    console.log(JSON.stringify(response.data, null, 2));
-    console.log('==========================================');
-
-    // Handle SLT API response structure
     if (response.data) {
-      // Check if the request was successful
       if (response.data.isSuccess === false) {
         const errorMsg = response.data.errorMessege || response.data.errorShow || 'Account not found';
         throw new Error(errorMsg);
       }
 
-      // The API sends SMS to registered mobile and returns success info
-      // Extract relevant information
+      const data = response.data.data || response.data || {};
+
       return {
+        ...data,
         sltNumber: sltNumber,
         isSuccess: response.data.isSuccess,
         message: response.data.errorMessege || 'Bill details sent successfully',
         referenceId: response.data.dataBundle,
-        // Extract masked mobile number from message if available
-        maskedMobile: extractMaskedMobile(response.data.errorMessege || ''),
+        currentBill: data.currentBill || data.billAmount || response.data.currentBill || 0,
+        accountName: data.accountName || response.data.accountName || 'Verified Account',
+        dueDate: data.dueDate || response.data.dueDate || new Date().toISOString(),
+        maskedMobile: data.maskedMobile || extractMaskedMobile(response.data.errorMessege || ''),
       } as SltBillInfo;
     }
 
@@ -94,8 +84,6 @@ export async function fetchBillFromSltApi(sltNumber: string, senderMobile?: stri
 
     if (axios.isAxiosError(error)) {
       if (error.response) {
-        // The request was made and the server responded with a status code
-        // that falls out of the range of 2xx
         const statusCode = error.response.status;
         const errorMessage = error.response.data?.error || error.response.data?.message || error.message;
 
@@ -107,39 +95,30 @@ export async function fetchBillFromSltApi(sltNumber: string, senderMobile?: stri
           throw new Error(`SLT API error (${statusCode}): ${errorMessage}`);
         }
       } else if (error.request) {
-        // The request was made but no response was received
         throw new Error('No response from SLT API. Please try again later.');
       }
     }
 
-    throw new Error(`Failed to fetch bill information: ${error.message}`);
+    throw new Error(error.message || 'Failed to fetch bill information');
   }
 }
 
 /**
  * Extract masked mobile number from API message
- * e.g., "...ending with ******9227" -> "******9227"
  */
 function extractMaskedMobile(message: string): string | null {
-  // Matches patterns like ******9227, 07*******12, etc.
   const match = message.match(/\*+\d+/);
   return match ? match[0] : null;
 }
 
 /**
  * Normalize and map SLT API response to our database schema
- * @param sltBillInfo - Bill info from SLT API
- * @param queriedNumber - The telephone number that was queried (to ensure consistency)
- * @param unmaskedMobile - Optional unmasked mobile found during verification (e.g., from seeker who is identifying as owner)
- * @returns Normalized bill data
  */
 export function normalizeSltBillData(sltBillInfo: SltBillInfo, queriedNumber: string, unmaskedMobile?: string) {
-  // Use the discovered unmasked mobile if available
   let resolvedMobile = (sltBillInfo.mobileNumber && !sltBillInfo.mobileNumber.includes('*'))
     ? sltBillInfo.mobileNumber
     : (sltBillInfo.maskedMobile || (sltBillInfo.isSuccess ? '******' : null));
 
-  // If the provided unmasked mobile matches the masked pattern, use it!
   if (unmaskedMobile && resolvedMobile && resolvedMobile.includes('*')) {
     const visiblePart = resolvedMobile.replace(/\*+/g, '');
     if (visiblePart && unmaskedMobile.endsWith(visiblePart)) {
@@ -148,15 +127,13 @@ export function normalizeSltBillData(sltBillInfo: SltBillInfo, queriedNumber: st
   }
 
   return {
-    telephoneNumber: queriedNumber, // Use the queried number to avoid constraint violations
+    telephoneNumber: queriedNumber,
     mobileNumber: resolvedMobile,
     accountName: sltBillInfo.accountName || 'Verified Account',
     accountAddress: sltBillInfo.accountAddress || null,
-    currentBill: typeof sltBillInfo.currentBill === 'number'
-      ? sltBillInfo.currentBill
-      : 0, // Bill amount sent via SMS, not returned in API
+    currentBill: typeof sltBillInfo.currentBill === 'number' ? sltBillInfo.currentBill : 0,
     dueDate: sltBillInfo.dueDate ? new Date(sltBillInfo.dueDate) : new Date(),
-    status: 'sms_sent', // Indicate that bill was sent via SMS
+    status: 'sms_sent',
     lastPaymentDate: sltBillInfo.lastPaymentDate ? new Date(sltBillInfo.lastPaymentDate) : null,
   };
 }

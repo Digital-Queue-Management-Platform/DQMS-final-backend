@@ -97,12 +97,14 @@ class UnifiedSmsHelper {
       ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் சந்திப்பு ${details.dateTime} அன்று உறுதிப்படுத்தப்பட்டது.\n\nSLT-MOBITEL`
     }
 
-    const body = messages[language] || messages.en;
+    // Enforce English for the actual SMS body to ensure reliable delivery on the SLT gateway.
+    // Unicode (Sinhala/Tamil) often results in garbled hex codes or silent failures.
+    const body = messages.en;
 
     return this.sendSMS({
       to: mobileNumber,
       body: body,
-      language: language
+      language: 'en'
     })
   }
 
@@ -118,16 +120,17 @@ class UnifiedSmsHelper {
     const formattedToken = tokenNumber.toString().padStart(3, '0')
     const messages = {
       en: `Dear Valued Customer\n\nYour token number ${formattedToken} is now being called. Please proceed to Counter ${counterNumber}.\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\nඔබගේ ටෝකන් අංකය ${formattedToken} සඳහා දැන් කැඳවනු ලැබේ. කරුණාකර කවුන්ටර් ${counterNumber} වෙත පැමිණෙන්න.\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\nஉங்கள் டோக்கன் எண் ${formattedToken} தற்போது அழைக்கப்படுகிறது. தயவுசெய்து கவுண்டர் ${counterNumber} க்கு செல்லவும்.\n\nSLT-MOBITEL`
+      si: `ගරු පාරිභෝගිකයා\n\nඔබගේ ටෝකන් අංකය ${formattedToken} සඳහා දැන් කැඳවනු ලැබේ. කරුණාකර ඔබගේ සේවාව සඳහා කවුන්ටර් ${counterNumber} වෙත පැමිණෙන්න.\n\nSLT-MOBITEL`,
+      ta: `அன்பு வாடிக்கையாளரே\n\nஉங்கள் டோக்கன் எண் ${formattedToken} தற்போது அழைக்கப்படுகிறது. தயவுசெய்து உங்கள் சேவைக்காக கவுண்டர் ${counterNumber} க்கு செல்லவும்.\n\nSLT-MOBITEL`
     }
 
-    const body = messages[language] || messages.en;
+    // Force English for SMS body
+    const body = messages.en;
 
     return this.sendSMS({
       to: mobileNumber,
       body: body,
-      language: language
+      language: 'en'
     })
   }
 
@@ -150,12 +153,13 @@ class UnifiedSmsHelper {
       ta: `அன்பு வாடிக்கையாளரே\n\nஉங்கள் SLT கணக்கு ${details.accountNumber} இல் ரூ. ${details.amount} நிலுவைத் தொகை உள்ளது. சேவைத் தடையைத் தவிர்க்க தயவுசெய்து ${details.dueDate} க்குள் கட்டணத்தைச் செலுத்தவும்.\n\nSLT-MOBITEL`
     }
 
-    const body = messages[language] || messages.en;
+    // Force English for SMS body
+    const body = messages.en;
 
     return this.sendSMS({
       to: mobileNumber,
       body: body,
-      language: language
+      language: 'en'
     })
   }
 
@@ -180,12 +184,13 @@ class UnifiedSmsHelper {
       ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} இப்போது செயலில் உள்ளது (வரிசை நிலை: ${details.position || 1}).\n\nSLT-MOBITEL`
     }
 
-    const body = messages[language] || messages.en;
+    // Force English for SMS body
+    const body = messages.en;
 
     return this.sendSMS({
       to: mobileNumber,
       body: body,
-      language: language
+      language: 'en'
     })
   }
 
