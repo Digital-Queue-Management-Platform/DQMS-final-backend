@@ -338,26 +338,41 @@ const getBackupRestoreHistoryRaw = async ({
 router.get("/analytics", async (req, res) => {
   try {
     const { startDate, endDate, outletId } = req.query
+    const sDate = startDate ? new Date(startDate as string) : new Date()
+    const eDate = endDate ? new Date(endDate as string) : new Date()
+
+    if (isNaN(sDate.getTime()) || isNaN(eDate.getTime())) {
+      return res.status(400).json({ error: "Invalid date format provided" })
+    }
 
     const where: any = {
       status: "completed",
       completedAt: {
-        gte: startDate ? new Date(startDate as string) : undefined,
-        lte: endDate ? new Date(endDate as string) : undefined,
+        gte: sDate,
+        lte: eDate,
       }
     }
 
     if (outletId) {
-      where.outletId = outletId
+      where.outletId = outletId as string
     }
 
     // Run independent queries in parallel
-    const [totalTokens, completedTokens, feedbackStats, officerPerformance, serviceTypes] = await Promise.all([
-      prisma.token.count({ where: { ...where, status: "completed" } }),
-      // Only fetch the 3 timestamp fields needed — avoids transferring unused columns
+    const [totalTokens, completedTokens, feedbackStats, officerPerformance] = await Promise.all([
+      prisma.token.count({ where }),
+      // Only fetch the fields needed — avoids transferring unused columns
       prisma.token.findMany({
-        where: { ...where, status: "completed", startedAt: { not: undefined }, createdAt: { not: undefined } },
-        select: { startedAt: true, createdAt: true, completedAt: true },
+        where: { 
+          ...where, 
+          startedAt: { not: null } 
+        },
+        select: { 
+          startedAt: true, 
+          createdAt: true, 
+          completedAt: true, 
+          outletId: true,
+          serviceTypes: true 
+        },
       }),
       prisma.feedback.groupBy({
         by: ["rating"],
@@ -367,11 +382,6 @@ router.get("/analytics", async (req, res) => {
       prisma.token.groupBy({
         by: ["assignedTo"],
         where: { ...where, status: "completed", assignedTo: { not: null } },
-        _count: true,
-      }),
-      prisma.token.groupBy({
-        by: ["serviceTypes"],
-        where: { ...where, status: "completed" },
         _count: true,
       }),
     ])
@@ -406,11 +416,46 @@ router.get("/analytics", async (req, res) => {
         : Promise.resolve([]),
       officerIds.length > 0
         ? prisma.feedback.findMany({
-            where: { token: { assignedTo: { in: officerIds }, createdAt: where.completedAt } },
-            select: { rating: true, token: { select: { assignedTo: true } } }
+            where: { token: { assignedTo: { in: officerIds } } },
+            select: { rating: true, token: { select: { assignedTo: true, outletId: true } } }
           })
         : Promise.resolve([]),
     ])
+    
+    // Branch-wise aggregation
+    const branchStats = new Map<string, { total: number; waitSum: number; serviceSum: number; ratings: number[] }>()
+    
+    completedTokens.forEach(token => {
+      if (!token.outletId) return
+      if (!branchStats.has(token.outletId)) {
+        branchStats.set(token.outletId, { total: 0, waitSum: 0, serviceSum: 0, ratings: [] })
+      }
+      const stats = branchStats.get(token.outletId)!
+      stats.total++
+      stats.waitSum += token.startedAt && token.createdAt ? (token.startedAt.getTime() - token.createdAt.getTime()) / 1000 / 60 : 0
+      stats.serviceSum += token.completedAt && token.startedAt ? (token.completedAt.getTime() - token.startedAt.getTime()) / 1000 / 60 : 0
+    })
+
+    allFeedbacks.forEach(f => {
+      const oid = f.token.outletId
+      if (oid && branchStats.has(oid)) {
+        branchStats.get(oid)!.ratings.push(f.rating)
+      }
+    })
+
+    const allOutlets = await prisma.outlet.findMany({ select: { id: true, name: true } })
+    const branchPerformance = allOutlets.map(outlet => {
+      const stats = branchStats.get(outlet.id) || { total: 0, waitSum: 0, serviceSum: 0, ratings: [] }
+      return {
+        id: outlet.id,
+        name: outlet.name,
+        totalTokens: stats.total,
+        avgWaitTime: stats.total > 0 ? Math.round((stats.waitSum / stats.total) * 10) / 10 : 0,
+        avgServiceTime: stats.total > 0 ? Math.round((stats.serviceSum / stats.total) * 10) / 10 : 0,
+        avgRating: stats.ratings.length > 0 ? Math.round((stats.ratings.reduce((a, b) => a + b, 0) / stats.ratings.length) * 10) / 10 : 0,
+        feedbackCount: stats.ratings.length
+      }
+    }).filter(b => b.totalTokens > 0) // Only show branches with activity
     const officerMap = new Map(officerRecords.map(o => [o.id, o]))
     const feedbacksByOfficer = allFeedbacks.reduce<Map<string, number[]>>((acc, f) => {
       const oid = f.token.assignedTo
@@ -432,7 +477,7 @@ router.get("/analytics", async (req, res) => {
     // Generate hourly waiting times (8 AM to 6 PM) — in-memory from already-fetched data
     const hourlyWaitingTimes = []
     for (let hour = 8; hour <= 18; hour++) {
-      const hourStart = new Date(startDate ? new Date(startDate as string) : new Date())
+      const hourStart = new Date(sDate)
       hourStart.setHours(hour, 0, 0, 0)
       const hourEnd = new Date(hourStart)
       hourEnd.setHours(hour, 59, 59, 999)
@@ -458,11 +503,25 @@ router.get("/analytics", async (req, res) => {
       })
     }
 
-    const serviceTypesFormatted = serviceTypes.map(service => {
-      const serviceTypeArray = Array.isArray(service.serviceTypes) ? service.serviceTypes : []
-      const firstServiceType = serviceTypeArray.length > 0 ? serviceTypeArray[0] : "other"
-      return { name: firstServiceType, count: service._count }
+    // Map service codes to titles for better presentation
+    const allServices = await prisma.service.findMany({
+      select: { code: true, title: true }
     })
+    const serviceTitleMap = new Map(allServices.map(s => [s.code, s.title]))
+
+    const serviceTypeMap = new Map<string, number>()
+    completedTokens.forEach(token => {
+      const types = Array.isArray(token.serviceTypes) ? token.serviceTypes : []
+      types.forEach(st => {
+        const title = serviceTitleMap.get(st) || st
+        serviceTypeMap.set(title, (serviceTypeMap.get(title) || 0) + 1)
+      })
+    })
+
+    const serviceTypesFormatted = Array.from(serviceTypeMap.entries()).map(([name, count]) => ({
+      name,
+      count
+    }))
 
     res.json({
       totalTokens,
@@ -470,6 +529,7 @@ router.get("/analytics", async (req, res) => {
       avgServiceTime: Math.round(avgServiceTime * 10) / 10,
       feedbackStats,
       officerPerformance: officerDetails,
+      branchPerformance,
       hourlyWaitingTimes,
       serviceTypes: serviceTypesFormatted,
     })
