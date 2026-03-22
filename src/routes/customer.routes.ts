@@ -6,6 +6,8 @@ import smsHelper from "../utils/smsHelper"
 import sltSmsService from "../services/sltSmsService"
 import { getTrackingUrl, getRecoveryUrl, getFeedbackUrl } from "../utils/urlHelper"
 
+import { normalizeMobile } from "../utils/phone"
+
 const router = Router()
 
 const QR_JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
@@ -391,41 +393,58 @@ router.post("/register", async (req, res) => {
     const autoPriority = priorityFeatureEnabled && priorityServices.length > 0
 
     // Use a database transaction to prevent race conditions
-    const token = await prisma.$transaction(async (tx) => {
-      /* Check if customer already has an active token for this outlet
+    const result = await prisma.$transaction(async (tx) => {
+      // Normalize the mobile number consistently
+      const normalizedMobile = normalizeMobile(mobileNumber)
+
+      // 1. Find or create customer (lookup by normalized mobile)
+      let customer = await tx.customer.findFirst({
+        where: { mobileNumber: normalizedMobile }
+      })
+
+      if (!customer) {
+        customer = await tx.customer.create({
+          data: {
+            name: name.trim(),
+            mobileNumber: normalizedMobile,
+            sltMobileNumber: sltMobileNumber || undefined,
+            nicNumber: nicNumber || undefined,
+            email: email || undefined,
+          },
+        })
+      } else {
+        // Update customer name/info if provided (syncs across devices)
+        customer = await tx.customer.update({
+          where: { id: customer.id },
+          data: {
+            name: name.trim(),
+            nicNumber: nicNumber || customer.nicNumber,
+            email: email || customer.email,
+            sltMobileNumber: sltMobileNumber || customer.sltMobileNumber,
+          }
+        })
+      }
+
+      // 2. Check for active token today (same logic as Kiosk)
+      const lastReset = getLastDailyReset()
       const existingToken = await tx.token.findFirst({
         where: {
-          outlet: { id: outletId },
-          customer: { mobileNumber },
-          status: { in: ["waiting", "in_service"] },
+          customerId: customer.id,
+          outletId: outletId,
+          status: { in: ["waiting", "serving", "in_service"] }, 
+          createdAt: { gte: lastReset }
         },
-        include: {
-          customer: true,
-          outlet: true,
-        },
+        include: { customer: true, outlet: true }
       })
 
       if (existingToken) {
-        throw new Error(`Customer with mobile number ${mobileNumber} already has an active token (#${existingToken.tokenNumber}) for this outlet`)
-      }*/
-      // Allow multiple active tokens per mobile number; removed prior active-token restriction
+        return { alreadyExists: true, token: existingToken }
+      }
 
-      // Always create a new customer record even if mobileNumber repeats
-      const customer = await tx.customer.create({
-        data: {
-          name,
-          mobileNumber,
-          sltMobileNumber: sltMobileNumber || undefined,
-          nicNumber: nicNumber || undefined,
-          email: email || undefined,
-        },
-      })
-
+      // 3. Create new token
       // Use an exclusive lock on the Outlet record to serialize concurrent token generation
       await tx.$executeRaw`SELECT id FROM "Outlet" WHERE id = ${outletId} FOR UPDATE`
 
-      // Get next token number for outlet within the current daily window (resets at 12:00 PM)
-      const lastReset = getLastDailyReset()
       const lastToken = await tx.token.findFirst({
         where: { outletId, createdAt: { gte: lastReset } },
         orderBy: { tokenNumber: "desc" },
@@ -434,9 +453,6 @@ router.post("/register", async (req, res) => {
 
       const tokenNumber = (lastToken?.tokenNumber || 0) + 1
 
-      console.log(`Creating token #${tokenNumber} for customer ${name} (${mobileNumber}) at outlet ${outletId}`)
-
-      // Create token within the same transaction
       const newToken = await tx.token.create({
         data: {
           tokenNumber,
@@ -445,7 +461,6 @@ router.post("/register", async (req, res) => {
           outletId,
           status: "waiting",
           isPriority: autoPriority,
-          // Store preferredLanguages as a JSON array (not a string) for easier matching
           preferredLanguages: Array.isArray(preferredLanguages) && preferredLanguages.length > 0
             ? preferredLanguages
             : undefined,
@@ -460,11 +475,36 @@ router.post("/register", async (req, res) => {
         },
       })
 
-      return newToken
+      return { alreadyExists: false, token: newToken }
     }, {
-      timeout: 10000, // 10 second timeout to prevent long-running transactions
+      timeout: 10000,
     })
 
+    if (result.alreadyExists) {
+      const t = result.token
+      console.log(`[REG] Active token already exists (#${t.tokenNumber}) for ${mobileNumber}. Returning existing.`)
+      
+      const lastReset = getLastDailyReset()
+      const queuePosition = await prisma.token.count({
+        where: {
+          outletId: t.outletId,
+          status: "waiting",
+          tokenNumber: { lt: t.tokenNumber },
+          createdAt: { gte: lastReset },
+        },
+      }) + 1
+
+      return res.json({
+        success: true,
+        token: t,
+        message: "You already have an active token",
+        isExisting: true,
+        queuePosition,
+        estimatedWait: Math.max(1, queuePosition * 5)
+      })
+    }
+
+    const token = result.token
     console.log(`Successfully created token #${token.tokenNumber} for customer ${token.customer.name}`)
 
     // Calculate queue position and estimated wait time
@@ -478,9 +518,9 @@ router.post("/register", async (req, res) => {
       },
     }) + 1
 
-    const estimatedWait = Math.max(1, queuePosition * 5) // 5 min per person, minimum 1 min
+    const estimatedWait = Math.max(1, queuePosition * 5)
 
-    // Broadcast update immediately so officer dashboards refresh without waiting on SMS delivery.
+    // Broadcast update immediately
     broadcast({ type: "NEW_TOKEN", data: token })
 
     res.json({
@@ -490,6 +530,7 @@ router.post("/register", async (req, res) => {
       queuePosition,
       estimatedWait,
     })
+
 
     // Send token confirmation SMS off the request path.
     void (async () => {

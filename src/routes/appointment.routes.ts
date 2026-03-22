@@ -2,6 +2,7 @@ import { Router } from "express"
 import { prisma } from "../server"
 import * as jwt from "jsonwebtoken"
 import smsHelper from "../utils/smsHelper"
+import { normalizeMobile } from "../utils/phone"
 
 const router = Router()
 
@@ -82,11 +83,14 @@ router.post("/book", async (req, res) => {
       }
     }
 
+    // Normalize mobile number consistently
+    const normalizedMobile = normalizeMobile(mobileNumber)
+
     // Check if appointment already exists for the same mobile, outlet and time
     const appointmentDate = new Date(appointmentAt)
     const existingAppt = await prisma.appointment.findFirst({
       where: {
-        mobileNumber,
+        mobileNumber: normalizedMobile,
         outletId,
         appointmentAt: appointmentDate,
         status: 'booked'
@@ -94,7 +98,7 @@ router.post("/book", async (req, res) => {
     })
 
     if (existingAppt) {
-      console.log(`[APPT][DUP] Appointment already exists for ${mobileNumber} @ ${appointmentAt}`)
+      console.log(`[APPT][DUP] Appointment already exists for ${normalizedMobile} @ ${appointmentAt}`)
       return res.json({ success: true, appointment: existingAppt })
     }
 
@@ -102,7 +106,7 @@ router.post("/book", async (req, res) => {
     const appt = await prisma.appointment.create({
       data: {
         name,
-        mobileNumber,
+        mobileNumber: normalizedMobile,
         outletId,
         serviceTypes,
         preferredLanguage: preferredLanguage || undefined,
@@ -118,9 +122,9 @@ router.post("/book", async (req, res) => {
 
     // Optionally upsert customer basics for smoother check-in later
     try {
-      const existing = await prisma.customer.findFirst({ where: { mobileNumber } })
+      const existing = await prisma.customer.findFirst({ where: { mobileNumber: normalizedMobile } })
       if (!existing) {
-        await prisma.customer.create({ data: { name, mobileNumber, nicNumber: nicNumber || undefined, email: email || undefined } })
+        await prisma.customer.create({ data: { name, mobileNumber: normalizedMobile, nicNumber: nicNumber || undefined, email: email || undefined } })
       }
     } catch (e) {
       // best-effort, ignore failures
