@@ -81,6 +81,7 @@ router.post("/submit", async (req, res) => {
           severity: alertSeverity,
           message: alertMessage,
           relatedEntity: tokenId,
+          outletId: token.outletId,
         },
       })
 

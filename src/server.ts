@@ -410,7 +410,7 @@ const checkLongWait = async () => {
       if (existingSet.has(token.id)) continue
       const message = `Token #${token.tokenNumber} has been waiting more than ${LONG_WAIT_MINUTES} minutes at ${token.outlet.name}`
       const alert = await prisma.alert.create({
-        data: { type: "long_wait", severity: "medium", message, relatedEntity: token.id },
+        data: { type: "long_wait", severity: "medium", message, relatedEntity: token.id, outletId: token.outletId },
       })
       broadcast({ type: "LONG_WAIT", data: { alert, token } })
     }

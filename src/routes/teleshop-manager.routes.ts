@@ -455,6 +455,7 @@ router.get("/officers", async (req: any, res) => {
           id: activeBreak.id,
           startTime: activeBreak.startedAt
         } : null,
+        email: officer.email,
         createdAt: officer.createdAt
       }
     })
@@ -841,6 +842,7 @@ router.get("/breaks/analytics", async (req: any, res) => {
         officerId: officer.id,
         officerName: officer.name,
         mobileNumber: officer.mobileNumber,
+        email: officer.email,
         counterNumber: officer.counterNumber,
         status: officer.status,
         outlet: {
