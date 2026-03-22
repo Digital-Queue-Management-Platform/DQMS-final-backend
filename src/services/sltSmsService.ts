@@ -867,15 +867,11 @@ class SLTSmsService {
     messages: { en: string; si: string; ta: string },
     language: 'en' | 'si' | 'ta'
   ): string {
-    if (language === 'en') return messages.en
-    const candidate = messages[language]
-    const isUnicode = /[^\x00-\x7F]/.test(candidate)
-    if (isUnicode && candidate.length > 70) {
-      console.warn(`[SLT SMS] ${language.toUpperCase()} message (${candidate.length} chars) exceeds single-segment Unicode limit (70). Falling back to English.`)
-      return messages.en
-    }
-    return candidate
+    // Force English for all SMS delivery to avoid Unicode encoding issues (hex codes)
+    // as requested by the user. The dashboard UI will still remain localized.
+    return messages.en
   }
+
 
   /**
    * Send bill payment confirmation SMS when CSO marks the payment as complete

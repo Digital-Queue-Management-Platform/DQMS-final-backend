@@ -337,6 +337,16 @@ router.post('/send-notification', async (req: Request, res: Response) => {
 
     // Try to send SMS notification using unified SMS helper
     try {
+      // If mobileNumber is masked (contains * or x), we can't send via our gateway.
+      // We should rely on the SLT API's original SMS which already happened on /verify.
+      if (mobileNumber.includes('*') || mobileNumber.includes('x')) {
+        console.warn(`[BILL][SMS] Cannot send backup notification to masked number: ${mobileNumber}`);
+        return res.json({
+          success: true,
+          message: 'Notification already sent to registered owner by SLT.'
+        });
+      }
+
       const result = await smsHelper.sendBillNotification(mobileNumber, {
         accountName,
         amount: formattedAmount,
@@ -353,6 +363,7 @@ router.post('/send-notification', async (req: Request, res: Response) => {
       console.log(`[BILL][SMS] Notification failed (non-critical):`, smsErr.message);
       // Don't fail the request if SMS fails
     }
+
 
     res.json({
       success: true,
