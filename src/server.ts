@@ -467,6 +467,27 @@ async function processAppointments() {
 
           // Next token number for outlet today
           const lastReset = getLastDailyReset()
+
+          // Check if an active token already exists for this customer today at this outlet
+          const existingToken = await tx.token.findFirst({
+            where: {
+              customerId: customer.id,
+              outletId: apptRow.outletId,
+              status: { in: ['waiting', 'serving'] },
+              createdAt: { gte: lastReset }
+            }
+          })
+
+          if (existingToken) {
+            // Appointment was likely handled manually at Kiosk already
+            await tx.$executeRaw`
+              UPDATE "Appointment"
+              SET "status" = 'queued', "queuedAt" = now(), "tokenId" = ${existingToken.id}
+              WHERE "id" = ${apptRow.id}
+            `
+            return { tokenId: existingToken.id, isReused: true }
+          }
+
           const lastToken = await tx.token.findFirst({
             where: { outletId: apptRow.outletId, createdAt: { gte: lastReset } },
             orderBy: { tokenNumber: 'desc' },
@@ -498,6 +519,9 @@ async function processAppointments() {
             SET "status" = 'queued', "queuedAt" = now(), "tokenId" = ${tokenId}
             WHERE "id" = ${apptRow.id}
           `
+
+          return { createdTokenId, outletId: apptRow.outletId }
+
 
           return { createdTokenId, outletId: apptRow.outletId }
         }, { timeout: 10000 })

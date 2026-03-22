@@ -174,79 +174,134 @@ router.post("/tokens", async (req: any, res: any) => {
       normalizedMobile = '0' + normalizedMobile.substring(2)
     }
 
-    // Check or create customer
-    let customer = await prisma.customer.findFirst({
-      where: { mobileNumber: normalizedMobile }
-    })
+    // Check or create customer and handle token creation in a transaction
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Find or create customer
+      let customer = await tx.customer.findFirst({
+        where: { mobileNumber: normalizedMobile }
+      })
 
-    if (!customer) {
-      customer = await prisma.customer.create({
-        data: {
-          name: name.trim(),
-          mobileNumber: normalizedMobile,
-          nicNumber: nicNumber?.trim() || null,
-          email: email?.trim() || null,
-          sltMobileNumber: sltMobileNumber?.trim() || null
+      if (!customer) {
+        customer = await tx.customer.create({
+          data: {
+            name: name.trim(),
+            mobileNumber: normalizedMobile,
+            nicNumber: nicNumber?.trim() || null,
+            email: email?.trim() || null,
+            sltMobileNumber: sltMobileNumber?.trim() || null
+          }
+        })
+      } else {
+        // Update customer info if provided
+        customer = await tx.customer.update({
+          where: { id: customer.id },
+          data: {
+            name: name.trim(),
+            nicNumber: nicNumber?.trim() || customer.nicNumber,
+            email: email?.trim() || customer.email,
+            sltMobileNumber: sltMobileNumber?.trim() || customer.sltMobileNumber
+          }
+        })
+      }
+
+      // Get today's reset window
+      const lastReset = getLastDailyReset()
+
+      // 2. Check if an active token (waiting or serving) already exists for this customer today at this outlet
+      const existingToken = await tx.token.findFirst({
+        where: {
+          customerId: customer.id,
+          outletId: outletId,
+          status: { in: ['waiting', 'serving'] },
+          createdAt: { gte: lastReset }
+        },
+        include: {
+          customer: { select: { name: true, mobileNumber: true } },
+          outlet: { select: { name: true, location: true } }
         }
       })
-    } else {
-      // Update customer info if provided
-      customer = await prisma.customer.update({
-        where: { id: customer.id },
+
+      if (existingToken) {
+        return { alreadyExists: true, token: existingToken }
+      }
+
+      // 3. Check if there's an appointment for today
+      // This specifically fixes the "double person in queue" if they have an appointment
+      const existingAppt = await tx.appointment.findFirst({
+        where: {
+          mobileNumber: normalizedMobile,
+          outletId: outletId,
+          status: "booked",
+          appointmentAt: {
+            gte: lastReset,
+            lte: new Date(lastReset.getTime() + 24 * 60 * 60 * 1000)
+          }
+        }
+      })
+
+      // 4. Get next token number for this outlet (use row locking if possible, but findFirst is okay in serializable/transaction)
+      const lastToken = await tx.token.findFirst({
+        where: {
+          outletId: outletId,
+          createdAt: { gte: lastReset }
+        },
+        orderBy: { tokenNumber: 'desc' },
+        select: { tokenNumber: true }
+      })
+
+      const tokenNumber = lastToken ? lastToken.tokenNumber + 1 : 1
+
+      // 5. Create the token
+      const token = await tx.token.create({
         data: {
-          name: name.trim(),
-          nicNumber: nicNumber?.trim() || customer.nicNumber,
-          email: email?.trim() || customer.email,
-          sltMobileNumber: sltMobileNumber?.trim() || customer.sltMobileNumber
+          tokenNumber,
+          customerId: customer.id,
+          serviceTypes: existingAppt ? existingAppt.serviceTypes : serviceTypes,
+          preferredLanguages,
+          accountRef: accountRef?.trim() || (existingAppt ? existingAppt.notes : null),
+          status: "waiting",
+          isPriority: autoPriority || (existingAppt ? true : false), // Appointments are often prioritized
+          outletId: outletId,
+          sltTelephoneNumber: sltTelephoneNumber?.trim() || (existingAppt ? existingAppt.sltTelephoneNumber : null),
+          billPaymentIntent: billPaymentIntent || (existingAppt ? existingAppt.billPaymentIntent : null),
+          billPaymentAmount: (billPaymentIntent === 'partial' ? billPaymentAmount : null) || (existingAppt ? existingAppt.billPaymentAmount : null),
+          billPaymentMethod: billPaymentMethod || (existingAppt ? existingAppt.billPaymentMethod : null),
+        },
+        include: {
+          customer: { select: { name: true, mobileNumber: true } },
+          outlet: { select: { name: true, location: true } }
+        }
+      })
+
+      // 6. Link appointment if found
+      if (existingAppt) {
+        await tx.appointment.update({
+          where: { id: existingAppt.id },
+          data: { status: "queued", tokenId: token.id, queuedAt: new Date() }
+        })
+      }
+
+      return { alreadyExists: false, token }
+    })
+
+    if (result.alreadyExists) {
+      logger.info({ tokenId: result.token.id, tokenNumber: result.token.tokenNumber }, '[KIOSK] Active token already exists for customer, returning existing')
+      return res.status(200).json({
+        success: true,
+        message: "Token already exists",
+        token: {
+          id: result.token.id,
+          tokenNumber: result.token.tokenNumber,
+          customerName: result.token.customer.name,
+          outletName: result.token.outlet.name,
+          serviceTypes: result.token.serviceTypes,
+          status: result.token.status,
+          createdAt: result.token.createdAt
         }
       })
     }
 
-    // Get next token number for this outlet
-    const lastReset = getLastDailyReset()
-
-    const lastToken = await prisma.token.findFirst({
-      where: {
-        outletId: outletId,
-        createdAt: { gte: lastReset }
-      },
-      orderBy: { tokenNumber: 'desc' }
-    })
-
-    const tokenNumber = lastToken ? lastToken.tokenNumber + 1 : 1
-
-    // Create the token
-    const token = await prisma.token.create({
-      data: {
-        tokenNumber,
-        customerId: customer.id,
-        serviceTypes,
-        preferredLanguages,
-        accountRef: accountRef?.trim() || null,
-        status: "waiting",
-        isPriority: autoPriority,
-        outletId: outletId,
-        sltTelephoneNumber: sltTelephoneNumber?.trim() || null,
-        billPaymentIntent: billPaymentIntent || null,
-        billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : null,
-        billPaymentMethod: billPaymentMethod || null,
-      },
-      include: {
-        customer: {
-          select: {
-            name: true,
-            mobileNumber: true
-          }
-        },
-        outlet: {
-          select: {
-            name: true,
-            location: true
-          }
-        }
-      }
-    })
-
+    const { token } = result
     // Broadcast new token to officers queue system
     broadcast({ type: 'NEW_TOKEN', data: token })
 
@@ -267,6 +322,7 @@ router.post("/tokens", async (req: any, res: any) => {
     logger.info({ tokenId: token.id, tokenNumber: token.tokenNumber }, '[KIOSK] Sending token response')
     logger.info({ mobileNumber: token.customer.mobileNumber }, `[KIOSK] Triggering SMS flow`)
     res.status(201).json(response)
+
 
     // Send token confirmation SMS off the request path
     void (async () => {
