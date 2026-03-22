@@ -49,13 +49,15 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
 
       const isMaskedInCache = cachedBill?.mobileNumber?.includes('*');
       const isNewlyProvidingMobile = !isMaskedInCache && nm && cachedBill?.mobileNumber !== nm; 
-      // If we have a masked number and a potential full match, we WANT to bypass to unmask it via SLT API.
-      // However, we only allow this bypass once every 30 seconds to prevent "form load spam".
-      const isVeryFresh = cachedBill?.updatedAt && cachedBill.updatedAt > veryFreshThreshold;
-      const shouldBypassForUnmasking = isMaskedInCache && mobileNumber && !isVeryFresh;
+      // Bypass cache if:
+      // 1. Current cache is masked (contains *) AND we have a potential full mobile number to try.
+      // 2. Cache is older than 5 minutes.
+      const shouldBypassForUnmasking = isMaskedInCache && mobileNumber;
+      const isCacheFresh = cachedBill && cachedBill.updatedAt && cachedBill.updatedAt > cacheThreshold;
 
-      if (cachedBill && cachedBill.updatedAt && cachedBill.updatedAt > cacheThreshold && !shouldBypassForUnmasking) {
-        console.log(`[BILL][CACHE] Returning fresh cached data for ${telephoneNumber}${isVeryFresh ? ' (Very Fresh)' : ''}`);
+      if (isCacheFresh && !shouldBypassForUnmasking) {
+        console.log(`[BILL][CACHE] Returning fresh cached data for ${telephoneNumber}`);
+
         return res.json({
           success: true,
           bill: cachedBill,
