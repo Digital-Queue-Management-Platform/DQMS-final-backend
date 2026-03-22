@@ -523,6 +523,60 @@ router.get("/analytics", async (req, res) => {
       feedbackCount: stats.ratings.length
     }))
 
+    // ── Branch Performance (only when island-wide, i.e. no outletId filter) ──
+    let branchPerformance: any[] = []
+    if (!outletId) {
+      // Get all outlets
+      const outlets = await prisma.outlet.findMany({
+        select: { id: true, name: true }
+      })
+      const outletMap = new Map(outlets.map(o => [o.id, o.name]))
+
+      // Group tokens by outlet
+      const outletTokenMap = new Map<string, {
+        tokens: typeof allTokens,
+        feedbacks: { rating: number }[]
+      }>()
+
+      allTokens.forEach(t => {
+        if (!t.outletId) return
+        if (!outletTokenMap.has(t.outletId)) {
+          outletTokenMap.set(t.outletId, { tokens: [], feedbacks: [] })
+        }
+        outletTokenMap.get(t.outletId)!.tokens.push(t)
+      })
+
+      feedbacksRaw.forEach(f => {
+        const token = allTokens.find(t => t.id === f.tokenId)
+        if (token?.outletId && outletTokenMap.has(token.outletId)) {
+          outletTokenMap.get(token.outletId)!.feedbacks.push(f)
+        }
+      })
+
+      branchPerformance = Array.from(outletTokenMap.entries()).map(([oId, data]) => {
+        const completed = data.tokens.filter(t => t.status === 'completed' && t.completedAt && t.startedAt)
+        const avgWait = completed.length > 0
+          ? completed.reduce((s, t) => s + (t.startedAt!.getTime() - t.createdAt.getTime()) / 60000, 0) / completed.length
+          : 0
+        const avgSvc = completed.length > 0
+          ? completed.reduce((s, t) => s + (t.completedAt!.getTime() - t.startedAt!.getTime()) / 60000, 0) / completed.length
+          : 0
+        const avgRating = data.feedbacks.length > 0
+          ? data.feedbacks.reduce((s, f) => s + f.rating, 0) / data.feedbacks.length
+          : 0
+
+        return {
+          id: oId,
+          name: outletMap.get(oId) || 'Unknown Outlet',
+          totalTokens: data.tokens.length,
+          avgWaitTime: Math.round(avgWait * 10) / 10,
+          avgServiceTime: Math.round(avgSvc * 10) / 10,
+          avgRating: Math.round(avgRating * 10) / 10,
+          feedbackCount: data.feedbacks.length
+        }
+      }).sort((a, b) => b.totalTokens - a.totalTokens) // Sort by busiest outlet first
+    }
+
     res.json({
       totalTokens: totalIssued,
       totalCompleted,
@@ -531,6 +585,7 @@ router.get("/analytics", async (req, res) => {
       feedbackStats: ratingDistribution,
       serviceTypes: serviceTypesFormatted,
       officerPerformance,
+      branchPerformance,
       hourlyWaitingTimes: hourlyStats.map(h => ({ hour: h.hour, value: h.waitTime })),
       staffUtilizationTrend: hourlyStats.map(h => ({ 
         time: h.hour, 
