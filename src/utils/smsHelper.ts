@@ -97,15 +97,17 @@ class UnifiedSmsHelper {
       ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் சந்திப்பு ${details.dateTime} அன்று உறுதிப்படுத்தப்பட்டது.\n\nSLT-MOBITEL`
     }
 
+    const body = messages[language] || messages.en;
+
     return this.sendSMS({
       to: mobileNumber,
-      body: messages.en,
-      language: 'en'
+      body: body,
+      language: language
     })
   }
 
   /**
-   * Send token notification
+   * Send token notification (Call to counter)
    */
   async sendTokenNotification(
     mobileNumber: string,
@@ -120,10 +122,12 @@ class UnifiedSmsHelper {
       ta: `அன்பு வாடிக்கையாளரே\n\nஉங்கள் டோக்கன் எண் ${formattedToken} தற்போது அழைக்கப்படுகிறது. தயவுசெய்து கவுண்டர் ${counterNumber} க்கு செல்லவும்.\n\nSLT-MOBITEL`
     }
 
+    const body = messages[language] || messages.en;
+
     return this.sendSMS({
       to: mobileNumber,
-      body: messages.en,
-      language: 'en'
+      body: body,
+      language: language
     })
   }
 
@@ -146,10 +150,12 @@ class UnifiedSmsHelper {
       ta: `அன்பு வாடிக்கையாளரே\n\nஉங்கள் SLT கணக்கு ${details.accountNumber} இல் ரூ. ${details.amount} நிலுவைத் தொகை உள்ளது. சேவைத் தடையைத் தவிர்க்க தயவுசெய்து ${details.dueDate} க்குள் கட்டணத்தைச் செலுத்தவும்.\n\nSLT-MOBITEL`
     }
 
+    const body = messages[language] || messages.en;
+
     return this.sendSMS({
       to: mobileNumber,
-      body: messages.en,
-      language: 'en'
+      body: body,
+      language: language
     })
   }
 
@@ -170,14 +176,16 @@ class UnifiedSmsHelper {
     const formattedToken = details.tokenNumber.toString().padStart(3, '0')
     const messages = {
       en: `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active (Queue Position: ${details.position || 1}).\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} ශාඛාවේ ඔබගේ ටෝකන් අංකය ${formattedToken} දැන් සක්‍රීයයි (පෝලිමේ ස්ථානය: ${details.position || 1}).\n\nSLT-MOBITEL`,
+      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} ශාඛාවේ ඔබගේ ටෝකන් අංකය ${formattedToken} දැන් සක්‍රීයයි (පෝලීමේ ස්ථානය: ${details.position || 1}).\n\nSLT-MOBITEL`,
       ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} இப்போது செயலில் உள்ளது (வரிசை நிலை: ${details.position || 1}).\n\nSLT-MOBITEL`
     }
 
+    const body = messages[language] || messages.en;
+
     return this.sendSMS({
       to: mobileNumber,
-      body: messages.en,
-      language: 'en'
+      body: body,
+      language: language
     })
   }
 

@@ -166,13 +166,10 @@ router.post("/tokens", async (req: any, res: any) => {
       })
     }
 
-    // Normalize the mobile number
-    let normalizedMobile = mobileNumber.replace(/\s+/g, '')
-    if (normalizedMobile.startsWith('+94')) {
-      normalizedMobile = '0' + normalizedMobile.substring(3)
-    } else if (normalizedMobile.startsWith('94')) {
-      normalizedMobile = '0' + normalizedMobile.substring(2)
-    }
+    // Normalize the mobile number using a centralized utility
+    const { normalizeMobile } = require("../utils/phone");
+    const normalizedMobile = normalizeMobile(mobileNumber);
+
 
     // Check or create customer and handle token creation in a transaction
     const result = await prisma.$transaction(async (tx) => {
@@ -252,12 +249,17 @@ router.post("/tokens", async (req: any, res: any) => {
       const tokenNumber = lastToken ? lastToken.tokenNumber + 1 : 1
 
       // 5. Create the token
+      // Prefer languages selected at Kiosk, fallback to Appointment preference
+      const finalLanguages = (Array.isArray(preferredLanguages) && preferredLanguages.length > 0)
+        ? preferredLanguages
+        : (existingAppt?.preferredLanguage ? [existingAppt.preferredLanguage] : undefined);
+
       const token = await tx.token.create({
         data: {
           tokenNumber,
           customerId: customer.id,
           serviceTypes: existingAppt ? existingAppt.serviceTypes : serviceTypes,
-          preferredLanguages,
+          preferredLanguages: finalLanguages,
           accountRef: accountRef?.trim() || (existingAppt ? existingAppt.notes : null),
           status: "waiting",
           isPriority: autoPriority || (existingAppt ? true : false), // Appointments are often prioritized
@@ -272,6 +274,7 @@ router.post("/tokens", async (req: any, res: any) => {
           outlet: { select: { name: true, location: true } }
         }
       })
+
 
       // 6. Link appointment if found
       if (existingAppt) {

@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { fetchBillFromSltApi, normalizeSltBillData } from '../services/sltBillingService';
 import smsHelper from '../utils/smsHelper';
+import { normalizeMobile } from '../utils/phone';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -21,8 +22,7 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
     }
 
     try {
-      // 1. Check local cache first (short cache for better balance of spam prevention vs testing)
-      const cacheThreshold = new Date(Date.now() - 1 * 60 * 1000); // 1 minute
+      // 1. Check local cache first
       const cachedBill = await prisma.sltBill.findUnique({
         where: { telephoneNumber },
         select: {
@@ -39,25 +39,35 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
         }
       });
 
-      // If we have a fresh cache AND (either no new mobile number provided OR existing mobile is already unmasked)
-      // we can return the cache. 
-      // BUT if we have a masked number in cache and a potentially matching full number now, we should proceed to SLT verify.
-      const isMaskedInCache = cachedBill?.mobileNumber?.includes('*');
-      const shouldBypassCacheForUnmasking = isMaskedInCache && mobileNumber;
+      // Normalized requester mobile
 
-      if (cachedBill && cachedBill.updatedAt && cachedBill.updatedAt > cacheThreshold && !shouldBypassCacheForUnmasking) {
-        console.log(`[BILL][CACHE] Returning fresh cached data for ${telephoneNumber}`);
+      const nm = normalizeMobile(mobileNumber as string);
+
+      // Cache balancing: 5-minute general cache, but allow bypass for unmasking if not "very fresh"
+      const cacheThreshold = new Date(Date.now() - 5 * 60 * 1000); // 5 minutes
+      const veryFreshThreshold = new Date(Date.now() - 30 * 1000); // 30 seconds
+
+      const isMaskedInCache = cachedBill?.mobileNumber?.includes('*');
+      const isNewlyProvidingMobile = !isMaskedInCache && nm && cachedBill?.mobileNumber !== nm; 
+      // If we have a masked number and a potential full match, we WANT to bypass to unmask it via SLT API.
+      // However, we only allow this bypass once every 30 seconds to prevent "form load spam".
+      const isVeryFresh = cachedBill?.updatedAt && cachedBill.updatedAt > veryFreshThreshold;
+      const shouldBypassForUnmasking = isMaskedInCache && mobileNumber && !isVeryFresh;
+
+      if (cachedBill && cachedBill.updatedAt && cachedBill.updatedAt > cacheThreshold && !shouldBypassForUnmasking) {
+        console.log(`[BILL][CACHE] Returning fresh cached data for ${telephoneNumber}${isVeryFresh ? ' (Very Fresh)' : ''}`);
         return res.json({
           success: true,
           bill: cachedBill,
           source: 'cache',
           smsNotification: {
             sent: false,
-            message: 'Using cached bill details (no new SMS sent)',
+            message: 'Using cached bill details',
             maskedMobile: cachedBill.mobileNumber
           }
         });
       }
+
 
       // 2. Fetch bill information from SLT API
       console.log(`Fetching bill from SLT API for: ${telephoneNumber}`);
