@@ -438,8 +438,18 @@ router.post("/register", async (req, res) => {
       })
 
       if (existingToken) {
+        // Update the existing token's language preference if provided
+        if (Array.isArray(preferredLanguages) && preferredLanguages.length > 0) {
+          const updatedToken = await tx.token.update({
+            where: { id: existingToken.id },
+            data: { preferredLanguages },
+            include: { customer: true, outlet: true }
+          })
+          return { alreadyExists: true, token: updatedToken }
+        }
         return { alreadyExists: true, token: existingToken }
       }
+
 
       // 3. Create new token
       // Use an exclusive lock on the Outlet record to serialize concurrent token generation
