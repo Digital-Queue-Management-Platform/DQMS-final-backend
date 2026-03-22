@@ -139,12 +139,12 @@ router.get("/check", async (req, res) => {
     }
 
     if (email) {
-      // Officers don't store email in the DB, but check across Teleshop Managers too
       const existingManager = await prisma.teleshopManager.findFirst({ where: { email } })
+      const existingOfficer = await prisma.officer.findFirst({ where: { email } })
       return res.json({
-        taken: !!existingManager,
+        taken: !!existingManager || !!existingOfficer,
         field: 'email',
-        message: existingManager
+        message: (existingManager || existingOfficer)
           ? `Email address ${email} is already registered in the system`
           : null
       })
@@ -160,7 +160,7 @@ router.get("/check", async (req, res) => {
 // Register officer
 router.post("/register", async (req, res) => {
   try {
-    const { name, mobileNumber, outletId, counterNumber, isTraining } = req.body
+    const { name, mobileNumber, outletId, counterNumber, isTraining, email } = req.body
 
     if (!name || !mobileNumber || !outletId) {
       return res.status(400).json({ error: "Missing required fields" })
@@ -193,6 +193,7 @@ router.post("/register", async (req, res) => {
       data: {
         name,
         mobileNumber,
+        email: email || null,
         outletId,
         counterNumber: counterNumber !== undefined ? counterNumber : null,
         isTraining: !!isTraining,

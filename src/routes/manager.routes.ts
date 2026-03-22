@@ -750,7 +750,7 @@ router.get("/officers", async (req, res) => {
 // Create new officer in manager's region
 router.post("/officers", async (req, res) => {
   try {
-    const { name, mobileNumber, outletId, counterNumber, isTraining, languages, assignedServices, services } = req.body
+    const { name, mobileNumber, outletId, counterNumber, isTraining, languages, assignedServices, services, email } = req.body
 
     // Input validation
     if (!name || !mobileNumber || !outletId) return res.status(400).json({ error: "name, mobileNumber, and outletId are required" })
@@ -815,6 +815,7 @@ router.post("/officers", async (req, res) => {
     const officerData: any = {
       name,
       mobileNumber,
+      email: email || null,
       outletId,
     }
 
@@ -889,7 +890,7 @@ router.post("/officers", async (req, res) => {
 router.patch("/officer/:officerId", async (req, res) => {
   try {
     const { officerId } = req.params
-    const { name, counterNumber, assignedServices, isTraining, languages, services } = req.body
+    const { name, counterNumber, assignedServices, isTraining, languages, services, email } = req.body
 
     // Check for JWT token
     let token = req.cookies?.dq_manager_jwt
@@ -957,6 +958,7 @@ router.patch("/officer/:officerId", async (req, res) => {
     if (assignedServices !== undefined) updateData.assignedServices = assignedServices
     if (services !== undefined && assignedServices === undefined) updateData.assignedServices = services
     if (languages !== undefined) updateData.languages = languages
+    if (email !== undefined) updateData.email = email || null
 
     console.log("Updating officer with data:", JSON.stringify(updateData, null, 2))
 

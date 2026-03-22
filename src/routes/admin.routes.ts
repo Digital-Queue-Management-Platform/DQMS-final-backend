@@ -1352,6 +1352,7 @@ router.get('/staff-status', async (req, res) => {
           id: true,
           name: true,
           mobileNumber: true,
+          email: true,
           status: true,
           counterNumber: true,
           isTraining: true,
@@ -1450,7 +1451,7 @@ router.get('/staff-status', async (req, res) => {
           id: officer.id,
           name: officer.name,
           mobileNumber: officer.mobileNumber,
-          email: null,
+          email: officer.email,
           roleKey: 'officer',
           roleLabel: 'Customer Service Officer',
           status: presence.status,
@@ -1714,7 +1715,7 @@ router.get('/officers', async (req, res) => {
 router.patch('/officer/:id', async (req, res) => {
   try {
     const { id } = req.params
-    const { counterNumber, assignedServices, status, name } = req.body
+    const { counterNumber, assignedServices, status, name, email } = req.body
 
     const data: any = {}
     if (counterNumber !== undefined) {
@@ -1737,6 +1738,7 @@ router.patch('/officer/:id', async (req, res) => {
     if (assignedServices !== undefined) data.assignedServices = assignedServices
     if (status !== undefined) data.status = status
     if (name !== undefined) data.name = name
+    if (email !== undefined) data.email = email || null
 
     const officer = await prisma.officer.update({ where: { id }, data })
     res.json({ success: true, officer })

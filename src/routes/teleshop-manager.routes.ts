@@ -470,7 +470,7 @@ router.get("/officers", async (req: any, res) => {
 router.post("/officers", async (req: any, res) => {
   try {
     const teleshopManager = req.teleshopManager
-    const { name, mobileNumber, outletId, counterNumber, isTraining, languages, assignedServices } = req.body
+    const { name, mobileNumber, outletId, counterNumber, isTraining, languages, assignedServices, email } = req.body
 
     if (!name || !mobileNumber || !outletId) {
       return res.status(400).json({ error: "Name, mobile number, and outlet ID are required" })
@@ -501,6 +501,7 @@ router.post("/officers", async (req: any, res) => {
     const officerData: any = {
       name,
       mobileNumber,
+      email: email || null,
       outletId
     }
 
@@ -577,7 +578,7 @@ router.patch("/officers/:officerId", async (req: any, res) => {
   try {
     const teleshopManager = req.teleshopManager
     const { officerId } = req.params
-    const { name, counterNumber, assignedServices, isTraining, languages } = req.body
+    const { name, counterNumber, assignedServices, isTraining, languages, email } = req.body
 
     // Verify officer belongs to this teleshop manager's outlet
     if (!teleshopManager.branchId) {
@@ -603,6 +604,7 @@ router.patch("/officers/:officerId", async (req: any, res) => {
     if (isTraining !== undefined) updateData.isTraining = isTraining
     if (assignedServices !== undefined) updateData.assignedServices = assignedServices
     if (languages !== undefined) updateData.languages = languages
+    if (email !== undefined) updateData.email = email || null
 
     console.log("Updating officer with data:", JSON.stringify(updateData, null, 2))
 

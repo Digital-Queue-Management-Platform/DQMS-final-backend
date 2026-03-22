@@ -83,6 +83,7 @@ model Officer {
   id                String             @id @default(uuid())
   name              String
   mobileNumber      String             @unique
+  email             String?
   outletId          String
   status            String             @default("offline")
   counterNumber     Int?
