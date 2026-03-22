@@ -177,9 +177,18 @@ router.get("/outlet/:outletId", async (req, res) => {
   try {
     const { outletId } = req.params
     const date = req.query.date as string | undefined
+    const startDate = req.query.startDate as string | undefined
+    const endDate = req.query.endDate as string | undefined
+
     let dateStart: Date | undefined
     let dateEnd: Date | undefined
-    if (date) {
+
+    if (startDate && endDate) {
+      dateStart = new Date(startDate)
+      dateStart.setHours(0, 0, 0, 0)
+      dateEnd = new Date(endDate)
+      dateEnd.setHours(23, 59, 59, 999)
+    } else if (date) {
       dateStart = new Date(date)
       dateStart.setHours(0, 0, 0, 0)
       dateEnd = new Date(dateStart)
