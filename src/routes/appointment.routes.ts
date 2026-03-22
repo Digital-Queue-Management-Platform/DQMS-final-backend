@@ -82,6 +82,22 @@ router.post("/book", async (req, res) => {
       }
     }
 
+    // Check if appointment already exists for the same mobile, outlet and time
+    const appointmentDate = new Date(appointmentAt)
+    const existingAppt = await prisma.appointment.findFirst({
+      where: {
+        mobileNumber,
+        outletId,
+        appointmentAt: appointmentDate,
+        status: 'booked'
+      }
+    })
+
+    if (existingAppt) {
+      console.log(`[APPT][DUP] Appointment already exists for ${mobileNumber} @ ${appointmentAt}`)
+      return res.json({ success: true, appointment: existingAppt })
+    }
+
     // Create appointment using Prisma (handles array types properly)
     const appt = await prisma.appointment.create({
       data: {

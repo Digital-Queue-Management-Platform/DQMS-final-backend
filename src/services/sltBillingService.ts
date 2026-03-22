@@ -33,9 +33,10 @@ interface SltApiResponse {
 /**
  * Fetch bill information from SLT API
  * @param sltNumber - SLT telephone number (e.g., "0112123456")
+ * @param senderMobile - Optional mobile number of the person requesting (may be required for SMS notification)
  * @returns Bill information from SLT API
  */
-export async function fetchBillFromSltApi(sltNumber: string): Promise<SltBillInfo> {
+export async function fetchBillFromSltApi(sltNumber: string, senderMobile?: string): Promise<SltBillInfo> {
   try {
     // Relaxed validation: Just check for 10 digits
     const phoneRegex = /^\d{10}$/;
@@ -43,15 +44,14 @@ export async function fetchBillFromSltApi(sltNumber: string): Promise<SltBillInf
       throw new Error('Invalid telephone number. Must be 10 digits.');
     }
 
-    console.log(`Fetching bill info for SLT number: ${sltNumber}`);
+    console.log(`Fetching bill info for SLT number: ${sltNumber}${senderMobile ? ` (sender: ${senderMobile})` : ''}`);
 
     // Make request to SLT API
     const response = await axios.post<SltApiResponse>(
       `${SLT_BILLING_API_URL}?sltNumber=${sltNumber}`,
       {
         sltNumber: sltNumber,
-        // Some APIs might need additional fields - uncomment if needed:
-        // senderMobile: "", // May need to pass this if required
+        senderMobile: senderMobile || "", // Pass the mobile number of the requester
       },
       {
         headers: {
@@ -60,6 +60,7 @@ export async function fetchBillFromSltApi(sltNumber: string): Promise<SltBillInf
         timeout: 10000, // 10 second timeout
       }
     );
+
 
     console.log('==========================================');
     console.log('SLT API Full Response:');
@@ -129,15 +130,22 @@ function extractMaskedMobile(message: string): string | null {
  * Normalize and map SLT API response to our database schema
  * @param sltBillInfo - Bill info from SLT API
  * @param queriedNumber - The telephone number that was queried (to ensure consistency)
+ * @param unmaskedMobile - Optional unmasked mobile found during verification (e.g., from seeker who is identifying as owner)
  * @returns Normalized bill data
  */
-export function normalizeSltBillData(sltBillInfo: SltBillInfo, queriedNumber: string) {
-  // If we have a full mobile number, use it.
-  // Otherwise, use the masked one. 
-  // If even masked is missing but API was successful, use a placeholder to bypass frontend gaps.
-  const resolvedMobile = (sltBillInfo.mobileNumber && !sltBillInfo.mobileNumber.includes('*'))
+export function normalizeSltBillData(sltBillInfo: SltBillInfo, queriedNumber: string, unmaskedMobile?: string) {
+  // Use the discovered unmasked mobile if available
+  let resolvedMobile = (sltBillInfo.mobileNumber && !sltBillInfo.mobileNumber.includes('*'))
     ? sltBillInfo.mobileNumber
     : (sltBillInfo.maskedMobile || (sltBillInfo.isSuccess ? '******' : null));
+
+  // If the provided unmasked mobile matches the masked pattern, use it!
+  if (unmaskedMobile && resolvedMobile && resolvedMobile.includes('*')) {
+    const visiblePart = resolvedMobile.replace(/\*+/g, '');
+    if (visiblePart && unmaskedMobile.endsWith(visiblePart)) {
+      resolvedMobile = unmaskedMobile;
+    }
+  }
 
   return {
     telephoneNumber: queriedNumber, // Use the queried number to avoid constraint violations

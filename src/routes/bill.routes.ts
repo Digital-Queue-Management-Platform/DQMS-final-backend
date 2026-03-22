@@ -10,6 +10,7 @@ const prisma = new PrismaClient();
 router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
   try {
     const { telephoneNumber } = req.params;
+    const { mobileNumber } = req.query; // Optional mobile number of the person requesting
 
     // Relaxed validation: Just check for 10 digits
     const phoneRegex = /^\d{10}$/;
@@ -20,12 +21,50 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
     }
 
     try {
-      // Fetch bill information from SLT API
-      console.log(`Fetching bill from SLT API for: ${telephoneNumber}`);
-      const sltBillInfo = await fetchBillFromSltApi(telephoneNumber);
+      // 1. Check local cache first (short cache for better balance of spam prevention vs testing)
+      const cacheThreshold = new Date(Date.now() - 1 * 60 * 1000); // 1 minute
+      const cachedBill = await prisma.sltBill.findUnique({
+        where: { telephoneNumber },
+        select: {
+          id: true,
+          telephoneNumber: true,
+          mobileNumber: true,
+          accountName: true,
+          accountAddress: true,
+          currentBill: true,
+          dueDate: true,
+          status: true,
+          lastPaymentDate: true,
+          updatedAt: true,
+        }
+      });
 
-      // Normalize the data (pass the queried number to ensure consistency)
-      const normalizedData = normalizeSltBillData(sltBillInfo, telephoneNumber);
+      // If we have a fresh cache AND (either no new mobile number provided OR existing mobile is already unmasked)
+      // we can return the cache. 
+      // BUT if we have a masked number in cache and a potentially matching full number now, we should proceed to SLT verify.
+      const isMaskedInCache = cachedBill?.mobileNumber?.includes('*');
+      const shouldBypassCacheForUnmasking = isMaskedInCache && mobileNumber;
+
+      if (cachedBill && cachedBill.updatedAt && cachedBill.updatedAt > cacheThreshold && !shouldBypassCacheForUnmasking) {
+        console.log(`[BILL][CACHE] Returning fresh cached data for ${telephoneNumber}`);
+        return res.json({
+          success: true,
+          bill: cachedBill,
+          source: 'cache',
+          smsNotification: {
+            sent: false,
+            message: 'Using cached bill details (no new SMS sent)',
+            maskedMobile: cachedBill.mobileNumber
+          }
+        });
+      }
+
+      // 2. Fetch bill information from SLT API
+      console.log(`Fetching bill from SLT API for: ${telephoneNumber}`);
+      const sltBillInfo = await fetchBillFromSltApi(telephoneNumber, mobileNumber as string);
+
+      // Normalize the data (pass the queried number AND the requester's mobile for unmasking)
+      const normalizedData = normalizeSltBillData(sltBillInfo, telephoneNumber, mobileNumber as string);
 
       // Cache the bill information in database (upsert)
       const bill = await prisma.sltBill.upsert({
@@ -50,6 +89,7 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
         }
       });
 
+
       res.json({
         success: true,
         bill,
@@ -61,6 +101,7 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
           referenceId: sltBillInfo.referenceId
         }
       });
+
 
     } catch (apiError: any) {
       console.error('SLT API error, checking local cache:', apiError.message);
@@ -122,7 +163,39 @@ router.post('/search', async (req: Request, res: Response) => {
     }
 
     try {
-      // Fetch bill information from SLT API
+      // 1. Check local cache first
+      const cacheThreshold = new Date(Date.now() - 5 * 60 * 1000); // 5 minutes
+      const cachedBill = await prisma.sltBill.findUnique({
+        where: { telephoneNumber },
+        select: {
+          id: true,
+          telephoneNumber: true,
+          mobileNumber: true,
+          accountName: true,
+          accountAddress: true,
+          currentBill: true,
+          dueDate: true,
+          status: true,
+          lastPaymentDate: true,
+          updatedAt: true,
+        }
+      });
+
+      if (cachedBill && cachedBill.updatedAt && cachedBill.updatedAt > cacheThreshold) {
+        console.log(`[BILL][SEARCH][CACHE] Returning fresh cached data for ${telephoneNumber}`);
+        return res.json({
+          success: true,
+          bill: cachedBill,
+          source: 'cache',
+          smsNotification: {
+            sent: false,
+            message: 'Using cached bill details (no SMS sent)',
+            maskedMobile: cachedBill.mobileNumber
+          }
+        });
+      }
+
+      // 2. Fetch bill information from SLT API if no fresh cache exists
       console.log(`Searching bill from SLT API for: ${telephoneNumber}`);
       const sltBillInfo = await fetchBillFromSltApi(telephoneNumber);
 
@@ -163,6 +236,7 @@ router.post('/search', async (req: Request, res: Response) => {
           referenceId: sltBillInfo.referenceId
         }
       });
+
 
     } catch (apiError: any) {
       console.error('SLT API error, checking local cache:', apiError.message);
