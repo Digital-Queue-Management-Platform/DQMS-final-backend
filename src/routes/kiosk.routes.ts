@@ -174,77 +174,68 @@ router.post("/tokens", async (req: any, res: any) => {
       normalizedMobile = '0' + normalizedMobile.substring(2)
     }
 
-    // Check or create customer
-    let customer = await prisma.customer.findFirst({
-      where: { mobileNumber: normalizedMobile }
-    })
-
-    if (!customer) {
-      customer = await prisma.customer.create({
-        data: {
-          name: name.trim(),
-          mobileNumber: normalizedMobile,
-          nicNumber: nicNumber?.trim() || null,
-          email: email?.trim() || null,
-          sltMobileNumber: sltMobileNumber?.trim() || null
-        }
-      })
-    } else {
-      // Update customer info if provided
-      customer = await prisma.customer.update({
-        where: { id: customer.id },
-        data: {
-          name: name.trim(),
-          nicNumber: nicNumber?.trim() || customer.nicNumber,
-          email: email?.trim() || customer.email,
-          sltMobileNumber: sltMobileNumber?.trim() || customer.sltMobileNumber
-        }
-      })
-    }
-
-    // Get next token number for this outlet
-    const lastReset = getLastDailyReset()
-
-    const lastToken = await prisma.token.findFirst({
-      where: {
-        outletId: outletId,
-        createdAt: { gte: lastReset }
-      },
-      orderBy: { tokenNumber: 'desc' }
-    })
-
-    const tokenNumber = lastToken ? lastToken.tokenNumber + 1 : 1
-
-    // Create the token
-    const token = await prisma.token.create({
+    // Always create a new customer record even if mobileNumber repeats (parallels customer.routes.ts logic)
+    const customer = await prisma.customer.create({
       data: {
-        tokenNumber,
-        customerId: customer.id,
-        serviceTypes,
-        preferredLanguages,
-        accountRef: accountRef?.trim() || null,
-        status: "waiting",
-        isPriority: autoPriority,
-        outletId: outletId,
-        sltTelephoneNumber: sltTelephoneNumber?.trim() || null,
-        billPaymentIntent: billPaymentIntent || null,
-        billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : null,
-        billPaymentMethod: billPaymentMethod || null,
-      },
-      include: {
-        customer: {
-          select: {
-            name: true,
-            mobileNumber: true
-          }
+        name: name.trim(),
+        mobileNumber: normalizedMobile,
+        nicNumber: nicNumber?.trim() || undefined,
+        email: email?.trim() || undefined,
+        sltMobileNumber: sltMobileNumber?.trim() || undefined
+      }
+    })
+
+    // Use a database transaction to prevent race conditions
+    const token = await prisma.$transaction(async (tx) => {
+      // Use an exclusive lock on the Outlet record to serialize concurrent token generation
+      await tx.$executeRaw`SELECT id FROM "Outlet" WHERE id = ${outletId} FOR UPDATE`
+
+      // Get next token number for this outlet
+      const lastReset = getLastDailyReset()
+
+      const lastToken = await tx.token.findFirst({
+        where: {
+          outletId: outletId,
+          createdAt: { gte: lastReset }
         },
-        outlet: {
-          select: {
-            name: true,
-            location: true
+        orderBy: { tokenNumber: 'desc' }
+      })
+
+      const tokenNumber = lastToken ? lastToken.tokenNumber + 1 : 1
+
+      // Create the token
+      return await tx.token.create({
+        data: {
+          tokenNumber,
+          customerId: customer.id,
+          serviceTypes,
+          preferredLanguages,
+          accountRef: accountRef?.trim() || null,
+          status: "waiting",
+          isPriority: autoPriority,
+          outletId: outletId,
+          sltTelephoneNumber: sltTelephoneNumber?.trim() || null,
+          billPaymentIntent: billPaymentIntent || null,
+          billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : null,
+          billPaymentMethod: billPaymentMethod || null,
+        },
+        include: {
+          customer: {
+            select: {
+              name: true,
+              mobileNumber: true
+            }
+          },
+          outlet: {
+            select: {
+              name: true,
+              location: true
+            }
           }
         }
-      }
+      })
+    }, {
+      timeout: 10000, // 10 second timeout
     })
 
     // Broadcast new token to officers queue system

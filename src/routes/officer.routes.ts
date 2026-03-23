@@ -1006,6 +1006,12 @@ router.post("/complete-service", async (req, res) => {
   try {
     const { tokenId, officerId, accountRef } = req.body
 
+    // Check if token is already completed to prevent double-completion
+    const existingToken = await prisma.token.findUnique({ where: { id: tokenId } })
+    if (existingToken?.status === "completed") {
+      return res.status(400).json({ error: "Token is already completed" })
+    }
+
     const token = await prisma.token.update({
       where: { id: tokenId },
       data: {
