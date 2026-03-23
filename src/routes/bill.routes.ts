@@ -20,6 +20,37 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
     }
 
     try {
+      // Avoid excessive SLT API calls (which trigger SMS) by checking cache first
+      const forceRefresh = req.query.force === 'true';
+      
+      if (!forceRefresh) {
+        const cachedBill = await prisma.sltBill.findUnique({
+          where: { telephoneNumber },
+          select: {
+            id: true,
+            telephoneNumber: true,
+            mobileNumber: true,
+            accountName: true,
+            accountAddress: true,
+            currentBill: true,
+            dueDate: true,
+            status: true,
+            lastPaymentDate: true,
+            updatedAt: true,
+          }
+        });
+
+        // Use cache if less than 2 hours old to prevent SMS spam
+        if (cachedBill && (new Date().getTime() - cachedBill.updatedAt.getTime() < 7200000)) {
+          console.log(`Returning fresh cached bill data for ${telephoneNumber}`);
+          return res.json({
+            success: true,
+            bill: cachedBill,
+            source: 'cache',
+          });
+        }
+      }
+
       // Fetch bill information from SLT API
       console.log(`Fetching bill from SLT API for: ${telephoneNumber}`);
       const sltBillInfo = await fetchBillFromSltApi(telephoneNumber);
@@ -122,6 +153,35 @@ router.post('/search', async (req: Request, res: Response) => {
     }
 
     try {
+      const forceRefresh = req.query.force === 'true';
+
+      if (!forceRefresh) {
+        const cachedBill = await prisma.sltBill.findUnique({
+          where: { telephoneNumber },
+          select: {
+            id: true,
+            telephoneNumber: true,
+            mobileNumber: true,
+            accountName: true,
+            accountAddress: true,
+            currentBill: true,
+            dueDate: true,
+            status: true,
+            lastPaymentDate: true,
+            updatedAt: true,
+          }
+        });
+
+        if (cachedBill && (new Date().getTime() - cachedBill.updatedAt.getTime() < 7200000)) {
+          console.log(`Returning fresh cached bill data for ${telephoneNumber}`);
+          return res.json({
+            success: true,
+            bill: cachedBill,
+            source: 'cache',
+          });
+        }
+      }
+
       // Fetch bill information from SLT API
       console.log(`Searching bill from SLT API for: ${telephoneNumber}`);
       const sltBillInfo = await fetchBillFromSltApi(telephoneNumber);
