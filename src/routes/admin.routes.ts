@@ -375,7 +375,7 @@ router.get("/analytics", async (req, res) => {
     const totalCompleted = completedTokens.length
 
     // Run other aggregated queries
-    const [feedbackStats, officerRecords, allServices] = await Promise.all([
+    const [feedbackStats, officerRecords, allServices, allOutlets] = await Promise.all([
       prisma.feedback.findMany({
         where: { token: { ...baseWhere, status: "completed" } },
         select: { rating: true, createdAt: true, tokenId: true }
@@ -384,7 +384,8 @@ router.get("/analytics", async (req, res) => {
         where: outletId ? { outletId: outletId as string } : {}, 
         include: { outlet: true } 
       }),
-      prisma.service.findMany({ select: { code: true, title: true } })
+      prisma.service.findMany({ select: { code: true, title: true } }),
+      prisma.outlet.findMany({ select: { id: true, name: true } })
     ])
 
     const avgWaitTime = totalCompleted > 0
@@ -523,6 +524,54 @@ router.get("/analytics", async (req, res) => {
       feedbackCount: stats.ratings.length
     }))
 
+    // Branch Performance
+    const outletMap = new Map(allOutlets.map(o => [o.id, o.name]))
+    
+    const branchPerformanceMap = new Map<string, {
+      totalTokens: number
+      waitSum: number
+      waitCount: number
+      serviceSum: number
+      serviceCount: number
+      ratingSum: number
+      feedbackCount: number
+    }>()
+
+    allTokens.forEach(t => {
+      if (!t.outletId) return;
+      if (!branchPerformanceMap.has(t.outletId)) {
+        branchPerformanceMap.set(t.outletId, { totalTokens: 0, waitSum: 0, waitCount: 0, serviceSum: 0, serviceCount: 0, ratingSum: 0, feedbackCount: 0 })
+      }
+      const branchStats = branchPerformanceMap.get(t.outletId)!
+      branchStats.totalTokens++
+
+      if (t.status === "completed" && t.completedAt && t.startedAt) {
+        branchStats.serviceSum += (t.completedAt.getTime() - t.startedAt.getTime()) / 1000 / 60
+        branchStats.serviceCount++
+        branchStats.waitSum += (t.startedAt.getTime() - t.createdAt.getTime()) / 1000 / 60
+        branchStats.waitCount++
+      }
+    })
+
+    feedbacksRaw.forEach(f => {
+      const token = allTokens.find(t => t.id === f.tokenId)
+      if (token && token.outletId && branchPerformanceMap.has(token.outletId)) {
+        const branchStats = branchPerformanceMap.get(token.outletId)!
+        branchStats.ratingSum += f.rating
+        branchStats.feedbackCount++
+      }
+    })
+
+    const branchPerformance = Array.from(branchPerformanceMap.entries()).map(([id, stats]) => ({
+      id,
+      name: outletMap.get(id) || "Unknown Outlet",
+      totalTokens: stats.totalTokens,
+      avgWaitTime: Math.round((stats.waitCount > 0 ? stats.waitSum / stats.waitCount : 0) * 10) / 10,
+      avgServiceTime: Math.round((stats.serviceCount > 0 ? stats.serviceSum / stats.serviceCount : 0) * 10) / 10,
+      avgRating: Math.round((stats.feedbackCount > 0 ? stats.ratingSum / stats.feedbackCount : 0) * 10) / 10,
+      feedbackCount: stats.feedbackCount
+    }))
+
     res.json({
       totalTokens: totalIssued,
       totalCompleted,
@@ -531,6 +580,7 @@ router.get("/analytics", async (req, res) => {
       feedbackStats: ratingDistribution,
       serviceTypes: serviceTypesFormatted,
       officerPerformance,
+      branchPerformance: !outletId ? branchPerformance : undefined,
       hourlyWaitingTimes: hourlyStats.map(h => ({ hour: h.hour, value: h.waitTime })),
       staffUtilizationTrend: hourlyStats.map(h => ({ 
         time: h.hour, 
