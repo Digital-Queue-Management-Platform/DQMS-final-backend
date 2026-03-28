@@ -256,28 +256,36 @@ router.get("/check-device-config/:deviceId", async (req, res) => {
       return res.status(400).json({ error: "Device ID is required" })
     }
 
+    console.log("Checking device configuration for:", deviceId)
+
     // Search all outlets for this device in their displaySettings
     const outlets = await prisma.outlet.findMany({
       select: { id: true, name: true, location: true, displaySettings: true }
     })
 
+    console.log("Found outlets:", outlets.length)
+    
     for (const outlet of outlets) {
       const displaySettings = outlet.displaySettings as any
       const linkedDevices = displaySettings?.linkedDevices || []
+      
+      console.log(`Outlet ${outlet.name} has ${linkedDevices.length} linked devices:`, 
+        linkedDevices.map((d: any) => ({ deviceId: d.deviceId, deviceName: d.deviceName, isActive: d.isActive })))
       
       const configuredDevice = linkedDevices.find((device: any) => 
         device.deviceId === deviceId && device.isActive
       )
 
       if (configuredDevice) {
+        console.log("Found configured device:", configuredDevice)
         // Device found and configured
         return res.json({
           isConfigured: true,
           outletId: outlet.id,
           outletName: outlet.name,
           baseUrl: process.env.NODE_ENV === 'development' 
-            ? "http://10.0.2.2:3001/" // Emulator: use 10.0.2.2, Real device: change to your computer's IP
-            : "http://10.0.2.2:3001/", // Production: adjust as needed
+            ? "http://10.191.253.58:3001/" // Real device: use your computer's IP
+            : "http://10.191.253.58:3001/", // Production: adjust as needed
           device: {
             deviceId: configuredDevice.deviceId,
             deviceName: configuredDevice.deviceName,
@@ -286,6 +294,8 @@ router.get("/check-device-config/:deviceId", async (req, res) => {
         })
       }
     }
+
+    console.log("No configured device found for ID:", deviceId)
 
     // Device not found or not configured
     res.json({
