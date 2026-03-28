@@ -25,10 +25,53 @@ function digitsOnly(m: string | undefined | null) {
 // Book an appointment
 router.post("/book", async (req, res) => {
   try {
-    const { name, mobileNumber, outletId, serviceTypes, appointmentAt, preferredLanguage, verifiedMobileToken, notes, email, nicNumber, sltTelephoneNumber, billPaymentIntent, billPaymentAmount, billPaymentMethod } = req.body || {}
+    const { 
+      name, 
+      mobileNumber, 
+      outletId, 
+      serviceTypes, 
+      appointmentAt, 
+      preferredLanguage, 
+      verifiedMobileToken, 
+      notes, 
+      email, 
+      nicNumber, 
+      sltTelephoneNumber, 
+      sltTelephoneNumbers, // New array field for multiple numbers
+      billPaymentIntent, 
+      billPaymentAmount, 
+      billPaymentMethod 
+    } = req.body || {}
 
     if (!name || !mobileNumber || !outletId || !Array.isArray(serviceTypes) || serviceTypes.length === 0 || !appointmentAt) {
       return res.status(400).json({ error: "Missing required fields" })
+    }
+
+    // Handle both single and multiple telephone numbers for backward compatibility
+    let telephoneNumbersToProcess: string[] = []
+    
+    if (sltTelephoneNumbers && Array.isArray(sltTelephoneNumbers) && sltTelephoneNumbers.length > 0) {
+      telephoneNumbersToProcess = sltTelephoneNumbers
+    } else if (sltTelephoneNumber) {
+      telephoneNumbersToProcess = [sltTelephoneNumber]
+    }
+
+    // Validate telephone numbers if provided
+    if (telephoneNumbersToProcess.length > 0) {
+      const phoneRegex = /^\d{10}$/
+      const invalidNumbers = telephoneNumbersToProcess.filter(num => !phoneRegex.test(num))
+      
+      if (invalidNumbers.length > 0) {
+        return res.status(400).json({
+          error: `Invalid telephone numbers. Must be 10 digits: ${invalidNumbers.join(', ')}`
+        })
+      }
+
+      if (telephoneNumbersToProcess.length > 10) { // Limit to prevent abuse
+        return res.status(400).json({
+          error: 'Maximum 10 telephone numbers allowed per appointment.'
+        })
+      }
     }
 
     // Enforce phone verification via OTP (same policy as registration)
@@ -84,21 +127,42 @@ router.post("/book", async (req, res) => {
     }
 
     // Create appointment (keep as 'booked' initially, will be queued based on time)
-    const appt = await prisma.appointment.create({
-      data: {
-        name,
-        mobileNumber,
-        outletId,
-        serviceTypes,
-        preferredLanguage: preferredLanguage || undefined,
-        sltTelephoneNumber: sltTelephoneNumber || undefined,
-        billPaymentIntent: billPaymentIntent || undefined,
-        billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : undefined,
-        billPaymentMethod: billPaymentMethod || undefined,
-        appointmentAt: new Date(appointmentAt),
-        status: 'booked', // Keep as booked initially
-        notes: notes || undefined,
-      },
+    const appt = await prisma.$transaction(async (tx) => {
+      // Create the appointment
+      const newAppointment = await tx.appointment.create({
+        data: {
+          name,
+          mobileNumber,
+          outletId,
+          serviceTypes,
+          preferredLanguage: preferredLanguage || undefined,
+          sltTelephoneNumber: sltTelephoneNumber || undefined, // Keep for backward compatibility
+          billPaymentIntent: billPaymentIntent || undefined,
+          billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : undefined,
+          billPaymentMethod: billPaymentMethod || undefined,
+          appointmentAt: new Date(appointmentAt),
+          status: 'booked', // Keep as booked initially
+          notes: notes || undefined,
+        },
+      })
+
+      // Create AppointmentBill entries for multiple telephone numbers
+      if (telephoneNumbersToProcess.length > 0) {
+        for (const phoneNumber of telephoneNumbersToProcess) {
+          await tx.appointmentBill.create({
+            data: {
+              appointmentId: newAppointment.id,
+              telephoneNumber: phoneNumber,
+              billPaymentIntent: billPaymentIntent || null,
+              billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : null,
+            }
+          })
+        }
+      }
+
+      return newAppointment
+    }, {
+      timeout: 15000, // Increased timeout for multiple telephone number processing
     })
 
     // Create customer record for future queue processing

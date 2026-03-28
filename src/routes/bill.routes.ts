@@ -1,10 +1,209 @@
 import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { fetchBillFromSltApi, normalizeSltBillData } from '../services/sltBillingService';
+import { fetchBillFromSltApi, fetchMultipleBillsFromSltApi, normalizeSltBillData } from '../services/sltBillingService';
+import * as sltBillingService from '../services/sltBillingService';
 import smsHelper from '../utils/smsHelper';
 
 const router = Router();
 const prisma = new PrismaClient();
+
+// POST /api/bills/verify-multiple - Verify multiple SLT telephone numbers and get bill details
+router.post('/verify-multiple', async (req: Request, res: Response) => {
+  try {
+    const { telephoneNumbers } = req.body;
+
+    // Validate input
+    if (!Array.isArray(telephoneNumbers) || telephoneNumbers.length === 0) {
+      return res.status(400).json({
+        error: 'telephoneNumbers must be a non-empty array.'
+      });
+    }
+
+    if (telephoneNumbers.length > 10) { // Limit to 10 numbers to prevent abuse
+      return res.status(400).json({
+        error: 'Maximum 10 telephone numbers allowed per request.'
+      });
+    }
+
+    // Validate each telephone number format
+    const phoneRegex = /^\d{10}$/;
+    const invalidNumbers = telephoneNumbers.filter(num => !phoneRegex.test(num));
+    
+    if (invalidNumbers.length > 0) {
+      return res.status(400).json({
+        error: `Invalid telephone numbers. Must be 10 digits: ${invalidNumbers.join(', ')}`
+      });
+    }
+
+    const forceRefresh = req.query.force === 'true';
+    const results: any[] = [];
+    const smsNotifications: any[] = [];
+    const errors: any[] = [];
+
+    // Check cache first if not forcing refresh
+    if (!forceRefresh) {
+      for (const telephoneNumber of telephoneNumbers) {
+        try {
+          const cachedBill = await prisma.sltBill.findUnique({
+            where: { telephoneNumber },
+            select: {
+              id: true,
+              telephoneNumber: true,
+              mobileNumber: true,
+              accountName: true,
+              accountAddress: true,
+              currentBill: true,
+              dueDate: true,
+              status: true,
+              lastPaymentDate: true,
+              updatedAt: true,
+            }
+          });
+
+          // Use cache if less than 2 hours old to prevent SMS spam
+          if (cachedBill && (new Date().getTime() - cachedBill.updatedAt.getTime() < 7200000)) {
+            console.log(`Returning fresh cached bill data for ${telephoneNumber}`);
+            results.push({
+              telephoneNumber,
+              bill: cachedBill,
+              source: 'cache'
+            });
+            continue;
+          }
+        } catch (error: any) {
+          console.error(`Cache error for ${telephoneNumber}:`, error.message);
+        }
+      }
+    }
+
+    // Get numbers that need API calls (not in cache or cache expired)
+    const numbersNeedingApi = telephoneNumbers.filter(
+      num => !results.find(r => r.telephoneNumber === num)
+    );
+
+    if (numbersNeedingApi.length > 0) {
+      try {
+        // Fetch bill information from SLT API for multiple numbers
+        console.log(`Fetching bills from SLT API for: ${numbersNeedingApi.join(', ')}`);
+        const multiResult = await fetchMultipleBillsFromSltApi(numbersNeedingApi);
+
+        // Process successful bills
+        for (const sltBillInfo of multiResult.bills) {
+          try {
+            // Normalize the data
+            const normalizedData = normalizeSltBillData(sltBillInfo, sltBillInfo.sltNumber!);
+
+            // Cache the bill information in database (upsert)
+            const bill = await prisma.sltBill.upsert({
+              where: { telephoneNumber: sltBillInfo.sltNumber! },
+              update: {
+                ...normalizedData,
+                updatedAt: new Date(),
+              },
+              create: {
+                ...normalizedData,
+              },
+              select: {
+                id: true,
+                telephoneNumber: true,
+                mobileNumber: true,
+                accountName: true,
+                accountAddress: true,
+                currentBill: true,
+                dueDate: true,
+                status: true,
+                lastPaymentDate: true,
+              }
+            });
+
+            results.push({
+              telephoneNumber: sltBillInfo.sltNumber!,
+              bill,
+              source: 'slt_api'
+            });
+
+            smsNotifications.push({
+              telephoneNumber: sltBillInfo.sltNumber!,
+              sent: true,
+              message: sltBillInfo.message || 'Bill details sent to registered mobile number',
+              maskedMobile: sltBillInfo.maskedMobile,
+              referenceId: sltBillInfo.referenceId
+            });
+          } catch (dbError: any) {
+            console.error(`Database error for ${sltBillInfo.sltNumber}:`, dbError.message);
+            errors.push({
+              telephoneNumber: sltBillInfo.sltNumber!,
+              error: 'Failed to save bill information'
+            });
+          }
+        }
+
+        // Process API errors
+        errors.push(...multiResult.errors);
+
+      } catch (apiError: any) {
+        console.error('SLT API batch error, checking local cache:', apiError.message);
+        
+        // If API fails completely, try to get cached data for remaining numbers
+        for (const telephoneNumber of numbersNeedingApi) {
+          try {
+            const cachedBill = await prisma.sltBill.findUnique({
+              where: { telephoneNumber },
+              select: {
+                id: true,
+                telephoneNumber: true,
+                mobileNumber: true,
+                accountName: true,
+                accountAddress: true,
+                currentBill: true,
+                dueDate: true,
+                status: true,
+                lastPaymentDate: true,
+                updatedAt: true,
+              }
+            });
+
+            if (cachedBill) {
+              console.log(`Returning old cached bill data for ${telephoneNumber}`);
+              results.push({
+                telephoneNumber,
+                bill: cachedBill,
+                source: 'cache',
+                warning: 'Bill information may not be current. SLT API temporarily unavailable.'
+              });
+            } else {
+              errors.push({
+                telephoneNumber,
+                error: 'No cached data available and SLT API is unavailable'
+              });
+            }
+          } catch (cacheError: any) {
+            errors.push({
+              telephoneNumber,
+              error: 'Failed to retrieve cached data'
+            });
+          }
+        }
+      }
+    }
+
+    res.json({
+      success: results.length > 0,
+      results,
+      smsNotifications,
+      errors,
+      summary: {
+        total: telephoneNumbers.length,
+        successful: results.length,
+        failed: errors.length
+      }
+    });
+
+  } catch (error: any) {
+    console.error('Error verifying multiple telephone numbers:', error);
+    res.status(500).json({ error: error.message || 'Failed to verify telephone numbers' });
+  }
+});
 
 // GET /api/bills/verify/:telephoneNumber - Verify SLT telephone number and get bill details
 router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
@@ -299,6 +498,44 @@ router.get('/all', async (req: Request, res: Response) => {
 });
 
 // POST /api/bills/send-notification - Send bill details via SMS to customer's mobile
+// Send bill notification to registered owner using SLT API
+router.post('/send-bill-notification', async (req: Request, res: Response) => {
+  try {
+    const { sltTelephoneNumbers } = req.body;
+
+    if (!sltTelephoneNumbers || !Array.isArray(sltTelephoneNumbers) || sltTelephoneNumbers.length === 0) {
+      return res.status(400).json({ error: 'sltTelephoneNumbers array is required' });
+    }
+
+    // Send notification for each telephone number
+    const results = await Promise.all(
+      sltTelephoneNumbers.map(async (sltNumber: string) => {
+        const result = await sltBillingService.sendBillNotificationToOwner(sltNumber);
+        return {
+          sltNumber,
+          ...result
+        };
+      })
+    );
+
+    // Check if all notifications were sent successfully
+    const allSuccess = results.every(result => result.success);
+    const successCount = results.filter(result => result.success).length;
+
+    console.log(`[BILL] Sent notifications to ${successCount}/${results.length} SLT accounts`);
+
+    res.json({
+      success: true,
+      message: `Notifications sent to ${successCount}/${results.length} accounts`,
+      results
+    });
+
+  } catch (error) {
+    console.error('Error sending bill notifications:', error);
+    res.status(500).json({ error: 'Failed to send bill notifications' });
+  }
+});
+
 router.post('/send-notification', async (req: Request, res: Response) => {
   try {
     const { mobileNumber, accountName, billAmount, dueDate, sltNumber, language = 'en' } = req.body;
