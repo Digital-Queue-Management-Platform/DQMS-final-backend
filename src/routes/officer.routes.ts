@@ -1698,7 +1698,7 @@ router.get("/stats/:officerId", async (req, res) => {
 
     // If the current token is a bill payment service, fetch all SLT bill data
     let billData = null
-    let multipleBills = []
+    let multipleBills: any[] = []
     if (currentToken && ((currentToken.serviceTypes as string[]).includes('SVC002') || (currentToken.serviceTypes as string[]).includes('BILL_PAYMENT'))) {
       try {
         // Check if this token has multiple bills through TokenBill junction table

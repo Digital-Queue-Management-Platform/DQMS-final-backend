@@ -1442,8 +1442,6 @@ router.post("/display-settings", async (req: any, res) => {
   }
 })
 
-export default router
-
 // Service case updates (Teleshop Manager)
 router.post('/service-case/update', async (req: any, res) => {
   try {
@@ -2318,3 +2316,188 @@ router.get("/audit-logs", async (req: any, res) => {
     res.status(500).json({ error: "Failed to fetch audit logs" })
   }
 })
+
+// QR Code Setup for Android TV Outlet Displays - NEW PROFESSIONAL FEATURES
+
+// Setup Android TV device via QR code
+router.post("/outlet-setup-qr", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+    const { deviceId, deviceName, macAddress, setupCode, timestamp } = req.body
+
+    // Validate required fields
+    if (!deviceId || !deviceName || !setupCode) {
+      return res.status(400).json({ 
+        error: "Missing required fields: deviceId, deviceName, and setupCode are required" 
+      })
+    }
+
+    // Verify teleshop manager has a branch assigned
+    if (!teleshopManager.branchId) {
+      return res.status(403).json({ 
+        error: "You must be assigned to a branch to configure outlet displays" 
+      })
+    }
+
+    // Get outlet information
+    const outlet = await prisma.outlet.findUnique({
+      where: { id: teleshopManager.branchId },
+      select: { id: true, name: true, location: true, displaySettings: true }
+    })
+
+    if (!outlet) {
+      return res.status(404).json({ error: "Assigned outlet not found" })
+    }
+
+    // Validate setup code format (should be XXXX-XXXX)
+    if (!/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(setupCode)) {
+      return res.status(400).json({ 
+        error: "Invalid setup code format. Expected format: XXXX-XXXX" 
+      })
+    }
+
+    // Check if setup code has expired (within 1 hour of generation)
+    if (timestamp && Date.now() - timestamp > 3600000) {
+      return res.status(400).json({ 
+        error: "Setup code has expired. Please generate a new QR code on the Android TV device." 
+      })
+    }
+
+    // Save device configuration to outlet displaySettings
+    const currentDisplaySettings = outlet.displaySettings as any || {}
+    const deviceRecord = {
+      id: `device_${Date.now()}`,
+      deviceId: deviceId,
+      deviceName: deviceName,
+      macAddress: macAddress || 'Unknown',
+      setupCode: setupCode,
+      configuredAt: new Date().toISOString(),
+      configuredBy: teleshopManager.id,
+      isActive: true,
+      lastSeen: new Date().toISOString()
+    }
+
+    // Remove any existing device with same deviceId
+    const existingDevices = currentDisplaySettings.linkedDevices || []
+    const filteredDevices = existingDevices.filter((device: any) => device.deviceId !== deviceId)
+
+    const updatedDisplaySettings = {
+      ...currentDisplaySettings,
+      linkedDevices: [
+        ...filteredDevices,
+        deviceRecord
+      ]
+    }
+
+    await prisma.outlet.update({
+      where: { id: teleshopManager.branchId },
+      data: { displaySettings: updatedDisplaySettings }
+    })
+
+    auditLog(
+      teleshopManager.id, 
+      "OUTLET_DEVICE_CONFIGURED", 
+      "outlet", 
+      outlet.id, 
+      {
+        deviceId: deviceId,
+        deviceName: deviceName,
+        setupCode: setupCode,
+        outletName: outlet.name,
+        method: 'QR_CODE'
+      }
+    )
+
+    res.json({
+      success: true,
+      message: `Android TV "${deviceName}" has been successfully configured for ${outlet.name}`,
+      device: deviceRecord,
+      outlet: {
+        id: outlet.id,
+        name: outlet.name,
+        location: outlet.location
+      }
+    })
+
+  } catch (error: any) {
+    console.error("QR setup error:", error)
+    res.status(500).json({ 
+      error: "Failed to configure Android TV device", 
+      details: error.message 
+    })
+  }
+})
+
+// Get linked outlet devices
+router.get("/outlet-devices", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+
+    if (!teleshopManager.branchId) {
+      return res.json({ devices: [] })
+    }
+
+    // Get outlet with linked devices
+    const outlet = await prisma.outlet.findUnique({
+      where: { id: teleshopManager.branchId },
+      select: { displaySettings: true }
+    })
+
+    const displaySettings = outlet?.displaySettings as any || {}
+    const linkedDevices = displaySettings.linkedDevices || []
+
+    res.json({ devices: linkedDevices })
+
+  } catch (error: any) {
+    console.error("Get outlet devices error:", error)
+    res.status(500).json({ error: "Failed to get outlet devices" })
+  }
+})
+
+// Remove/deactivate outlet device
+router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+    const { deviceId } = req.params
+
+    if (!teleshopManager.branchId) {
+      return res.status(403).json({ error: "You must be assigned to a branch" })
+    }
+
+    // Remove from displaySettings
+    const outlet = await prisma.outlet.findUnique({
+      where: { id: teleshopManager.branchId },
+      select: { displaySettings: true }
+    })
+
+    const displaySettings = outlet?.displaySettings as any || {}
+    const linkedDevices = displaySettings.linkedDevices || []
+    const updatedDevices = linkedDevices.filter((device: any) => device.id !== deviceId)
+
+    await prisma.outlet.update({
+      where: { id: teleshopManager.branchId },
+      data: { 
+        displaySettings: {
+          ...displaySettings,
+          linkedDevices: updatedDevices
+        }
+      }
+    })
+
+    auditLog(
+      teleshopManager.id, 
+      "OUTLET_DEVICE_REMOVED", 
+      "outlet", 
+      teleshopManager.branchId, 
+      { deviceId: deviceId }
+    )
+
+    res.json({ success: true, message: "Device removed successfully" })
+
+  } catch (error: any) {
+    console.error("Remove outlet device error:", error)
+    res.status(500).json({ error: "Failed to remove device" })
+  }
+})
+
+export default router
