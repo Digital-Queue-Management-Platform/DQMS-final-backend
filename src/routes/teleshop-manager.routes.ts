@@ -275,7 +275,9 @@ router.get("/check-device-config/:deviceId", async (req, res) => {
           isConfigured: true,
           outletId: outlet.id,
           outletName: outlet.name,
-          baseUrl: "http://localhost:3001/api", // Replace with actual base URL
+          baseUrl: process.env.NODE_ENV === 'development' 
+            ? "http://10.0.2.2:3001/" // Emulator: use 10.0.2.2, Real device: change to your computer's IP
+            : "http://10.0.2.2:3001/", // Production: adjust as needed
           device: {
             deviceId: configuredDevice.deviceId,
             deviceName: configuredDevice.deviceName,
