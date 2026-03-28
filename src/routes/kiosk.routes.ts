@@ -127,7 +127,21 @@ router.get("/services", async (req, res) => {
 router.post("/tokens", async (req: any, res: any) => {
   try {
     const { outletId } = req.kiosk
-    const { name, mobileNumber, serviceTypes, preferredLanguages, nicNumber, email, sltMobileNumber, accountRef, sltTelephoneNumber, billPaymentIntent, billPaymentAmount, billPaymentMethod } = req.body
+    const { 
+      name, 
+      mobileNumber, 
+      serviceTypes, 
+      preferredLanguages, 
+      nicNumber, 
+      email, 
+      sltMobileNumber, 
+      accountRef, 
+      sltTelephoneNumber, 
+      sltTelephoneNumbers, // New array field for multiple numbers
+      billPaymentIntent, 
+      billPaymentAmount, 
+      billPaymentMethod 
+    } = req.body
     logger.info({ mobileNumber, serviceTypes }, '[KIOSK] Received token generation request')
 
     const prioritySettingRows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
@@ -139,6 +153,33 @@ router.post("/tokens", async (req: any, res: any) => {
       SELECT id FROM "Service" WHERE "code" = ANY(${serviceTypes}::text[]) AND "isPriorityService" = true LIMIT 1
     ` as any[]
     const autoPriority = priorityFeatureEnabled && priorityServices.length > 0
+
+    // Handle both single and multiple telephone numbers for backward compatibility
+    let telephoneNumbersToProcess: string[] = []
+    
+    if (sltTelephoneNumbers && Array.isArray(sltTelephoneNumbers) && sltTelephoneNumbers.length > 0) {
+      telephoneNumbersToProcess = sltTelephoneNumbers
+    } else if (sltTelephoneNumber) {
+      telephoneNumbersToProcess = [sltTelephoneNumber]
+    }
+
+    // Validate telephone numbers if provided
+    if (telephoneNumbersToProcess.length > 0) {
+      const phoneRegex = /^\d{10}$/
+      const invalidNumbers = telephoneNumbersToProcess.filter(num => !phoneRegex.test(num))
+      
+      if (invalidNumbers.length > 0) {
+        return res.status(400).json({
+          error: `Invalid telephone numbers. Must be 10 digits: ${invalidNumbers.join(', ')}`
+        })
+      }
+
+      if (telephoneNumbersToProcess.length > 10) { // Limit to prevent abuse
+        return res.status(400).json({
+          error: 'Maximum 10 telephone numbers allowed per token.'
+        })
+      }
+    }
 
     // Validate bill payment intent if provided
     if (billPaymentIntent && !['full', 'partial'].includes(billPaymentIntent)) {
@@ -174,7 +215,7 @@ router.post("/tokens", async (req: any, res: any) => {
       normalizedMobile = '0' + normalizedMobile.substring(2)
     }
 
-    // Always create a new customer record even if mobileNumber repeats (parallels customer.routes.ts logic)
+    // Always create a new customer record even if mobileNumber repeats
     const customer = await prisma.customer.create({
       data: {
         name: name.trim(),
@@ -204,7 +245,7 @@ router.post("/tokens", async (req: any, res: any) => {
       const tokenNumber = lastToken ? lastToken.tokenNumber + 1 : 1
 
       // Create the token
-      return await tx.token.create({
+      const newToken = await tx.token.create({
         data: {
           tokenNumber,
           customerId: customer.id,
@@ -214,7 +255,7 @@ router.post("/tokens", async (req: any, res: any) => {
           status: "waiting",
           isPriority: autoPriority,
           outletId: outletId,
-          sltTelephoneNumber: sltTelephoneNumber?.trim() || null,
+          sltTelephoneNumber: sltTelephoneNumber?.trim() || null, // Keep for backward compatibility
           billPaymentIntent: billPaymentIntent || null,
           billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : null,
           billPaymentMethod: billPaymentMethod || null,
@@ -234,8 +275,24 @@ router.post("/tokens", async (req: any, res: any) => {
           }
         }
       })
+
+      // Create TokenBill entries for multiple telephone numbers
+      if (telephoneNumbersToProcess.length > 0) {
+        for (const phoneNumber of telephoneNumbersToProcess) {
+          await tx.tokenBill.create({
+            data: {
+              tokenId: newToken.id,
+              telephoneNumber: phoneNumber,
+              billPaymentIntent: billPaymentIntent || null,
+              billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : null,
+            }
+          })
+        }
+      }
+
+      return newToken
     }, {
-      timeout: 10000, // 10 second timeout
+      timeout: 15000, // Increased timeout for multiple telephone number processing
     })
 
     // Broadcast new token to officers queue system
@@ -251,7 +308,8 @@ router.post("/tokens", async (req: any, res: any) => {
         outletName: token.outlet.name,
         serviceTypes: token.serviceTypes,
         status: token.status,
-        createdAt: token.createdAt
+        createdAt: token.createdAt,
+        telephoneNumbers: telephoneNumbersToProcess // Include the telephone numbers in response
       }
     }
 

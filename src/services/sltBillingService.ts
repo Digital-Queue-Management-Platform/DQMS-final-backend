@@ -30,6 +30,45 @@ interface SltApiResponse {
   [key: string]: any;
 }
 
+interface MultiBillResult {
+  success: boolean;
+  bills: SltBillInfo[];
+  errors: { phoneNumber: string; error: string }[];
+}
+
+/**
+ * Fetch bill information from SLT API for multiple telephone numbers
+ * @param sltNumbers - Array of SLT telephone numbers (e.g., ["0112123456", "0112123457"])
+ * @returns Results for all telephone numbers with success/error status
+ */
+export async function fetchMultipleBillsFromSltApi(sltNumbers: string[]): Promise<MultiBillResult> {
+  const bills: SltBillInfo[] = [];
+  const errors: { phoneNumber: string; error: string }[] = [];
+
+  // Process each number sequentially to avoid overwhelming the API
+  for (const sltNumber of sltNumbers) {
+    try {
+      const billInfo = await fetchBillFromSltApi(sltNumber);
+      bills.push(billInfo);
+    } catch (error: any) {
+      console.error(`Error fetching bill for ${sltNumber}:`, error.message);
+      errors.push({
+        phoneNumber: sltNumber,
+        error: error.message || 'Failed to fetch bill information'
+      });
+    }
+
+    // Add a small delay to prevent API rate limiting
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+
+  return {
+    success: bills.length > 0,
+    bills,
+    errors
+  };
+}
+
 /**
  * Fetch bill information from SLT API
  * @param sltNumber - SLT telephone number (e.g., "0112123456")
@@ -112,6 +151,76 @@ export async function fetchBillFromSltApi(sltNumber: string): Promise<SltBillInf
     }
 
     throw new Error(`Failed to fetch bill information: ${error.message}`);
+  }
+}
+
+/**
+ * Send bill notification to registered owner using SLT API
+ * This triggers SLT to send due amount SMS to the account holder
+ * @param sltNumber - SLT telephone number (e.g., "0412255897")
+ * @returns Success status from SLT API
+ */
+export async function sendBillNotificationToOwner(sltNumber: string): Promise<{ success: boolean; message?: string }> {
+  try {
+    // Validate telephone number format
+    const phoneRegex = /^\d{10}$/;
+    if (!phoneRegex.test(sltNumber)) {
+      throw new Error('Invalid telephone number. Must be 10 digits.');
+    }
+
+    console.log(`Sending bill notification for SLT number: ${sltNumber}`);
+
+    // Make request to SLT SendBillInfo API to trigger SMS to registered owner
+    const response = await axios.post(
+      `https://omnilogin.slt.lk/DigitalQMS/api/Main/SendBillInfo?sltNumber=${sltNumber}`,
+      {
+        sltNumber: sltNumber
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        timeout: 10000, // 10 second timeout
+      }
+    );
+
+    console.log(`SLT Bill Notification API response for ${sltNumber}:`, response.status, response.data);
+
+    // Check if the response indicates success
+    if (response.status === 200) {
+      return {
+        success: true,
+        message: `Bill notification sent to registered owner of ${sltNumber}`
+      };
+    } else {
+      return {
+        success: false,
+        message: `Failed to send notification: HTTP ${response.status}`
+      };
+    }
+
+  } catch (error: any) {
+    console.error(`Error sending bill notification for ${sltNumber}:`, error.message);
+    
+    if (error.response) {
+      const statusCode = error.response.status;
+      const errorMessage = error.response.data?.message || error.response.data?.error || 'Unknown error';
+      
+      return {
+        success: false,
+        message: `SLT API error (${statusCode}): ${errorMessage}`
+      };
+    } else if (error.request) {
+      return {
+        success: false,
+        message: 'No response from SLT API. Please try again later.'
+      };
+    }
+
+    return {
+      success: false,
+      message: `Failed to send bill notification: ${error.message}`
+    };
   }
 }
 

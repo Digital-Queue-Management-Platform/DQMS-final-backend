@@ -1,7 +1,8 @@
 import { Router } from "express"
-import { prisma } from "../server"
+import { prisma, broadcast } from "../server"
 import * as jwt from "jsonwebtoken"
 import smsHelper from "../utils/smsHelper"
+import { getLastDailyReset } from "../utils/resetWindow"
 
 const router = Router()
 
@@ -24,10 +25,53 @@ function digitsOnly(m: string | undefined | null) {
 // Book an appointment
 router.post("/book", async (req, res) => {
   try {
-    const { name, mobileNumber, outletId, serviceTypes, appointmentAt, preferredLanguage, verifiedMobileToken, notes, email, nicNumber, sltTelephoneNumber, billPaymentIntent, billPaymentAmount, billPaymentMethod } = req.body || {}
+    const { 
+      name, 
+      mobileNumber, 
+      outletId, 
+      serviceTypes, 
+      appointmentAt, 
+      preferredLanguage, 
+      verifiedMobileToken, 
+      notes, 
+      email, 
+      nicNumber, 
+      sltTelephoneNumber, 
+      sltTelephoneNumbers, // New array field for multiple numbers
+      billPaymentIntent, 
+      billPaymentAmount, 
+      billPaymentMethod 
+    } = req.body || {}
 
     if (!name || !mobileNumber || !outletId || !Array.isArray(serviceTypes) || serviceTypes.length === 0 || !appointmentAt) {
       return res.status(400).json({ error: "Missing required fields" })
+    }
+
+    // Handle both single and multiple telephone numbers for backward compatibility
+    let telephoneNumbersToProcess: string[] = []
+    
+    if (sltTelephoneNumbers && Array.isArray(sltTelephoneNumbers) && sltTelephoneNumbers.length > 0) {
+      telephoneNumbersToProcess = sltTelephoneNumbers
+    } else if (sltTelephoneNumber) {
+      telephoneNumbersToProcess = [sltTelephoneNumber]
+    }
+
+    // Validate telephone numbers if provided
+    if (telephoneNumbersToProcess.length > 0) {
+      const phoneRegex = /^\d{10}$/
+      const invalidNumbers = telephoneNumbersToProcess.filter(num => !phoneRegex.test(num))
+      
+      if (invalidNumbers.length > 0) {
+        return res.status(400).json({
+          error: `Invalid telephone numbers. Must be 10 digits: ${invalidNumbers.join(', ')}`
+        })
+      }
+
+      if (telephoneNumbersToProcess.length > 10) { // Limit to prevent abuse
+        return res.status(400).json({
+          error: 'Maximum 10 telephone numbers allowed per appointment.'
+        })
+      }
     }
 
     // Enforce phone verification via OTP (same policy as registration)
@@ -82,29 +126,63 @@ router.post("/book", async (req, res) => {
       }
     }
 
-    // Create appointment using Prisma (handles array types properly)
-    const appt = await prisma.appointment.create({
-      data: {
-        name,
-        mobileNumber,
-        outletId,
-        serviceTypes,
-        preferredLanguage: preferredLanguage || undefined,
-        sltTelephoneNumber: sltTelephoneNumber || undefined,
-        billPaymentIntent: billPaymentIntent || undefined,
-        billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : undefined,
-        billPaymentMethod: billPaymentMethod || undefined,
-        appointmentAt: new Date(appointmentAt),
-        status: 'booked',
-        notes: notes || undefined,
-      },
+    // Create appointment (keep as 'booked' initially, will be queued based on time)
+    const appt = await prisma.$transaction(async (tx) => {
+      // Create the appointment
+      const newAppointment = await tx.appointment.create({
+        data: {
+          name,
+          mobileNumber,
+          outletId,
+          serviceTypes,
+          preferredLanguage: preferredLanguage || undefined,
+          sltTelephoneNumber: sltTelephoneNumber || undefined, // Keep for backward compatibility
+          billPaymentIntent: billPaymentIntent || undefined,
+          billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : undefined,
+          billPaymentMethod: billPaymentMethod || undefined,
+          appointmentAt: new Date(appointmentAt),
+          status: 'booked', // Keep as booked initially
+          notes: notes || undefined,
+        },
+      })
+
+      // Create AppointmentBill entries for multiple telephone numbers
+      if (telephoneNumbersToProcess.length > 0) {
+        for (const phoneNumber of telephoneNumbersToProcess) {
+          await tx.appointmentBill.create({
+            data: {
+              appointmentId: newAppointment.id,
+              telephoneNumber: phoneNumber,
+              billPaymentIntent: billPaymentIntent || null,
+              billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : null,
+            }
+          })
+        }
+      }
+
+      return newAppointment
+    }, {
+      timeout: 15000, // Increased timeout for multiple telephone number processing
     })
 
-    // Optionally upsert customer basics for smoother check-in later
+    // Create customer record for future queue processing
     try {
-      const existing = await prisma.customer.findFirst({ where: { mobileNumber } })
+      const existing = await prisma.customer.findFirst({ 
+        where: { 
+          mobileNumber,
+          name 
+        } 
+      })
+      
       if (!existing) {
-        await prisma.customer.create({ data: { name, mobileNumber, nicNumber: nicNumber || undefined, email: email || undefined } })
+        await prisma.customer.create({ 
+          data: { 
+            name, 
+            mobileNumber, 
+            nicNumber: nicNumber || undefined, 
+            email: email || undefined 
+          } 
+        })
       }
     } catch (e) {
       // best-effort, ignore failures
@@ -155,6 +233,174 @@ router.post("/book", async (req, res) => {
   }
 })
 
+// Process pending appointments (called by scheduler)
+router.post("/process-pending", async (req, res) => {
+  try {
+    const now = new Date()
+    
+    // Find appointments that should be queued (within 2 hours of appointment time)
+    const queueWindowMinutes = 120 // 2 hours
+    const queueTime = new Date(now.getTime() + queueWindowMinutes * 60 * 1000)
+    
+    const appointmentsToQueue = await prisma.appointment.findMany({
+      where: {
+        status: 'booked',
+        appointmentAt: {
+          lte: queueTime
+        }
+      }
+    })
+
+    const results = {
+      queued: 0,
+      reminders1h: 0,
+      reminders30m: 0,
+      errors: 0
+    }
+
+    for (const appt of appointmentsToQueue) {
+      try {
+        const minutesUntilAppt = Math.floor((new Date(appt.appointmentAt).getTime() - now.getTime()) / (1000 * 60))
+        
+        // Send 1-hour reminder (55-65 minutes before)
+        if (minutesUntilAppt >= 55 && minutesUntilAppt <= 65) {
+          const outlet = await prisma.outlet.findUnique({ where: { id: appt.outletId } })
+          await smsHelper.sendAppointmentReminder(appt.mobileNumber, {
+            name: appt.name,
+            outletName: outlet?.name || 'SLT Office',
+            dateTime: new Date(appt.appointmentAt).toLocaleString('en-GB', { timeZone: 'Asia/Colombo' }),
+            minutesRemaining: minutesUntilAppt
+          }, appt.preferredLanguage as 'en' | 'si' | 'ta' || 'en')
+          results.reminders1h++
+        }
+        
+        // Send 30-minute reminder (25-35 minutes before)
+        if (minutesUntilAppt >= 25 && minutesUntilAppt <= 35) {
+          const outlet = await prisma.outlet.findUnique({ where: { id: appt.outletId } })
+          await smsHelper.sendAppointmentReminder(appt.mobileNumber, {
+            name: appt.name,
+            outletName: outlet?.name || 'SLT Office',
+            dateTime: new Date(appt.appointmentAt).toLocaleString('en-GB', { timeZone: 'Asia/Colombo' }),
+            minutesRemaining: minutesUntilAppt
+          }, appt.preferredLanguage as 'en' | 'si' | 'ta' || 'en')
+          results.reminders30m++
+        }
+
+        // Add to queue (within 2 hours of appointment)
+        if (minutesUntilAppt <= queueWindowMinutes) {
+          await addAppointmentToQueue(appt)
+          results.queued++
+        }
+        
+      } catch (e) {
+        console.error(`Failed to process appointment ${appt.id}:`, e)
+        results.errors++
+      }
+    }
+
+    res.json({ 
+      success: true, 
+      message: `Processed ${appointmentsToQueue.length} appointments`,
+      results 
+    })
+  } catch (error) {
+    console.error("Process pending appointments error:", error)
+    res.status(500).json({ error: "Failed to process appointments" })
+  }
+})
+
+// Helper function to add appointment to queue
+async function addAppointmentToQueue(appt: any) {
+  const result = await prisma.$transaction(async (tx) => {
+    // Find or get customer
+    let customer = await tx.customer.findFirst({ 
+      where: { 
+        mobileNumber: appt.mobileNumber,
+        name: appt.name
+      } 
+    })
+    
+    if (!customer) {
+      customer = await tx.customer.create({ 
+        data: { 
+          name: appt.name, 
+          mobileNumber: appt.mobileNumber
+        } 
+      })
+    }
+
+    // Auto-detect priority
+    const priorityServices = await tx.$queryRaw`
+      SELECT id FROM "Service" WHERE "code" = ANY(${appt.serviceTypes}::text[]) AND "isPriorityService" = true LIMIT 1
+    ` as any[]
+    const autoPriority = priorityServices.length > 0
+
+    // Get last token number
+    const lastReset = getLastDailyReset()
+    const lastToken = await tx.token.findFirst({
+      where: {
+        outletId: appt.outletId,
+        createdAt: { gte: lastReset }
+      },
+      orderBy: { tokenNumber: 'desc' }
+    })
+
+    const tokenNumber = lastToken ? lastToken.tokenNumber + 1 : 1
+
+    // Create token
+    const token = await tx.token.create({
+      data: {
+        tokenNumber,
+        customerId: customer.id,
+        serviceTypes: appt.serviceTypes,
+        preferredLanguages: appt.preferredLanguage ? [appt.preferredLanguage] : [],
+        status: "waiting",
+        isPriority: autoPriority,
+        outletId: appt.outletId,
+        sltTelephoneNumber: appt.sltTelephoneNumber,
+        billPaymentIntent: appt.billPaymentIntent,
+        billPaymentAmount: appt.billPaymentAmount,
+        billPaymentMethod: appt.billPaymentMethod,
+      },
+      include: {
+        customer: {
+          select: {
+            name: true,
+            mobileNumber: true
+          }
+        }
+      }
+    })
+
+    // Update appointment status and link to token
+    await tx.appointment.update({
+      where: { id: appt.id },
+      data: { 
+        status: 'queued',
+        tokenId: token.id,
+        queuedAt: new Date()
+      }
+    })
+
+    return token
+  }, {
+    timeout: 10000
+  })
+
+  // Broadcast to officers
+  broadcast({ type: 'NEW_TOKEN', data: result })
+  
+  // Send token SMS to customer
+  const outlet = await prisma.outlet.findUnique({ where: { id: appt.outletId } })
+  try {
+    await smsHelper.sendTokenNotification(appt.mobileNumber, result.tokenNumber, 1, appt.preferredLanguage as 'en' | 'si' | 'ta' || 'en')
+  } catch (e) {
+    console.error('Failed to send token SMS:', e)
+  }
+  
+  return result
+}
+
 // List my appointments by mobile
 router.get("/my", async (req, res) => {
   try {
@@ -162,10 +408,76 @@ router.get("/my", async (req, res) => {
     if (!mobileNumber) return res.status(400).json({ error: "mobileNumber is required" })
 
     const now = new Date()
-    const appts: any = await prisma.$queryRaw`
-      SELECT * FROM "Appointment" WHERE "mobileNumber" = ${mobileNumber} ORDER BY "appointmentAt" ASC
-    `
-    res.json({ appointments: appts as any[], now: now.toISOString() })
+    const appts = await prisma.appointment.findMany({
+      where: { mobileNumber },
+      include: {
+        outlet: {
+          select: {
+            name: true,
+            location: true
+          }
+        }
+      },
+      orderBy: { appointmentAt: 'asc' }
+    })
+
+    // For queued appointments, fetch token details and calculate queue position
+    const enrichedAppts = await Promise.all(appts.map(async (appt) => {
+      let tokenInfo = null
+      let queueInfo = null
+      
+      if (appt.status === 'queued' && appt.tokenId) {
+        try {
+          // Get token details
+          const token = await prisma.token.findUnique({
+            where: { id: appt.tokenId },
+            select: {
+              id: true,
+              tokenNumber: true,
+              status: true,
+              createdAt: true,
+              customer: {
+                select: {
+                  name: true
+                }
+              }
+            }
+          })
+          
+          if (token) {
+            tokenInfo = token
+            
+            // Calculate queue position
+            const lastReset = getLastDailyReset()
+            const waitingAhead = await prisma.token.count({
+              where: {
+                outletId: appt.outletId,
+                status: 'waiting',
+                tokenNumber: { lt: token.tokenNumber },
+                createdAt: { gte: lastReset }
+              }
+            })
+            
+            const estimatedWaitMinutes = Math.max(5, waitingAhead * 5)
+            
+            queueInfo = {
+              position: waitingAhead + 1,
+              estimatedWaitMinutes
+            }
+          }
+        } catch (e) {
+          console.error('Failed to fetch token info:', e)
+        }
+      }
+      
+      return {
+        ...appt,
+        token: tokenInfo,
+        queueInfo
+      }
+    }))
+
+    res.json({ appointments: enrichedAppts, now: now.toISOString() })
   } catch (error) {
     console.error("Appointments fetch error:", error)
     res.status(500).json({ error: "Failed to fetch appointments" })
@@ -272,6 +584,124 @@ router.post("/:apptId/cancel", async (req, res) => {
   } catch (error) {
     console.error("Appointment cancel error:", error)
     res.status(500).json({ error: "Failed to cancel appointment" })
+  }
+})
+
+// Check-in an appointment (convert to token)
+router.post("/:apptId/checkin", async (req, res) => {
+  try {
+    const { apptId } = req.params
+
+    // Find the appointment
+    const appt = await prisma.appointment.findUnique({
+      where: { id: apptId },
+      include: {
+        outlet: true
+      }
+    })
+
+    if (!appt) {
+      return res.status(404).json({ error: "Appointment not found" })
+    }
+
+    if (appt.status !== 'booked') {
+      return res.status(400).json({ error: "Only booked appointments can be checked in" })
+    }
+
+    // Check if appointment already has a token
+    if (appt.tokenId) {
+      return res.status(400).json({ error: "Appointment already checked in" })
+    }
+
+    // Check priority service setting
+    const prioritySettingRows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
+      SELECT "booleanValue" FROM "AppSetting" WHERE "key" = 'priority_service_enabled' LIMIT 1
+    `
+    const priorityFeatureEnabled = prioritySettingRows[0]?.booleanValue ?? true
+
+    const priorityServices = await prisma.$queryRaw`
+      SELECT id FROM "Service" WHERE "code" = ANY(${appt.serviceTypes}::text[]) AND "isPriorityService" = true LIMIT 1
+    ` as any[]
+    const autoPriority = priorityFeatureEnabled && priorityServices.length > 0
+
+    // Create customer and token using appointment data
+    const token = await prisma.$transaction(async (tx) => {
+      // Create customer record using appointment name and mobile
+      const customer = await tx.customer.create({
+        data: {
+          name: appt.name,
+          mobileNumber: appt.mobileNumber,
+        }
+      })
+
+      // Lock outlet for token number generation
+      await tx.$executeRaw`SELECT id FROM "Outlet" WHERE id = ${appt.outletId} FOR UPDATE`
+
+      // Get next token number
+      const lastReset = getLastDailyReset()
+      const lastToken = await tx.token.findFirst({
+        where: { outletId: appt.outletId, createdAt: { gte: lastReset } },
+        orderBy: { tokenNumber: 'desc' }
+      })
+
+      const tokenNumber = lastToken ? lastToken.tokenNumber + 1 : 1
+
+      // Create token with appointment data
+      const newToken = await tx.token.create({
+        data: {
+          tokenNumber,
+          customerId: customer.id,
+          serviceTypes: appt.serviceTypes,
+          outletId: appt.outletId,
+          status: "waiting",
+          isPriority: autoPriority,
+          preferredLanguages: appt.preferredLanguage ? [appt.preferredLanguage] : undefined,
+          sltTelephoneNumber: appt.sltTelephoneNumber || null,
+          billPaymentIntent: appt.billPaymentIntent || null,
+          billPaymentAmount: appt.billPaymentAmount || null,
+          billPaymentMethod: appt.billPaymentMethod || null,
+        },
+        include: {
+          customer: true,
+          outlet: true,
+        }
+      })
+
+      // Update appointment with token reference and status
+      await tx.appointment.update({
+        where: { id: apptId },
+        data: {
+          tokenId: newToken.id,
+          status: 'queued',
+          queuedAt: new Date()
+        }
+      })
+
+      return newToken
+    }, { timeout: 10000 })
+
+    // Broadcast new token to queue
+    broadcast({ type: 'NEW_TOKEN', data: token })
+
+    console.log(`[APPT-CHECKIN] Appointment ${apptId} checked in as token #${token.tokenNumber}`)
+
+    res.json({
+      success: true,
+      message: "Appointment checked in successfully",
+      token: {
+        id: token.id,
+        tokenNumber: token.tokenNumber,
+        customerName: token.customer.name,
+        outletName: token.outlet.name,
+        serviceTypes: token.serviceTypes,
+        status: token.status,
+        createdAt: token.createdAt
+      }
+    })
+
+  } catch (error) {
+    console.error("Appointment check-in error:", error)
+    res.status(500).json({ error: "Failed to check in appointment" })
   }
 })
 

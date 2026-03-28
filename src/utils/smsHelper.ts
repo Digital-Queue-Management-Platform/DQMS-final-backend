@@ -91,15 +91,12 @@ class UnifiedSmsHelper {
     },
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SendSMSResult> {
-    const messages = {
-      en: `Dear Valued Customer\n\nYour appointment at ${details.outletName} is confirmed for ${details.dateTime}.\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} හි ඔබගේ හමුව ${details.dateTime} සඳහා තහවුරු කර ඇත.\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் சந்திப்பு ${details.dateTime} அன்று உறுதிப்படுத்தப்பட்டது.\n\nSLT-MOBITEL`
-    }
+    // Since SMS doesn't support Unicode properly, use English for all languages
+    const messageText = `Dear Valued Customer\n\nYour appointment at ${details.outletName} is confirmed for ${details.dateTime}.\n\nSLT-MOBITEL`
 
     return this.sendSMS({
       to: mobileNumber,
-      body: messages.en,
+      body: messageText,
       language: 'en'
     })
   }
@@ -114,15 +111,12 @@ class UnifiedSmsHelper {
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SendSMSResult> {
     const formattedToken = tokenNumber.toString().padStart(3, '0')
-    const messages = {
-      en: `Dear Valued Customer\n\nYour token number ${formattedToken} is now being called. Please proceed to Counter ${counterNumber}.\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\nඔබගේ ටෝකන් අංකය ${formattedToken} සඳහා දැන් කැඳවනු ලැබේ. කරුණාකර කවුන්ටර් ${counterNumber} වෙත පැමිණෙන්න.\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\nஉங்கள் டோக்கன் எண் ${formattedToken} தற்போது அழைக்கப்படுகிறது. தயவுசெய்து கவுண்டர் ${counterNumber} க்கு செல்லவும்.\n\nSLT-MOBITEL`
-    }
+    // Since SMS doesn't support Unicode properly, use English for all languages
+    const messageText = `Dear Valued Customer\n\nYour token number ${formattedToken} is now being called. Please proceed to Counter ${counterNumber}.\n\nSLT-MOBITEL`
 
     return this.sendSMS({
       to: mobileNumber,
-      body: messages.en,
+      body: messageText,
       language: 'en'
     })
   }
@@ -140,15 +134,12 @@ class UnifiedSmsHelper {
     },
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SendSMSResult> {
-    const messages = {
-      en: `Dear Valued Customer\n\nYour SLT account ${details.accountNumber} has an outstanding balance of Rs. ${details.amount}. Please settle the bill by ${details.dueDate} to avoid service interruption.\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\nඔබගේ SLT ගිණුම ${details.accountNumber} හි හිඟ ශේෂය රු. ${details.amount} කි. සේවා බාධාවන් වළක්වා ගැනීමට කරුණාකර ${details.dueDate} දිනට පෙර බිල්පත ගෙවන්න.\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\nஉங்கள் SLT கணக்கு ${details.accountNumber} இல் ரூ. ${details.amount} நிலுவைத் தொகை உள்ளது. சேவைத் தடையைத் தவிர்க்க தயவுசெய்து ${details.dueDate} க்குள் கட்டணத்தைச் செலுத்தவும்.\n\nSLT-MOBITEL`
-    }
+    // Since SMS doesn't support Unicode properly, use English for all languages
+    const messageText = `Dear Valued Customer\n\nYour SLT account ${details.accountNumber} has an outstanding balance of Rs. ${details.amount}. Please settle the bill by ${details.dueDate} to avoid service interruption.\n\nSLT-MOBITEL`
 
     return this.sendSMS({
       to: mobileNumber,
-      body: messages.en,
+      body: messageText,
       language: 'en'
     })
   }
@@ -168,15 +159,12 @@ class UnifiedSmsHelper {
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SendSMSResult> {
     const formattedToken = details.tokenNumber.toString().padStart(3, '0')
-    const messages = {
-      en: `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active (Queue Position: ${details.position || 1}).\n\nSLT-MOBITEL`,
-      si: `ගරු පාරිභෝගිකයා\n\n${details.outletName} ශාඛාවේ ඔබගේ ටෝකන් අංකය ${formattedToken} දැන් සක්‍රීයයි (පෝලිමේ ස්ථානය: ${details.position || 1}).\n\nSLT-MOBITEL`,
-      ta: `அன்பு வாடிக்கையாளரே\n\n${details.outletName} இல் உங்கள் டோக்கன் எண் ${formattedToken} இப்போது செயலில் உள்ளது (வரிசை நிலை: ${details.position || 1}).\n\nSLT-MOBITEL`
-    }
+    // Since SMS doesn't support Unicode properly, use English for all languages
+    const messageText = `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active (Queue Position: ${details.position || 1}).\n\nSLT-MOBITEL`
 
     return this.sendSMS({
       to: mobileNumber,
-      body: messages.en,
+      body: messageText,
       language: 'en'
     })
   }
@@ -209,6 +197,29 @@ class UnifiedSmsHelper {
   ): Promise<SendSMSResult> {
     const result = await sltSmsService.sendAppointmentCancellation(mobileNumber, details, language)
     return { success: result.success, provider: 'slt', error: result.error, messageId: result.messageId }
+  }
+
+  /**
+   * Send appointment reminder SMS
+   */
+  async sendAppointmentReminder(
+    mobileNumber: string,
+    details: {
+      name: string
+      outletName: string
+      dateTime: string
+      minutesRemaining: number
+    },
+    language: 'en' | 'si' | 'ta' = 'en'
+  ): Promise<SendSMSResult> {
+    // Since SMS doesn't support Unicode properly, use English for all languages
+    const messageText = `Dear Valued Customer\n\nReminder: Your appointment at ${details.outletName} is in ${details.minutesRemaining} minutes (${details.dateTime}).\n\nPlease arrive on time.\n\nSLT-MOBITEL`
+
+    return this.sendSMS({
+      to: mobileNumber,
+      body: messageText,
+      language: 'en'
+    })
   }
 }
 

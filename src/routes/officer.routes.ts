@@ -1696,23 +1696,53 @@ router.get("/stats/:officerId", async (req, res) => {
       include: { customer: true },
     })
 
-    // If the current token is a bill payment service, fetch the SLT bill data
+    // If the current token is a bill payment service, fetch all SLT bill data
     let billData = null
-    if (currentToken && ((currentToken.serviceTypes as string[]).includes('SVC002') || (currentToken.serviceTypes as string[]).includes('BILL_PAYMENT')) && (currentToken as any).sltTelephoneNumber) {
+    let multipleBills: any[] = []
+    if (currentToken && ((currentToken.serviceTypes as string[]).includes('SVC002') || (currentToken.serviceTypes as string[]).includes('BILL_PAYMENT'))) {
       try {
-        billData = await prisma.sltBill.findUnique({
-          where: { telephoneNumber: (currentToken as any).sltTelephoneNumber },
-          select: {
-            telephoneNumber: true,
-            accountName: true,
-            accountAddress: true,
-            currentBill: true,
-            dueDate: true,
-            status: true,
-            lastPaymentDate: true,
-            updatedAt: true,
+        // Check if this token has multiple bills through TokenBill junction table
+        const tokenBills = await prisma.tokenBill.findMany({
+          where: { tokenId: currentToken.id },
+          include: {
+            sltBill: {
+              select: {
+                telephoneNumber: true,
+                accountName: true,
+                accountAddress: true,
+                currentBill: true,
+                dueDate: true,
+                status: true,
+                lastPaymentDate: true,
+                updatedAt: true,
+              }
+            }
           }
         })
+
+        if (tokenBills.length > 0) {
+          // Multi-bill support: use TokenBill junction table
+          multipleBills = tokenBills.map(tokenBill => ({
+            ...tokenBill.sltBill,
+            billPaymentIntent: tokenBill.billPaymentIntent,
+            billPaymentAmount: tokenBill.billPaymentAmount
+          }))
+        } else if ((currentToken as any).sltTelephoneNumber) {
+          // Legacy single bill support: direct lookup
+          billData = await prisma.sltBill.findUnique({
+            where: { telephoneNumber: (currentToken as any).sltTelephoneNumber },
+            select: {
+              telephoneNumber: true,
+              accountName: true,
+              accountAddress: true,
+              currentBill: true,
+              dueDate: true,
+              status: true,
+              lastPaymentDate: true,
+              updatedAt: true,
+            }
+          })
+        }
       } catch (billError) {
         console.error('Failed to fetch bill data for token:', billError)
       }
@@ -1723,6 +1753,7 @@ router.get("/stats/:officerId", async (req, res) => {
       avgRating: avgRating._avg.rating || 0,
       currentToken,
       billData,
+      multipleBills, // Add array of multiple bills
     })
   } catch (error) {
     console.error("Stats error:", error)
