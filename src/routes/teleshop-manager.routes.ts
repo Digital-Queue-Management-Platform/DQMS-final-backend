@@ -2357,7 +2357,20 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
     }
 
     // Check if setup code has expired (within 1 hour of generation)
-    if (timestamp && Date.now() - timestamp > 3600000) {
+    const currentTime = Date.now()
+    const timeDiff = currentTime - timestamp
+    const hourInMs = 24 * 3600000 // 24 hours instead of 1 hour for testing
+    
+    console.log("QR Setup timestamp validation:", {
+      timestamp: timestamp,
+      currentTime: currentTime,
+      timeDiff: timeDiff,
+      timeDiffMinutes: Math.round(timeDiff / 60000),
+      isExpired: timeDiff > hourInMs,
+      hourLimit: hourInMs
+    })
+    
+    if (timestamp && timeDiff > hourInMs) {
       return res.status(400).json({ 
         error: "Setup code has expired. Please generate a new QR code on the Android TV device." 
       })
