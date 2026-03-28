@@ -247,6 +247,56 @@ const authenticateTeleshopManager = async (req: any, res: any, next: any) => {
   }
 }
 
+// Check if device has been configured (no authentication required for device polling)
+router.get("/check-device-config/:deviceId", async (req, res) => {
+  try {
+    const { deviceId } = req.params
+    
+    if (!deviceId) {
+      return res.status(400).json({ error: "Device ID is required" })
+    }
+
+    // Search all outlets for this device in their displaySettings
+    const outlets = await prisma.outlet.findMany({
+      select: { id: true, name: true, location: true, displaySettings: true }
+    })
+
+    for (const outlet of outlets) {
+      const displaySettings = outlet.displaySettings as any
+      const linkedDevices = displaySettings?.linkedDevices || []
+      
+      const configuredDevice = linkedDevices.find((device: any) => 
+        device.deviceId === deviceId && device.isActive
+      )
+
+      if (configuredDevice) {
+        // Device found and configured
+        return res.json({
+          isConfigured: true,
+          outletId: outlet.id,
+          outletName: outlet.name,
+          baseUrl: "http://localhost:3001/api", // Replace with actual base URL
+          device: {
+            deviceId: configuredDevice.deviceId,
+            deviceName: configuredDevice.deviceName,
+            configuredAt: configuredDevice.configuredAt
+          }
+        })
+      }
+    }
+
+    // Device not found or not configured
+    res.json({
+      isConfigured: false,
+      message: "Device not configured yet"
+    })
+
+  } catch (error) {
+    console.error("Check device config error:", error)
+    res.status(500).json({ error: "Failed to check device configuration" })
+  }
+})
+
 // Apply authentication middleware to protected routes
 router.use(authenticateTeleshopManager)
 
