@@ -2359,7 +2359,7 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
     // Check if setup code has expired (within 1 hour of generation)
     const currentTime = Date.now()
     const timeDiff = currentTime - timestamp
-    const hourInMs = 24 * 3600000 // 24 hours instead of 1 hour for testing
+    const hourInMs = 48 * 3600000 // 48 hours to handle old cached QR codes temporarily
     
     console.log("QR Setup timestamp validation:", {
       timestamp: timestamp,
