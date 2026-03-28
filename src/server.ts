@@ -9,6 +9,7 @@ import { PrismaClient } from "@prisma/client"
 import compression from "compression"
 import pino from "pino"
 import { getNextDailyReset, getLastDailyReset } from "./utils/resetWindow"
+import smsHelper from "./utils/smsHelper"
 
 // Import routes
 import customerRoutes from "./routes/customer.routes"
@@ -428,14 +429,18 @@ if (process.env.DISABLE_LONG_WAIT_JOB !== "true") {
 // Officers should only go offline when they explicitly logout or close browser window
 // The timeout-based presence detection has been disabled as requested
 
-// Auto-enqueue upcoming appointments
+// Auto-enqueue upcoming appointments and send reminders
 const APPOINTMENT_ENQUEUE_AHEAD_MIN = Number(process.env.APPOINTMENT_ENQUEUE_AHEAD_MIN || 15) // minutes before slot
-const APPOINTMENT_POLL_MS = 60 * 1000
+const APPOINTMENT_POLL_MS = 60 * 1000 // Check every minute
+const REMINDER_1H_MIN = 60 // 1 hour reminder
+const REMINDER_30M_MIN = 30 // 30 minute reminder
 
 async function processAppointments() {
   try {
     const now = new Date()
     const ahead = new Date(now.getTime() + APPOINTMENT_ENQUEUE_AHEAD_MIN * 60 * 1000)
+    const reminder1hTime = new Date(now.getTime() + REMINDER_1H_MIN * 60 * 1000)
+    const reminder30mTime = new Date(now.getTime() + REMINDER_30M_MIN * 60 * 1000)
 
     // Fetch due appointments (booked, today, appointmentAt <= ahead)
     const startOfDay = new Date()
@@ -443,6 +448,7 @@ async function processAppointments() {
     const endOfDay = new Date()
     endOfDay.setHours(23, 59, 59, 999)
 
+    // Get appointments for queueing
     const dueAppointments: any = await prisma.$queryRaw`
       SELECT * FROM "Appointment"
       WHERE "status" = 'booked'
@@ -451,6 +457,87 @@ async function processAppointments() {
       ORDER BY "appointmentAt" ASC
     `
 
+    // Get appointments for 1-hour reminders
+    const reminder1hAppointments: any = await prisma.$queryRaw`
+      SELECT * FROM "Appointment"
+      WHERE "status" = 'booked'
+        AND "appointmentAt" BETWEEN ${new Date(now.getTime() + 55 * 60 * 1000)} AND ${new Date(now.getTime() + 65 * 60 * 1000)}
+        AND ("reminder1hSentAt" IS NULL OR "reminder1hSentAt" < ${new Date(Date.now() - 24 * 60 * 60 * 1000)})
+    `
+
+    // Get appointments for 30-minute reminders
+    const reminder30mAppointments: any = await prisma.$queryRaw`
+      SELECT * FROM "Appointment"
+      WHERE "status" = 'booked'
+        AND "appointmentAt" BETWEEN ${new Date(now.getTime() + 25 * 60 * 1000)} AND ${new Date(now.getTime() + 35 * 60 * 1000)}
+        AND ("reminder30mSentAt" IS NULL OR "reminder30mSentAt" < ${new Date(Date.now() - 24 * 60 * 60 * 1000)})
+    `
+
+    // Send 1-hour reminders
+    for (const appt of reminder1hAppointments) {
+      try {
+        const outlet = await prisma.outlet.findUnique({ where: { id: appt.outletId } })
+        const minutesUntil = Math.round((new Date(appt.appointmentAt).getTime() - now.getTime()) / (1000 * 60))
+        
+        await smsHelper.sendAppointmentReminder(appt.mobileNumber, {
+          name: appt.name,
+          outletName: outlet?.name || 'SLT Office',
+          dateTime: new Date(appt.appointmentAt).toLocaleString('en-GB', { 
+            timeZone: 'Asia/Colombo',
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          }),
+          minutesRemaining: minutesUntil
+        }, appt.preferredLanguage as 'en' | 'si' | 'ta' || 'en')
+
+        // Mark reminder as sent
+        await prisma.appointment.update({
+          where: { id: appt.id },
+          data: { reminder1hSentAt: new Date() }
+        })
+
+        logger.info(`Sent 1-hour reminder for appointment ${appt.id} to ${appt.mobileNumber}`)
+      } catch (e) {
+        logger.error({ err: e, appointmentId: appt.id }, 'Failed to send 1-hour reminder')
+      }
+    }
+
+    // Send 30-minute reminders
+    for (const appt of reminder30mAppointments) {
+      try {
+        const outlet = await prisma.outlet.findUnique({ where: { id: appt.outletId } })
+        const minutesUntil = Math.round((new Date(appt.appointmentAt).getTime() - now.getTime()) / (1000 * 60))
+        
+        await smsHelper.sendAppointmentReminder(appt.mobileNumber, {
+          name: appt.name,
+          outletName: outlet?.name || 'SLT Office',
+          dateTime: new Date(appt.appointmentAt).toLocaleString('en-GB', { 
+            timeZone: 'Asia/Colombo',
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          }),
+          minutesRemaining: minutesUntil
+        }, appt.preferredLanguage as 'en' | 'si' | 'ta' || 'en')
+
+        // Mark reminder as sent
+        await prisma.appointment.update({
+          where: { id: appt.id },
+          data: { reminder30mSentAt: new Date() }
+        })
+
+        logger.info(`Sent 30-minute reminder for appointment ${appt.id} to ${appt.mobileNumber}`)
+      } catch (e) {
+        logger.error({ err: e, appointmentId: appt.id }, 'Failed to send 30-minute reminder')
+      }
+    }
+
+    // Queue appointments
     for (const appt of dueAppointments as any[]) {
       try {
         const result = await prisma.$transaction(async (tx) => {
@@ -505,6 +592,7 @@ async function processAppointments() {
         if (result?.createdTokenId) {
           // Notify clients so officer queue refreshes automatically
           broadcast({ type: 'NEW_TOKEN', data: { tokenId: result.createdTokenId, outletId: result.outletId } })
+          logger.info(`Queued appointment ${appt.id} as token ${result.createdTokenId}`)
         }
       } catch (e) {
         logger.error({ err: e, appointmentId: appt?.id }, 'Failed to enqueue appointment')

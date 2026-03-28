@@ -315,6 +315,8 @@ model Appointment {
   billPaymentIntent  String?
   billPaymentAmount  Float?
   billPaymentMethod  String?
+  reminder1hSentAt   DateTime?
+  reminder30mSentAt  DateTime?
   outlet             Outlet    @relation(fields: [outletId], references: [id])
 
   @@index([outletId, appointmentAt])
