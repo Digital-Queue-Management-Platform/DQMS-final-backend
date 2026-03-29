@@ -1696,6 +1696,13 @@ router.get("/stats/:officerId", async (req, res) => {
       include: { customer: true },
     })
 
+    console.log('DEBUG: Officer stats - currentToken:', currentToken ? {
+      id: currentToken.id,
+      tokenNumber: currentToken.tokenNumber,
+      customerId: currentToken.customerId,
+      customer: currentToken.customer
+    } : null)
+
     // If the current token is a bill payment service, fetch all SLT bill data
     let billData = null
     let multipleBills: any[] = []
@@ -1909,7 +1916,7 @@ router.get("/dashboard-combined", async (req, res) => {
     }, 0)
     const avgHandleMinutes = servedTokens.length > 0 ? Math.round(totalMinutes / servedTokens.length * 10) / 10 : 0
 
-    res.json({
+    const responseData = {
       officer,
       stats: {
         tokensHandled,
@@ -1937,8 +1944,19 @@ router.get("/dashboard-combined", async (req, res) => {
         total: feedbackList.length,
         avgRating: feedbackList.length > 0 ? Math.round((feedbackList.reduce((s, f) => s + f.rating, 0) / feedbackList.length) * 10) / 10 : 0,
         feedback: feedbackList
-      }
-    })
+      },
+      billData,
+      multipleBills
+    }
+
+    console.log('DEBUG: Officer stats response - currentToken in response:', responseData.stats.currentToken ? {
+      id: responseData.stats.currentToken.id,
+      tokenNumber: responseData.stats.currentToken.tokenNumber,
+      customerId: responseData.stats.currentToken.customerId,
+      customer: responseData.stats.currentToken.customer
+    } : null)
+
+    res.json(responseData)
   } catch (error) {
     console.error("Dashboard combined error:", error)
     res.status(500).json({ error: "Failed to fetch dashboard data" })

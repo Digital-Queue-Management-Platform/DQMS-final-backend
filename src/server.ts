@@ -546,10 +546,40 @@ async function processAppointments() {
           const apptRow: any = Array.isArray(apptRows) ? apptRows[0] : null
           if (!apptRow || apptRow.status !== 'booked') return
 
-          // Ensure customer exists
-          let customer = await tx.customer.findFirst({ where: { mobileNumber: apptRow.mobileNumber } })
+          // Ensure customer exists - find the most recent customer with matching mobile number and name
+          let customer = await tx.customer.findFirst({ 
+            where: { 
+              mobileNumber: apptRow.mobileNumber,
+              name: apptRow.name
+            },
+            orderBy: { createdAt: 'desc' } // Prioritize recently created customers
+          })
+          
+          // If still no customer found, check if there's a case sensitivity or whitespace issue
+          if (!customer) {
+            console.log('DEBUG: Exact match not found, trying case-insensitive search for appointment:', apptRow.name)
+            const allCustomersWithMobile = await tx.customer.findMany({
+              where: { mobileNumber: apptRow.mobileNumber }
+            })
+            
+            // Try to find a customer with the same name (case-insensitive and trimmed)
+            const targetName = apptRow.name.trim().toLowerCase()
+            const matchingCustomer = allCustomersWithMobile.find(c => 
+              c.name.trim().toLowerCase() === targetName
+            )
+            
+            if (matchingCustomer) {
+              customer = matchingCustomer
+              console.log('DEBUG: Found customer via case-insensitive search:', customer)
+            }
+          }
+          
+          // If still no customer, create one
           if (!customer) {
             customer = await tx.customer.create({ data: { name: apptRow.name, mobileNumber: apptRow.mobileNumber } })
+            console.log('DEBUG: Created new customer for appointment:', customer)
+          } else {
+            console.log('DEBUG: Found existing customer for appointment:', customer)
           }
 
           // Next token number for outlet today

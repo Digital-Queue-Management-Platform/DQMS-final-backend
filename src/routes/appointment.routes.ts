@@ -313,12 +313,69 @@ router.post("/process-pending", async (req, res) => {
 async function addAppointmentToQueue(appt: any) {
   const result = await prisma.$transaction(async (tx) => {
     // Find or get customer
+    console.log('DEBUG: Appointment check-in - Looking for customer:', {
+      mobileNumber: appt.mobileNumber,
+      name: appt.name
+    })
+    
+    // Debug: Check all customers with this mobile number
+    const allCustomersWithMobile = await tx.customer.findMany({
+      where: { mobileNumber: appt.mobileNumber },
+      select: { id: true, name: true, mobileNumber: true, createdAt: true }
+    })
+    console.log('DEBUG: All customers with mobile number:', allCustomersWithMobile)
+    
+    // Find the most recently created customer with matching mobile number and name
     let customer = await tx.customer.findFirst({ 
       where: { 
         mobileNumber: appt.mobileNumber,
         name: appt.name
-      } 
+      },
+      orderBy: { createdAt: 'desc' } // Prioritize recently created customers
     })
+    
+    // If still no customer found, check if there's a case sensitivity or whitespace issue
+    if (!customer) {
+      console.log('DEBUG: Exact match not found, trying case-insensitive search')
+      const allCustomersWithMobile = await tx.customer.findMany({
+        where: { mobileNumber: appt.mobileNumber }
+      })
+      
+      // Try to find a customer with the same name (case-insensitive and trimmed)
+      const targetName = appt.name.trim().toLowerCase()
+      const matchingCustomer = allCustomersWithMobile.find(c => 
+        c.name.trim().toLowerCase() === targetName
+      )
+      
+      if (matchingCustomer) {
+        customer = matchingCustomer
+        console.log('DEBUG: Found customer via case-insensitive match:', {
+          customerId: customer.id,
+          exactName: customer.name,
+          targetName: appt.name
+        })
+      }
+    }
+    
+    console.log('DEBUG: Appointment check-in - Found existing customer:', customer ? {
+      id: customer.id,
+      name: customer.name,
+      mobileNumber: customer.mobileNumber,
+      matches: {
+        nameMatch: customer.name === appt.name,
+        mobileMatch: customer.mobileNumber === appt.mobileNumber
+      }
+    } : null)
+    
+    // If we found a customer, verify it's the right one
+    if (customer && customer.name !== appt.name) {
+      console.error('DEBUG: CUSTOMER MISMATCH - Found customer with different name!', {
+        expectedName: appt.name,
+        actualName: customer.name,
+        customerId: customer.id,
+        query: { mobileNumber: appt.mobileNumber, name: appt.name }
+      })
+    }
     
     if (!customer) {
       customer = await tx.customer.create({ 
@@ -326,6 +383,12 @@ async function addAppointmentToQueue(appt: any) {
           name: appt.name, 
           mobileNumber: appt.mobileNumber
         } 
+      })
+      
+      console.log('DEBUG: Appointment check-in - Created new customer:', {
+        id: customer.id,
+        name: customer.name,
+        mobileNumber: customer.mobileNumber
       })
     }
 
@@ -348,6 +411,14 @@ async function addAppointmentToQueue(appt: any) {
     const tokenNumber = lastToken ? lastToken.tokenNumber + 1 : 1
 
     // Create token
+    console.log('DEBUG: Appointment check-in - About to create token with customer:', {
+      customerId: customer.id,
+      customerName: customer.name,
+      customerMobileNumber: customer.mobileNumber,
+      appointmentName: appt.name,
+      appointmentMobile: appt.mobileNumber
+    })
+    
     const token = await tx.token.create({
       data: {
         tokenNumber,
@@ -370,6 +441,13 @@ async function addAppointmentToQueue(appt: any) {
           }
         }
       }
+    })
+    
+    console.log('DEBUG: Appointment check-in - Token created:', {
+      tokenId: token.id,
+      tokenNumber: token.tokenNumber,
+      customerId: token.customerId,
+      customerFromToken: token.customer
     })
 
     // Update appointment status and link to token
@@ -702,6 +780,136 @@ router.post("/:apptId/checkin", async (req, res) => {
   } catch (error) {
     console.error("Appointment check-in error:", error)
     res.status(500).json({ error: "Failed to check in appointment" })
+  }
+})
+
+// DEBUG: Customer lookup test endpoint
+router.get("/debug/customers/:mobile", async (req, res) => {
+  try {
+    const { mobile } = req.params
+    const customers = await prisma.customer.findMany({
+      where: { mobileNumber: mobile },
+      select: { id: true, name: true, mobileNumber: true, createdAt: true },
+      orderBy: { createdAt: 'asc' }
+    })
+    
+    const tokens = await prisma.token.findMany({
+      where: { 
+        customer: { mobileNumber: mobile }
+      },
+      include: { customer: true },
+      orderBy: { tokenNumber: 'asc' }
+    })
+    
+    res.json({ 
+      mobileNumber: mobile,
+      customerCount: customers.length,
+      customers, 
+      tokenCount: tokens.length,
+      tokens: tokens.map(t => ({
+        id: t.id,
+        tokenNumber: t.tokenNumber,
+        status: t.status,
+        customerId: t.customerId,
+        customerName: t.customer?.name,
+        createdAt: t.createdAt
+      }))
+    })
+  } catch (error) {
+    console.error("Debug customer lookup error:", error)
+    res.status(500).json({ error: "Debug lookup failed", details: error.message })
+  }
+})
+
+// DEBUG: Test customer query
+router.get("/debug/test-query/:mobile/:name", async (req, res) => {
+  try {
+    const { mobile, name } = req.params
+    
+    const customer = await prisma.customer.findFirst({ 
+      where: { 
+        mobileNumber: mobile,
+        name: name
+      },
+      orderBy: { createdAt: 'desc' }
+    })
+    
+    const allCustomersWithMobile = await prisma.customer.findMany({
+      where: { mobileNumber: mobile },
+      select: { id: true, name: true, mobileNumber: true, createdAt: true },
+      orderBy: { createdAt: 'asc' }
+    })
+    
+    res.json({ 
+      searchCriteria: { mobileNumber: mobile, name: name },
+      foundCustomer: customer ? {
+        id: customer.id,
+        name: customer.name,
+        mobileNumber: customer.mobileNumber,
+        createdAt: customer.createdAt
+      } : null,
+      allCustomersWithMobile
+    })
+  } catch (error) {
+    console.error("Debug test query error:", error)
+    res.status(500).json({ error: "Debug test query failed", details: error.message })
+  }
+})
+
+// DEBUG: Appointment data inspection
+router.get("/debug/appointments/:mobile", async (req, res) => {
+  try {
+    const { mobile } = req.params
+    const appointments = await prisma.appointment.findMany({
+      where: { mobileNumber: mobile },
+      select: { 
+        id: true, 
+        name: true, 
+        mobileNumber: true, 
+        status: true,
+        appointmentAt: true,
+        tokenId: true,
+        createdAt: true 
+      },
+      orderBy: { createdAt: 'asc' }
+    })
+    
+    res.json({ 
+      mobileNumber: mobile,
+      appointmentCount: appointments.length,
+      appointments
+    })
+  } catch (error) {
+    console.error("Debug appointment lookup error:", error)
+    res.status(500).json({ error: "Debug appointment lookup failed", details: error.message })
+  }
+})
+
+// DEBUG: Reset appointments for reprocessing
+router.post("/debug/reset-appointments", async (req, res) => {
+  try {
+    const { mobile } = req.body
+    
+    // Reset appointment statuses from 'queued' to 'booked' so they can be reprocessed
+    const result = await prisma.appointment.updateMany({
+      where: { 
+        mobileNumber: mobile,
+        status: 'queued'
+      },
+      data: { 
+        status: 'booked',
+        tokenId: null
+      }
+    })
+    
+    res.json({ 
+      success: true,
+      message: `Reset ${result.count} appointments for mobile ${mobile}`,
+      resetCount: result.count
+    })
+  } catch (error) {
+    console.error("Debug reset appointments error:", error)
+    res.status(500).json({ error: "Reset failed", details: error.message })
   }
 })
 
