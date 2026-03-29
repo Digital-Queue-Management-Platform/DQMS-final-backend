@@ -30,7 +30,9 @@ import kioskRoutes from "./routes/kiosk.routes"
 import billRoutes from "./routes/bill.routes"
 import sltSmsRoutes from "./routes/slt-sms.routes"
 import utilsRoutes from "./routes/utils.routes"
+import logsRoutes from "./routes/logs.routes"
 import { healthTracker } from "./services/healthTracker"
+import { systemLogger, requestLoggerMiddleware, errorLoggerMiddleware } from "./services/systemLogger"
 
 export const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
@@ -40,9 +42,21 @@ export const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 // Global error handlers for better observability in production
 process.on("unhandledRejection", (reason, promise) => {
   logger.error({ reason, promise }, "UNHANDLED_REJECTION");
+  systemLogger.fatal("Unhandled Promise Rejection", {
+    service: 'backend',
+    module: 'process',
+    event: 'unhandled-rejection',
+    metadata: { reason: String(reason) }
+  });
 });
 process.on("uncaughtException", (err) => {
   logger.fatal({ err }, "UNCAUGHT_EXCEPTION - Process exiting...");
+  systemLogger.fatal("Uncaught Exception - Process exiting", {
+    service: 'backend',
+    module: 'process',
+    event: 'uncaught-exception',
+    stackTrace: err.stack
+  });
   process.exit(1);
 });
 
@@ -90,6 +104,9 @@ app.use(cookieParser())
 app.use(express.json({ limit: '20mb' }))
 app.use("/uploads", express.static(UPLOAD_DIR))
 
+// System logging middleware (logs errors and slow requests to database)
+app.use(requestLoggerMiddleware)
+
 // Performance instrumentation & aggregation
 const perfLogThreshold = Number(process.env.PERF_LOG_THRESHOLD_MS || 200)
 interface MetricStats { count: number; total: number; max: number; samples: number[] }
@@ -124,18 +141,36 @@ if (process.env.PERF_LOG !== "false") {
 wss.on("connection", (ws, req) => {
   const ip = req.socket.remoteAddress
   logger.info({ ip }, "WS_CLIENT_CONNECTED")
+  systemLogger.wsEvent('client-connected', `WebSocket client connected from ${ip}`, {
+    ipAddress: ip || undefined,
+    module: 'websocket',
+    metadata: { url: req.url }
+  })
 
   ws.on("error", (err) => {
     logger.error({ err, ip }, "WS_CLIENT_ERROR")
+    systemLogger.wsError('client-error', `WebSocket client error: ${err.message}`, {
+      ipAddress: ip || undefined,
+      stackTrace: err.stack
+    })
   })
 
   ws.on("close", () => {
     logger.info({ ip }, "WS_CLIENT_DISCONNECTED")
+    systemLogger.wsEvent('client-disconnected', `WebSocket client disconnected from ${ip}`, {
+      ipAddress: ip || undefined
+    })
   })
 })
 
 wss.on("error", (err) => {
   logger.error({ err }, "WSS_SERVER_ERROR")
+  systemLogger.fatal('WebSocket server error', {
+    service: 'backend',
+    module: 'websocket',
+    event: 'server-error',
+    stackTrace: err.stack
+  })
 })
 
 // Broadcast function for real-time updates
@@ -183,6 +218,7 @@ app.use("/api/kiosk", kioskRoutes)
 app.use("/api/bills", billRoutes)
 app.use("/api/slt-sms", sltSmsRoutes)
 app.use("/api/gm", gmRoutes)
+app.use("/api/logs", logsRoutes)
 app.use("/api/dgm", dgmRoutes)
 app.use("/api/utils", utilsRoutes)
 
@@ -368,11 +404,34 @@ server.listen(PORT, "0.0.0.0", () => {
     uploadDir: UPLOAD_DIR
   }, "SERVER_STARTED");
   
+  // Log server startup to system logs
+  systemLogger.info("Backend server started", {
+    service: 'backend',
+    module: 'server',
+    event: 'server-started',
+    metadata: {
+      port: PORT,
+      nodeEnv: process.env.NODE_ENV,
+      uploadDir: UPLOAD_DIR
+    }
+  });
+  
   // Early DB connection check
   prisma.$connect().then(() => {
     logger.info("DATABASE_CONNECTED");
+    systemLogger.info("Database connected successfully", {
+      service: 'backend',
+      module: 'database',
+      event: 'database-connected'
+    });
   }).catch((err: any) => {
     logger.error({ err }, "DATABASE_CONNECTION_FAILED_AT_STARTUP");
+    systemLogger.fatal("Database connection failed at startup", {
+      service: 'backend',
+      module: 'database',
+      event: 'database-connection-failed',
+      stackTrace: err.stack
+    });
   });
 
   try {
@@ -546,10 +605,40 @@ async function processAppointments() {
           const apptRow: any = Array.isArray(apptRows) ? apptRows[0] : null
           if (!apptRow || apptRow.status !== 'booked') return
 
-          // Ensure customer exists
-          let customer = await tx.customer.findFirst({ where: { mobileNumber: apptRow.mobileNumber } })
+          // Ensure customer exists - find the most recent customer with matching mobile number and name
+          let customer = await tx.customer.findFirst({ 
+            where: { 
+              mobileNumber: apptRow.mobileNumber,
+              name: apptRow.name
+            },
+            orderBy: { createdAt: 'desc' } // Prioritize recently created customers
+          })
+          
+          // If still no customer found, check if there's a case sensitivity or whitespace issue
+          if (!customer) {
+            console.log('DEBUG: Exact match not found, trying case-insensitive search for appointment:', apptRow.name)
+            const allCustomersWithMobile = await tx.customer.findMany({
+              where: { mobileNumber: apptRow.mobileNumber }
+            })
+            
+            // Try to find a customer with the same name (case-insensitive and trimmed)
+            const targetName = apptRow.name.trim().toLowerCase()
+            const matchingCustomer = allCustomersWithMobile.find(c => 
+              c.name.trim().toLowerCase() === targetName
+            )
+            
+            if (matchingCustomer) {
+              customer = matchingCustomer
+              console.log('DEBUG: Found customer via case-insensitive search:', customer)
+            }
+          }
+          
+          // If still no customer, create one
           if (!customer) {
             customer = await tx.customer.create({ data: { name: apptRow.name, mobileNumber: apptRow.mobileNumber } })
+            console.log('DEBUG: Created new customer for appointment:', customer)
+          } else {
+            console.log('DEBUG: Found existing customer for appointment:', customer)
           }
 
           // Next token number for outlet today
@@ -578,6 +667,36 @@ async function processAppointments() {
           
           let tokenId = newToken.id
           let createdTokenId = newToken.id
+
+          // Transfer bill data from AppointmentBill to TokenBill
+          const appointmentBills = await tx.appointmentBill.findMany({
+            where: { appointmentId: apptRow.id }
+          })
+
+          console.log('DEBUG: AUTO Processing - Found appointment bills:', {
+            appointmentId: apptRow.id,
+            count: appointmentBills.length,
+            bills: appointmentBills.map(b => ({
+              telephoneNumber: b.telephoneNumber,
+              billPaymentIntent: b.billPaymentIntent,
+              billPaymentAmount: b.billPaymentAmount
+            }))
+          })
+
+          // Create TokenBill entries for each AppointmentBill
+          if (appointmentBills.length > 0) {
+            for (const appointmentBill of appointmentBills) {
+              await tx.tokenBill.create({
+                data: {
+                  tokenId: newToken.id,
+                  telephoneNumber: appointmentBill.telephoneNumber,
+                  billPaymentIntent: appointmentBill.billPaymentIntent,
+                  billPaymentAmount: appointmentBill.billPaymentAmount,
+                }
+              })
+            }
+            console.log('DEBUG: AUTO Processing - Created TokenBill entries:', appointmentBills.length)
+          }
 
           // Update appointment to queued
           await tx.$executeRaw`

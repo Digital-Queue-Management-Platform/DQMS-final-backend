@@ -298,7 +298,7 @@ router.get("/validate-qr", async (req, res) => {
 // Register customer and create token
 router.post("/register", async (req, res) => {
   try {
-    const { name, mobileNumber, serviceTypes, outletId, qrToken, preferredLanguages, sltMobileNumber, nicNumber, email, verifiedMobileToken, sltTelephoneNumber, billPaymentIntent, billPaymentAmount, billPaymentMethod } = req.body
+    const { name, mobileNumber, serviceTypes, outletId, qrToken, preferredLanguages, sltMobileNumber, nicNumber, email, verifiedMobileToken, sltTelephoneNumber, billPaymentIntent, billPaymentAmount, billPaymentMethod, billPaymentCustomAmounts } = req.body
 
     console.log(`Registration attempt - Mobile: ${mobileNumber}, Outlet: ${outletId}, Services: ${serviceTypes}`)
 
@@ -452,6 +452,7 @@ router.post("/register", async (req, res) => {
           sltTelephoneNumber: sltTelephoneNumber?.trim() || null,
           billPaymentIntent: billPaymentIntent || null,
           billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : null,
+          billPaymentCustomAmounts: billPaymentIntent === 'partial' && billPaymentCustomAmounts ? billPaymentCustomAmounts : null,
           billPaymentMethod: billPaymentMethod || null,
         },
         include: {
