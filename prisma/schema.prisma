@@ -116,12 +116,15 @@ model Outlet {
   displaySettings   Json?
 
   appointments      Appointment[]
+  auditLogs         AuditLog[]
   closureNotices    ClosureNotice[]
   completedServices CompletedService[]
+  deviceHeartbeats  DeviceHeartbeat[]
   managerQRTokens   ManagerQRToken[]
   officers          Officer[]
   region            Region             @relation(fields: [regionId], references: [id])
   serviceCases      ServiceCase[]
+  systemLogs        SystemLog[]
   teleshopManagers  TeleshopManager[]
   tokens            Token[]
 }
@@ -135,7 +138,9 @@ model Region {
   managerLastLoginAt DateTime?
   createdAt        DateTime          @default(now())
   managerPassword  String?
+  auditLogs        AuditLog[]
   outlets          Outlet[]
+  systemLogs       SystemLog[]
   teleshopManagers TeleshopManager[]
 }
 
@@ -486,4 +491,113 @@ model OTP {
 
   @@index([mobileNumber, userType, verified])
   @@index([expiresAt])
+}
+
+// =============================================================================
+// SYSTEM LOGGING & MONITORING MODELS
+// =============================================================================
+
+model SystemLog {
+  id          String   @id @default(uuid())
+  timestamp   DateTime @default(now())
+  level       String   // info, warn, error, fatal
+  service     String   // backend, admin-ui, officer-ui, kiosk, display, etc.
+  module      String?  // auth, websocket, api, queue, etc.
+  event       String?  // login-failed, token-created, websocket-disconnect, etc.
+  message     String
+  stackTrace  String?  @db.Text
+  metadata    Json?    // Additional context data
+  
+  // Context fields
+  userId      String?
+  userRole    String?  // admin, officer, manager, customer, etc.
+  outletId    String?
+  regionId    String?
+  deviceId    String?
+  sessionId   String?
+  requestId   String?
+  appVersion  String?
+  ipAddress   String?
+  userAgent   String?
+  
+  // Relations
+  outlet      Outlet?  @relation(fields: [outletId], references: [id])
+  region      Region?  @relation(fields: [regionId], references: [id])
+  
+  @@index([timestamp])
+  @@index([level, timestamp])
+  @@index([service, timestamp])
+  @@index([outletId, timestamp])
+  @@index([userId, timestamp])
+  @@index([event, timestamp])
+  @@index([level, service, timestamp])
+}
+
+model DeviceHeartbeat {
+  id                String   @id @default(uuid())
+  deviceId          String   @unique
+  deviceType        String   // kiosk, display, tv-box, android-tv, etc.
+  outletId          String
+  status            String   @default("online") // online, offline, degraded
+  appVersion        String?
+  websocketConnected Boolean @default(false)
+  pollingMode       Boolean  @default(false)
+  ipAddress         String?
+  lastSeenAt        DateTime @default(now())
+  lastError         String?
+  lastErrorAt       DateTime?
+  metadata          Json?    // Device-specific info
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  outlet            Outlet   @relation(fields: [outletId], references: [id])
+  
+  @@index([outletId, status])
+  @@index([deviceType, status])
+  @@index([lastSeenAt])
+  @@index([status, lastSeenAt])
+}
+
+model DeploymentLog {
+  id            String   @id @default(uuid())
+  timestamp     DateTime @default(now())
+  service       String   // backend, frontend, nginx, display-app, etc.
+  environment   String   @default("production") // production, staging, development
+  branch        String?
+  commitHash    String?
+  status        String   // pending, in-progress, success, failed
+  triggeredBy   String?  // username or "auto"
+  duration      Int?     // seconds
+  output        String?  @db.Text
+  errorMessage  String?  @db.Text
+  notes         String?
+  
+  @@index([timestamp])
+  @@index([service, timestamp])
+  @@index([status, timestamp])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  timestamp   DateTime @default(now())
+  userId      String
+  userRole    String   // admin, manager, officer, etc.
+  action      String   // officer-created, display-settings-updated, etc.
+  targetType  String?  // officer, outlet, service, etc.
+  targetId    String?
+  outletId    String?
+  regionId    String?
+  changes     Json?    // Before/after values
+  metadata    Json?    // Additional context
+  message     String
+  ipAddress   String?
+  
+  outlet      Outlet?  @relation(fields: [outletId], references: [id])
+  region      Region?  @relation(fields: [regionId], references: [id])
+  
+  @@index([timestamp])
+  @@index([userId, timestamp])
+  @@index([action, timestamp])
+  @@index([outletId, timestamp])
+  @@index([userRole, timestamp])
 }
