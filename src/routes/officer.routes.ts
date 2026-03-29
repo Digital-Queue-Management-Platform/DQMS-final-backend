@@ -1916,6 +1916,55 @@ router.get("/dashboard-combined", async (req, res) => {
     }, 0)
     const avgHandleMinutes = servedTokens.length > 0 ? Math.round(totalMinutes / servedTokens.length * 10) / 10 : 0
 
+    // Fetch bill data if current token is a bill payment service
+    let billData = null
+    let multipleBills: any[] = []
+    if (currentToken && ((currentToken.serviceTypes as string[])?.includes('SVC002') || (currentToken.serviceTypes as string[])?.includes('BILL_PAYMENT'))) {
+      try {
+        const tokenBills = await prisma.tokenBill.findMany({
+          where: { tokenId: currentToken.id },
+          include: {
+            sltBill: {
+              select: {
+                telephoneNumber: true,
+                accountName: true,
+                accountAddress: true,
+                currentBill: true,
+                dueDate: true,
+                status: true,
+                lastPaymentDate: true,
+                updatedAt: true,
+              }
+            }
+          }
+        })
+
+        if (tokenBills.length > 0) {
+          multipleBills = tokenBills.map(tokenBill => ({
+            ...tokenBill.sltBill,
+            billPaymentIntent: tokenBill.billPaymentIntent,
+            billPaymentAmount: tokenBill.billPaymentAmount
+          }))
+        } else if ((currentToken as any).sltTelephoneNumber) {
+          billData = await prisma.sltBill.findUnique({
+            where: { telephoneNumber: (currentToken as any).sltTelephoneNumber },
+            select: {
+              telephoneNumber: true,
+              accountName: true,
+              accountAddress: true,
+              currentBill: true,
+              dueDate: true,
+              status: true,
+              lastPaymentDate: true,
+              updatedAt: true,
+            }
+          })
+        }
+      } catch (billError) {
+        console.error('Failed to fetch bill data for dashboard:', billError)
+      }
+    }
+
     const responseData = {
       officer,
       stats: {

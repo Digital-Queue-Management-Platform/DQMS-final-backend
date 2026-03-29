@@ -291,29 +291,35 @@ export const requestLoggerMiddleware = (
     
     // Only log errors and slow requests (>2s)
     if (statusCode >= 400 || duration > 2000) {
-      systemLogger.addToQueue(
-        statusCode >= 500 ? 'error' : statusCode >= 400 ? 'warn' : 'info',
-        `${req.method} ${req.path} ${statusCode} ${duration}ms`,
-        {
-          service: 'backend',
-          module: 'api',
-          event: statusCode >= 500 ? 'server-error' : statusCode >= 400 ? 'client-error' : 'slow-request',
-          requestId,
-          ipAddress: req.ip || req.connection?.remoteAddress,
-          userAgent: req.headers['user-agent'],
-          metadata: {
-            method: req.method,
-            path: req.path,
-            query: req.query,
-            statusCode,
-            duration,
-            headers: {
-              'content-type': req.headers['content-type'],
-              'accept': req.headers['accept']
-            }
+      const level = statusCode >= 500 ? 'error' : statusCode >= 400 ? 'warn' : 'info'
+      const logMessage = `${req.method} ${req.path} ${statusCode} ${duration}ms`
+      const logContext = {
+        service: 'backend',
+        module: 'api',
+        event: statusCode >= 500 ? 'server-error' : statusCode >= 400 ? 'client-error' : 'slow-request',
+        requestId,
+        ipAddress: req.ip || req.connection?.remoteAddress,
+        userAgent: req.headers['user-agent'],
+        metadata: {
+          method: req.method,
+          path: req.path,
+          query: req.query,
+          statusCode,
+          duration,
+          headers: {
+            'content-type': req.headers['content-type'],
+            'accept': req.headers['accept']
           }
         }
-      )
+      }
+      
+      if (level === 'error') {
+        systemLogger.error(logMessage, logContext)
+      } else if (level === 'warn') {
+        systemLogger.warn(logMessage, logContext)
+      } else {
+        systemLogger.info(logMessage, logContext)
+      }
     }
   })
   
