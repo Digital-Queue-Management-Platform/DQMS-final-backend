@@ -2672,6 +2672,16 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
       teleshopManager.branchId, 
       { deviceId: deviceId }
     )
+    
+    // Broadcast device removal to notify APK immediately
+    broadcast({
+      type: "DEVICE_REMOVED",
+      data: {
+        deviceId: deviceId,
+        outletId: teleshopManager.branchId,
+        removedBy: teleshopManager.id
+      }
+    })
 
     res.json({ success: true, message: "Device removed successfully" })
 
