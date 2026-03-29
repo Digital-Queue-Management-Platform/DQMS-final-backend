@@ -46,6 +46,7 @@ model Token {
   billPaymentIntent     String?
   billPaymentAmount     Float?
   billPaymentMethod     String?
+  billPaymentCustomAmounts Json?  // Store per-account payment amounts as {sltNumber: amount}
   completedServices  CompletedService[]
   feedback           Feedback?
   serviceCases       ServiceCase[]
