@@ -283,13 +283,15 @@ router.get("/check-device-config/:deviceId", async (req, res) => {
           isConfigured: true,
           outletId: outlet.id,
           outletName: outlet.name,
-          baseUrl: process.env.NODE_ENV === 'development' 
+          baseUrl: process.env.BASE_URL || (process.env.NODE_ENV === 'development' 
             ? "http://10.191.253.58:3001/" // Real device: use your computer's IP
-            : "http://10.191.253.58:3001/", // Production: adjust as needed
+            : `${req.protocol}://${req.get('host')}/`), // Use current request host
           device: {
             deviceId: configuredDevice.deviceId,
             deviceName: configuredDevice.deviceName,
-            configuredAt: configuredDevice.configuredAt
+            configuredAt: configuredDevice.configuredAt,
+            isActive: configuredDevice.isActive,
+            lastSeen: configuredDevice.lastSeen || null
           }
         })
       }
@@ -306,6 +308,110 @@ router.get("/check-device-config/:deviceId", async (req, res) => {
   } catch (error) {
     console.error("Check device config error:", error)
     res.status(500).json({ error: "Failed to check device configuration" })
+  }
+})
+
+// Device heartbeat endpoint (public - no auth required)
+router.put('/device-heartbeat/:deviceId', async (req: Request, res: Response) => {
+  try {
+    const { deviceId } = req.params
+    const { timestamp } = req.body
+
+    if (!deviceId) {
+      return res.status(400).json({ error: "Device ID is required" })
+    }
+
+    console.log(`Device heartbeat received from: ${deviceId}`)
+
+    // Find the outlet with this device
+    const outlets = await prisma.outlet.findMany({
+      where: { isActive: true }
+    })
+
+    for (const outlet of outlets) {
+      const displaySettings = outlet.displaySettings as any || {}
+      const linkedDevices = displaySettings.linkedDevices || []
+      
+      // Find the device in this outlet
+      const deviceIndex = linkedDevices.findIndex((device: any) => device.deviceId === deviceId)
+      
+      if (deviceIndex !== -1) {
+        // Update device's lastSeen timestamp
+        linkedDevices[deviceIndex].lastSeen = new Date().toISOString()
+        
+        const updatedDisplaySettings = {
+          ...displaySettings,
+          linkedDevices: linkedDevices
+        }
+
+        await prisma.outlet.update({
+          where: { id: outlet.id },
+          data: { displaySettings: updatedDisplaySettings }
+        })
+
+        console.log(`Updated lastSeen for device ${deviceId} in outlet ${outlet.name}`)
+        
+        return res.json({
+          success: true,
+          message: "Heartbeat recorded",
+          outletId: outlet.id,
+          outletName: outlet.name,
+          timestamp: linkedDevices[deviceIndex].lastSeen
+        })
+      }
+    }
+
+    // Device not found
+    res.status(404).json({ 
+      success: false,
+      error: "Device not found or not configured" 
+    })
+
+  } catch (error) {
+    console.error("Device heartbeat error:", error)
+    res.status(500).json({ error: "Failed to record device heartbeat" })
+  }
+})
+
+// Debug endpoint to check all device configurations (public for debugging)
+router.get('/debug/device-configs', async (req: Request, res: Response) => {
+  try {
+    const outlets = await prisma.outlet.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        name: true,
+        displaySettings: true
+      }
+    })
+
+    const deviceConfigs = outlets.map(outlet => {
+      const displaySettings = outlet.displaySettings as any || {}
+      const linkedDevices = displaySettings.linkedDevices || []
+      
+      return {
+        outletId: outlet.id,
+        outletName: outlet.name,
+        deviceCount: linkedDevices.length,
+        devices: linkedDevices.map((device: any) => ({
+          deviceId: device.deviceId,
+          deviceName: device.deviceName,
+          isActive: device.isActive,
+          configuredAt: device.configuredAt,
+          lastSeen: device.lastSeen || null
+        }))
+      }
+    })
+
+    res.json({
+      success: true,
+      totalOutlets: outlets.length,
+      deviceConfigurations: deviceConfigs
+    })
+
+  } catch (error) {
+    console.error("Debug device configs error:", error)
+    res.status(500).json({ error: "Failed to fetch device configurations" })
   }
 })
 
