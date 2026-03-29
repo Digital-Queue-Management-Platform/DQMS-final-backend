@@ -1,4 +1,4 @@
-import { Router } from "express"
+import { Router, Request, Response } from "express"
 import { prisma, broadcast } from "../server"
 import * as jwt from "jsonwebtoken"
 import otpService from "../services/otpService"
