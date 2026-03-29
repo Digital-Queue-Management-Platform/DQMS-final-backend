@@ -846,7 +846,7 @@ router.get("/debug/customers/:mobile", async (req, res) => {
     })
   } catch (error) {
     console.error("Debug customer lookup error:", error)
-    res.status(500).json({ error: "Debug lookup failed", details: error.message })
+    res.status(500).json({ error: "Debug lookup failed", details: (error as Error).message })
   }
 })
 
@@ -881,7 +881,7 @@ router.get("/debug/test-query/:mobile/:name", async (req, res) => {
     })
   } catch (error) {
     console.error("Debug test query error:", error)
-    res.status(500).json({ error: "Debug test query failed", details: error.message })
+    res.status(500).json({ error: "Debug test query failed", details: (error as Error).message })
   }
 })
 
@@ -910,7 +910,7 @@ router.get("/debug/appointments/:mobile", async (req, res) => {
     })
   } catch (error) {
     console.error("Debug appointment lookup error:", error)
-    res.status(500).json({ error: "Debug appointment lookup failed", details: error.message })
+    res.status(500).json({ error: "Debug appointment lookup failed", details: (error as Error).message })
   }
 })
 
@@ -938,7 +938,7 @@ router.post("/debug/reset-appointments", async (req, res) => {
     })
   } catch (error) {
     console.error("Debug reset appointments error:", error)
-    res.status(500).json({ error: "Reset failed", details: error.message })
+    res.status(500).json({ error: "Reset failed", details: (error as Error).message })
   }
 })
 
