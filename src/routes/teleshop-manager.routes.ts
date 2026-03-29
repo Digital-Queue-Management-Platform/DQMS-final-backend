@@ -2653,7 +2653,7 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
 
     const displaySettings = outlet?.displaySettings as any || {}
     const linkedDevices = displaySettings.linkedDevices || []
-    const updatedDevices = linkedDevices.filter((device: any) => device.id !== deviceId)
+    const updatedDevices = linkedDevices.filter((device: any) => device.deviceId !== deviceId)
 
     await prisma.outlet.update({
       where: { id: teleshopManager.branchId },
