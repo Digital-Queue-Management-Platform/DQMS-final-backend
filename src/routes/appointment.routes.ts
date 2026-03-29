@@ -450,6 +450,35 @@ async function addAppointmentToQueue(appt: any) {
       customerFromToken: token.customer
     })
 
+    // Transfer bill data from AppointmentBill to TokenBill
+    const appointmentBills = await tx.appointmentBill.findMany({
+      where: { appointmentId: appt.id }
+    })
+
+    console.log('DEBUG: Appointment check-in - Found appointment bills:', {
+      count: appointmentBills.length,
+      bills: appointmentBills.map(b => ({
+        telephoneNumber: b.telephoneNumber,
+        billPaymentIntent: b.billPaymentIntent,
+        billPaymentAmount: b.billPaymentAmount
+      }))
+    })
+
+    // Create TokenBill entries for each AppointmentBill
+    if (appointmentBills.length > 0) {
+      for (const appointmentBill of appointmentBills) {
+        await tx.tokenBill.create({
+          data: {
+            tokenId: token.id,
+            telephoneNumber: appointmentBill.telephoneNumber,
+            billPaymentIntent: appointmentBill.billPaymentIntent,
+            billPaymentAmount: appointmentBill.billPaymentAmount,
+          }
+        })
+      }
+      console.log('DEBUG: Appointment check-in - Created TokenBill entries:', appointmentBills.length)
+    }
+
     // Update appointment status and link to token
     await tx.appointment.update({
       where: { id: appt.id },

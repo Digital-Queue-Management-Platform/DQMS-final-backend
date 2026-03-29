@@ -609,6 +609,36 @@ async function processAppointments() {
           let tokenId = newToken.id
           let createdTokenId = newToken.id
 
+          // Transfer bill data from AppointmentBill to TokenBill
+          const appointmentBills = await tx.appointmentBill.findMany({
+            where: { appointmentId: apptRow.id }
+          })
+
+          console.log('DEBUG: AUTO Processing - Found appointment bills:', {
+            appointmentId: apptRow.id,
+            count: appointmentBills.length,
+            bills: appointmentBills.map(b => ({
+              telephoneNumber: b.telephoneNumber,
+              billPaymentIntent: b.billPaymentIntent,
+              billPaymentAmount: b.billPaymentAmount
+            }))
+          })
+
+          // Create TokenBill entries for each AppointmentBill
+          if (appointmentBills.length > 0) {
+            for (const appointmentBill of appointmentBills) {
+              await tx.tokenBill.create({
+                data: {
+                  tokenId: newToken.id,
+                  telephoneNumber: appointmentBill.telephoneNumber,
+                  billPaymentIntent: appointmentBill.billPaymentIntent,
+                  billPaymentAmount: appointmentBill.billPaymentAmount,
+                }
+              })
+            }
+            console.log('DEBUG: AUTO Processing - Created TokenBill entries:', appointmentBills.length)
+          }
+
           // Update appointment to queued
           await tx.$executeRaw`
             UPDATE "Appointment"
