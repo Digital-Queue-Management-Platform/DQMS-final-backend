@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express"
 import { prisma } from "../server"
 import { Prisma } from "@prisma/client"
+import { systemLogger } from "../services/systemLogger"
 
 const router = Router()
 
@@ -890,6 +891,31 @@ router.post("/audit", async (req: Request, res: Response) => {
   } catch (error) {
     console.error("Error creating audit log:", error)
     res.status(500).json({ error: "Failed to create audit log" })
+  }
+})
+
+// Voice failure logging endpoint for display dashboards
+router.post("/voice-failure", async (req: Request, res: Response) => {
+  const { tokenNumber, lang, error, timestamp } = req.body
+  
+  try {
+    await systemLogger.error(`Voice announcement failed for token ${tokenNumber}`, {
+      service: 'frontend',
+      module: 'outlet-display',
+      event: 'voice-failure',
+      metadata: {
+        tokenNumber,
+        language: lang || 'unknown',
+        error,
+        timestamp,
+        userAgent: req.headers['user-agent'],
+        ipAddress: req.ip || req.connection?.remoteAddress
+      }
+    })
+    res.json({ success: true })
+  } catch (err) {
+    console.error('Failed to log voice failure:', err)
+    res.status(500).json({ error: 'Logging failed' })
   }
 })
 
