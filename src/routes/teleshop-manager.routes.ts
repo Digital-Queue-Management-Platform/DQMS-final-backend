@@ -448,7 +448,7 @@ router.get("/me", async (req: any, res) => {
 router.post("/test-sound", async (req: any, res) => {
   try {
     const teleshopManager = req.teleshopManager
-    const { type, lang, customText } = req.body
+    const { type, lang, customText, chimeVolume, voiceVolume } = req.body
 
     if (!teleshopManager.branchId) {
       return res.status(400).json({ error: "You are not assigned to any outlet" })
@@ -471,7 +471,9 @@ router.post("/test-sound", async (req: any, res) => {
         outletId: teleshopManager.branchId,
         testType: type,
         lang: lang || 'en',
-        customText: customText || null
+        customText: customText || null,
+        chimeVolume: chimeVolume || 100, // Default to MAX (100%) if not provided
+        voiceVolume: voiceVolume || 300  // Default to MAX (300%) if not provided
       }
     })
 
