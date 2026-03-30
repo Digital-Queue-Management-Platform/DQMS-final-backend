@@ -19,7 +19,7 @@ setInterval(() => {
 
 // Proxy Google Translate TTS for Sinhala and Tamil with caching and retry logic
 router.get("/speak", async (req: Request, res: Response) => {
-  const { text, lang } = req.query
+  const { text, lang, gender } = req.query
 
   if (!text || !lang) {
     return res.status(400).json({ error: "text and lang are required" })
@@ -30,8 +30,8 @@ router.get("/speak", async (req: Request, res: Response) => {
     return res.status(400).json({ error: "Unsupported language" })
   }
 
-  // Check cache first
-  const cacheKey = `${lang}:${text}`
+  // Check cache first (include gender in cache key if specified)
+  const cacheKey = `${lang}:${gender || 'default'}:${text}`
   const cachedItem = ttsCache.get(cacheKey)
   if (cachedItem && Date.now() - cachedItem.timestamp < CACHE_TTL) {
     res.set("Content-Type", "audio/mpeg")
@@ -40,7 +40,16 @@ router.get("/speak", async (req: Request, res: Response) => {
   }
 
   const encoded = encodeURIComponent(text as string)
-  const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encoded}&tl=${lang}&client=gtx&ttsspeed=0.9`
+  
+  // Adjust TTS speed based on gender preference for more natural sound
+  let ttsspeed = 0.9 // Default speed
+  if (gender === 'female' && lang === 'en') {
+    ttsspeed = 1.0 // Slightly faster for more feminine sound
+  } else if (gender === 'male' && lang === 'en') {
+    ttsspeed = 0.8 // Slightly slower for more masculine sound
+  }
+  
+  const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encoded}&tl=${lang}&client=gtx&ttsspeed=${ttsspeed}`
 
   const options = {
     timeout: 10000, // 10 second timeout

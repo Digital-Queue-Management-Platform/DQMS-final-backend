@@ -28,22 +28,22 @@ export async function announceToIpSpeaker(outletId: string, text: string, lang: 
       body = { 
         AudioIntercom: { 
           audioInputChannelID: 1, 
-          announcement: { text: text, volume: 80, language: lang } 
+          announcement: { text: text, volume: 100, language: lang } 
         } 
       }
     } else if (ipConfig.model === 'dahua') {
       targetUrl = `${baseUrl}/cgi-bin/announcements.cgi?action=play`
-      body = { action: 'play', text: text, volume: 80, language: lang }
+      body = { action: 'play', text: text, volume: 100, language: lang }
     } else if (ipConfig.model === 'axis') {
       targetUrl = `${baseUrl}/axis-cgi/audio/play.cgi`
-      body = { text: text, volume: 80, voice: lang }
+      body = { text: text, volume: 100, voice: lang }
     } else {
       // Default generic
       targetUrl = `${baseUrl}/announce`
-      body = { message: text, volume: 80, language: lang }
+      body = { message: text, volume: 100, language: lang }
     }
 
-    console.log(`[IP-Speaker] Triggering hardware broadcast to ${targetUrl}`)
+    console.log(`[IP-Speaker] Triggering hardware broadcast to ${targetUrl} with volume 100`)
     
     // We use a non-blocking fetch here
     fetch(targetUrl, {
