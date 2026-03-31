@@ -5,7 +5,7 @@ const prisma = new PrismaClient();
 async function testQRSetup() {
   try {
     // Current APK token from the error logs
-    const setupCode = 'I8RT-5TCK';
+    const setupCode = 'HKMD-ZAUY';
     
     console.log('Testing QR setup for token:', setupCode);
     
