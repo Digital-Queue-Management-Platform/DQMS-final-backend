@@ -416,6 +416,61 @@ router.get('/debug/device-configs', async (req: Request, res: Response) => {
   }
 })
 
+// APK Status Check - Quick endpoint for Android TV APK to verify its status
+router.get("/apk-status/:deviceId", async (req, res) => {
+  try {
+    const { deviceId } = req.params
+    
+    if (!deviceId) {
+      return res.status(400).json({ error: "Device ID is required" })
+    }
+
+    console.log("APK status check for device:", deviceId)
+
+    // Quick check across all outlets
+    const outlets = await prisma.outlet.findMany({
+      where: { isActive: true },
+      select: { id: true, name: true, displaySettings: true }
+    })
+
+    for (const outlet of outlets) {
+      const displaySettings = outlet.displaySettings as any || {}
+      const linkedDevices = displaySettings.linkedDevices || []
+      
+      const device = linkedDevices.find((d: any) => d.deviceId === deviceId && d.isActive)
+      
+      if (device) {
+        // Device is still configured and active
+        return res.json({
+          status: "ACTIVE",
+          shouldReset: false,
+          outletId: outlet.id,
+          outletName: outlet.name,
+          deviceName: device.deviceName,
+          lastCheck: new Date().toISOString()
+        })
+      }
+    }
+
+    // Device not found or removed - APK should reset
+    console.log("APK should reset - device not found:", deviceId)
+    return res.json({
+      status: "REMOVED",
+      shouldReset: true,
+      message: "Device has been removed - please return to QR setup",
+      lastCheck: new Date().toISOString()
+    })
+
+  } catch (error) {
+    console.error("APK status check error:", error)
+    res.status(500).json({ 
+      status: "ERROR",
+      shouldReset: true, // On error, APK should reset to be safe
+      error: "Failed to check device status" 
+    })
+  }
+})
+
 // Apply authentication middleware to protected routes
 router.use(authenticateTeleshopManager)
 
@@ -2871,19 +2926,38 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
     
     console.log("✅ Audit log created")
 
-    // Enhanced broadcast for device removal - use actual deviceId for broadcast
-    broadcast({
+    // Enhanced broadcast for device removal - multiple broadcast types for reliability
+    const removalBroadcast = {
       type: "DEVICE_REMOVED",
       data: {
         deviceId: deviceToRemove.deviceId, // Use actual deviceId for APK
         deviceName: deviceToRemove.deviceName,
         outletId: teleshopManager.branchId,
+        outletName: outlet.name,
         removedBy: teleshopManager.id,
-        resetToQR: true // Signal APK to reset and display QR code
+        removedAt: new Date().toISOString(),
+        resetToQR: true, // Signal APK to reset and display QR code
+        action: "RECONFIGURE_REQUIRED"
       }
+    }
+    
+    // Send primary broadcast
+    broadcast(removalBroadcast)
+    
+    // Send a more specific broadcast that APK might listen for
+    broadcast({
+      type: "APK_DEVICE_RESET",
+      deviceId: deviceToRemove.deviceId,
+      message: "Device removed - return to QR setup",
+      timestamp: new Date().toISOString()
     })
 
-    console.log("✅ Broadcast sent with deviceId:", deviceToRemove.deviceId)
+    console.log("✅ Device removal broadcasts sent:", {
+      deviceId: deviceToRemove.deviceId,
+      deviceName: deviceToRemove.deviceName,
+      outletName: outlet.name,
+      timestamp: new Date().toISOString()
+    })
 
     res.json({ 
       success: true, 
