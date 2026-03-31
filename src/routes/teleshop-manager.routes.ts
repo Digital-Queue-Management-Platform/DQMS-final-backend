@@ -2740,7 +2740,7 @@ router.get("/outlet-devices", async (req: any, res) => {
 router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
   try {
     console.log("🗑️  Device removal request received:", {
-      deviceId: req.params.deviceId,
+      deviceIdParam: req.params.deviceId,
       managerId: req.teleshopManager?.id,
       managerName: req.teleshopManager?.name,
       branchId: req.teleshopManager?.branchId,
@@ -2748,7 +2748,7 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
     })
 
     const teleshopManager = req.teleshopManager
-    const { deviceId } = req.params
+    const { deviceId: deviceIdParam } = req.params
 
     if (!teleshopManager) {
       console.log("❌ No teleshop manager in request")
@@ -2779,18 +2779,33 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
     const linkedDevices = displaySettings.linkedDevices || []
     
     console.log("📱 Current devices:", linkedDevices.length)
+    console.log("🔍 Looking for device with ID:", deviceIdParam)
     
-    // Find the device being removed for logging
-    const deviceToRemove = linkedDevices.find((device: any) => device.deviceId === deviceId)
+    // Find the device being removed - check both internal ID and deviceId
+    const deviceToRemove = linkedDevices.find((device: any) => 
+      device.id === deviceIdParam || device.deviceId === deviceIdParam
+    )
+    
     if (!deviceToRemove) {
-      console.log("❌ Device not found in outlet:", deviceId)
-      console.log("Available devices:", linkedDevices.map((d: any) => ({ name: d.deviceName, id: d.deviceId })))
+      console.log("❌ Device not found in outlet:", deviceIdParam)
+      console.log("Available devices:", linkedDevices.map((d: any) => ({ 
+        name: d.deviceName, 
+        internalId: d.id, 
+        deviceId: d.deviceId 
+      })))
       return res.status(404).json({ error: "Device not found" })
     }
     
-    console.log("✅ Device found for removal:", deviceToRemove.deviceName)
+    console.log("✅ Device found for removal:", {
+      name: deviceToRemove.deviceName,
+      internalId: deviceToRemove.id,
+      deviceId: deviceToRemove.deviceId
+    })
     
-    const updatedDevices = linkedDevices.filter((device: any) => device.deviceId !== deviceId)
+    // Filter by both internal ID and deviceId to ensure removal
+    const updatedDevices = linkedDevices.filter((device: any) => 
+      device.id !== deviceIdParam && device.deviceId !== deviceIdParam
+    )
 
     console.log("🔄 Updating database...")
     await prisma.outlet.update({
@@ -2811,7 +2826,8 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
       "outlet", 
       teleshopManager.branchId, 
       { 
-        deviceId: deviceId,
+        deviceIdParam: deviceIdParam,
+        actualDeviceId: deviceToRemove.deviceId,
         deviceName: deviceToRemove.deviceName,
         outletName: outlet.name
       }
@@ -2819,11 +2835,11 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
     
     console.log("✅ Audit log created")
 
-    // Enhanced broadcast for device removal - tells APK to reset and show QR code
+    // Enhanced broadcast for device removal - use actual deviceId for broadcast
     broadcast({
       type: "DEVICE_REMOVED",
       data: {
-        deviceId: deviceId,
+        deviceId: deviceToRemove.deviceId, // Use actual deviceId for APK
         deviceName: deviceToRemove.deviceName,
         outletId: teleshopManager.branchId,
         removedBy: teleshopManager.id,
@@ -2831,13 +2847,14 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
       }
     })
 
-    console.log("✅ Broadcast sent")
+    console.log("✅ Broadcast sent with deviceId:", deviceToRemove.deviceId)
 
     res.json({ 
       success: true, 
       message: "Device removed successfully",
       removedDevice: {
-        deviceId: deviceId,
+        internalId: deviceToRemove.id,
+        deviceId: deviceToRemove.deviceId,
         deviceName: deviceToRemove.deviceName
       }
     })
@@ -2849,7 +2866,7 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
     console.error("Error details:", {
       message: error.message,
       stack: error.stack,
-      deviceId: req.params.deviceId,
+      deviceIdParam: req.params.deviceId,
       managerId: req.teleshopManager?.id
     })
     res.status(500).json({ 
