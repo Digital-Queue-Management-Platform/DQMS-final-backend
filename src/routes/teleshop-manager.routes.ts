@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express"
-import { prisma, broadcast } from "../server"
+import { prisma, broadcast, priorityBroadcast } from "../server"
 import * as jwt from "jsonwebtoken"
 import { randomUUID } from "crypto"
 import otpService from "../services/otpService"
@@ -468,6 +468,40 @@ router.get("/apk-status/:deviceId", async (req, res) => {
       shouldReset: true, // On error, APK should reset to be safe
       error: "Failed to check device status" 
     })
+  }
+})
+
+// Fast heartbeat - immediate device status check (optimized for APK speed)
+router.get("/fast-heartbeat/:deviceId", async (req, res) => {
+  try {
+    const { deviceId } = req.params
+    
+    if (!deviceId) {
+      return res.status(400).json({ status: "ERROR", shouldReset: true })
+    }
+
+    // Fast check - only look in active outlets with minimal data
+    const outlets = await prisma.outlet.findMany({
+      where: { isActive: true },
+      select: { displaySettings: true }
+    })
+
+    for (const outlet of outlets) {
+      const displaySettings = outlet.displaySettings as any || {}
+      const linkedDevices = displaySettings.linkedDevices || []
+      
+      const device = linkedDevices.find((d: any) => d.deviceId === deviceId && d.isActive)
+      
+      if (device) {
+        return res.json({ status: "ACTIVE", shouldReset: false })
+      }
+    }
+
+    // Device not found = should reset immediately  
+    return res.json({ status: "REMOVED", shouldReset: true })
+
+  } catch (error) {
+    return res.json({ status: "ERROR", shouldReset: true })
   }
 })
 
@@ -2903,7 +2937,9 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
       device.id !== deviceIdParam && device.deviceId !== deviceIdParam
     )
 
-    console.log("🔄 Updating database...")
+    console.log("🔄 Updating database and sending immediate notifications...")
+    
+    // Update database first
     await prisma.outlet.update({
       where: { id: teleshopManager.branchId },
       data: { 
@@ -2916,54 +2952,56 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
 
     console.log("✅ Database updated successfully")
 
-    auditLog(
-      teleshopManager.id, 
-      "OUTLET_DEVICE_REMOVED", 
-      "outlet", 
-      teleshopManager.branchId, 
-      { 
-        deviceIdParam: deviceIdParam,
-        actualDeviceId: deviceToRemove.deviceId,
-        deviceName: deviceToRemove.deviceName,
-        outletName: outlet.name
-      }
-    )
-    
-    console.log("✅ Audit log created")
-
-    // Enhanced broadcast for device removal - multiple broadcast types for reliability
+    // Send URGENT priority broadcasts (multiple delivery for reliability)
     const removalBroadcast = {
       type: "DEVICE_REMOVED",
       data: {
-        deviceId: deviceToRemove.deviceId, // Use actual deviceId for APK
+        deviceId: deviceToRemove.deviceId,
         deviceName: deviceToRemove.deviceName,
         outletId: teleshopManager.branchId,
         outletName: outlet.name,
         removedBy: teleshopManager.id,
         removedAt: new Date().toISOString(),
-        resetToQR: true, // Signal APK to reset and display QR code
-        action: "RECONFIGURE_REQUIRED"
+        resetToQR: true,
+        action: "RECONFIGURE_REQUIRED",
+        urgent: true
       }
     }
     
-    // Send primary broadcast
-    broadcast(removalBroadcast)
-    
-    // Send a more specific broadcast that APK might listen for
-    broadcast({
-      type: "APK_DEVICE_RESET",
+    // Use priority broadcast for critical device removal (sends multiple times)
+    priorityBroadcast(removalBroadcast)
+    priorityBroadcast({
+      type: "APK_DEVICE_RESET", 
       deviceId: deviceToRemove.deviceId,
       message: "Device removed - return to QR setup",
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      urgent: true
+    })
+    priorityBroadcast({
+      type: "APK_FORCE_RESET",
+      deviceId: deviceToRemove.deviceId, 
+      action: "IMMEDIATE_QR_RESET"
     })
 
-    console.log("✅ Device removal broadcasts sent:", {
-      deviceId: deviceToRemove.deviceId,
-      deviceName: deviceToRemove.deviceName,
-      outletName: outlet.name,
-      timestamp: new Date().toISOString()
-    })
+    console.log("✅ IMMEDIATE broadcasts sent for device:", deviceToRemove.deviceId)
 
+    // Fire audit log asynchronously (don't block response)
+    setImmediate(() => {
+      auditLog(
+        teleshopManager.id, 
+        "OUTLET_DEVICE_REMOVED", 
+        "outlet", 
+        teleshopManager.branchId, 
+        { 
+          deviceIdParam: deviceIdParam,
+          actualDeviceId: deviceToRemove.deviceId,
+          deviceName: deviceToRemove.deviceName,
+          outletName: outlet.name
+        }
+      )
+    })
+    
+    // Send response immediately (don't wait for audit log)
     res.json({ 
       success: true, 
       message: "Device removed successfully",
@@ -2971,10 +3009,11 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
         internalId: deviceToRemove.id,
         deviceId: deviceToRemove.deviceId,
         deviceName: deviceToRemove.deviceName
-      }
+      },
+      broadcastsSent: 3 // Indicates multiple notifications sent
     })
 
-    console.log("✅ Device removal completed successfully")
+    console.log("✅ Device removal completed successfully - APK should reset immediately")
 
   } catch (error: any) {
     console.error("❌ Remove outlet device error:", error)
