@@ -2588,6 +2588,42 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
         if (managerQRTokens) {
           managerQRTokens.set(setupCode, tokenData)
         }
+      } else {
+        // Auto-register APK-generated tokens for the manager's outlet
+        console.log(`🔄 Auto-registering APK-generated token: ${setupCode} for outlet: ${teleshopManager.branchId}`)
+        
+        try {
+          await prisma.managerQRToken.create({
+            data: {
+              token: setupCode,
+              outletId: teleshopManager.branchId,
+              generatedAt: new Date()
+            }
+          })
+          
+          tokenData = {
+            outletId: teleshopManager.branchId,
+            generatedAt: new Date().toISOString()
+          }
+          
+          // Cache in memory
+          if (managerQRTokens) {
+            managerQRTokens.set(setupCode, tokenData)
+          }
+          
+          console.log(`✅ Successfully registered APK token: ${setupCode}`)
+        } catch (error: any) {
+          console.error(`❌ Failed to register APK token: ${setupCode}`, error)
+          // If registration fails, still proceed if this is the manager's own outlet
+          // This handles race conditions where multiple requests try to create the same token
+          if (error.code === 'P2002') { // Unique constraint violation
+            tokenData = {
+              outletId: teleshopManager.branchId,
+              generatedAt: new Date().toISOString()
+            }
+            console.log(`✅ Token already exists (race condition), proceeding: ${setupCode}`)
+          }
+        }
       }
     }
     
