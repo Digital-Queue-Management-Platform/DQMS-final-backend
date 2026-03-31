@@ -2857,6 +2857,6 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     })
   }
-}))
+})
 
 export default router
