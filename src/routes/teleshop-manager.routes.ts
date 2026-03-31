@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express"
 import { prisma, broadcast } from "../server"
 import * as jwt from "jsonwebtoken"
+import { randomUUID } from "crypto"
 import otpService from "../services/otpService"
 import emailService from "../services/emailService"
 import sltSmsService from "../services/sltSmsService"
@@ -1583,7 +1584,7 @@ router.get("/display-settings", async (req: any, res) => {
   }
 })
 
-// Update outlet display settings
+// Update outlet display settings with validation
 router.post("/display-settings", async (req: any, res) => {
   try {
     const tm = req.teleshopManager
@@ -1596,13 +1597,56 @@ router.post("/display-settings", async (req: any, res) => {
       return res.status(400).json({ error: "Settings are required" })
     }
 
+    // Validate display settings structure
+    if (settings.linkedDevices && Array.isArray(settings.linkedDevices)) {
+      for (const device of settings.linkedDevices) {
+        // Validate required device fields
+        if (!device.deviceId || !device.deviceName) {
+          return res.status(400).json({ 
+            error: "Each device must have deviceId and deviceName" 
+          })
+        }
+        
+        // Ensure proper device structure
+        if (!device.id) {
+          device.id = randomUUID() // Generate UUID if missing
+        }
+        if (!device.configuredAt) {
+          device.configuredAt = new Date().toISOString()
+        }
+        if (!device.configuredBy) {
+          device.configuredBy = tm.id
+        }
+        if (device.isActive === undefined) {
+          device.isActive = true
+        }
+        if (!device.lastSeen) {
+          device.lastSeen = new Date().toISOString()
+        }
+        if (!device.macAddress) {
+          device.macAddress = 'Unknown'
+        }
+      }
+    }
+
     const updated = await prisma.outlet.update({
       where: { id: tm.branchId },
       data: { displaySettings: settings }
     })
 
     auditLog(tm.id, "DISPLAY_SETTINGS_UPDATED", "outlet", updated.id, {
-      settings,
+      settings: settings,
+      method: 'MANUAL_SETUP'
+    })
+
+    // Broadcast settings update to connected devices
+    broadcast({
+      type: "DISPLAY_SETTINGS_UPDATED",
+      data: {
+        outletId: tm.branchId,
+        updatedBy: tm.id,
+        settings: settings
+      }
     })
 
     res.json({ success: true, settings: updated.displaySettings })
@@ -2526,18 +2570,54 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
       })
     }
 
-    // Check if setup code has expired (within 1 hour of generation)
+    // Validate setup code exists in QR tokens (either in-memory or database)
+    const managerQRTokens = (global as any).globalManagerQRTokens
+    let tokenData = null
+    
+    if (managerQRTokens && managerQRTokens.has(setupCode)) {
+      tokenData = managerQRTokens.get(setupCode)
+    } else {
+      // Fallback to database if not in memory
+      const dbToken = await prisma.managerQRToken.findUnique({ where: { token: setupCode } })
+      if (dbToken) {
+        tokenData = {
+          outletId: dbToken.outletId,
+          generatedAt: dbToken.generatedAt.toISOString()
+        }
+        // Cache in memory for future requests
+        if (managerQRTokens) {
+          managerQRTokens.set(setupCode, tokenData)
+        }
+      }
+    }
+    
+    if (!tokenData) {
+      return res.status(400).json({ 
+        error: "Invalid setup code. Please scan a valid QR code from the outlet display." 
+      })
+    }
+    
+    // Verify the token is for the correct outlet
+    if (tokenData.outletId !== teleshopManager.branchId) {
+      return res.status(400).json({ 
+        error: "This setup code is for a different outlet. Please scan the correct QR code." 
+      })
+    }
+
+    // Check if setup code has expired (24 hours from generation)
     const currentTime = Date.now()
     const timeDiff = currentTime - timestamp
-    const hourInMs = 48 * 3600000 // 48 hours to handle old cached QR codes temporarily
+    const hourInMs = 24 * 3600000 // 24 hours - consistent with QR generation
     
-    console.log("QR Setup timestamp validation:", {
+    console.log("QR Setup validation:", {
+      setupCode: setupCode,
+      tokenOutletId: tokenData.outletId,
+      managerOutletId: teleshopManager.branchId,
       timestamp: timestamp,
       currentTime: currentTime,
       timeDiff: timeDiff,
-      timeDiffMinutes: Math.round(timeDiff / 60000),
-      isExpired: timeDiff > hourInMs,
-      hourLimit: hourInMs
+      timeDiffHours: Math.round(timeDiff / 3600000),
+      isExpired: timeDiff > hourInMs
     })
     
     if (timestamp && timeDiff > hourInMs) {
@@ -2548,8 +2628,16 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
 
     // Save device configuration to outlet displaySettings
     const currentDisplaySettings = outlet.displaySettings as any || {}
+    const existingDevices = currentDisplaySettings.linkedDevices || []
+    
+    // Check for existing device with same deviceId and warn user
+    const existingDevice = existingDevices.find((device: any) => device.deviceId === deviceId)
+    if (existingDevice) {
+      console.log(`Device ${deviceId} already exists, replacing configuration`)
+    }
+    
     const deviceRecord = {
-      id: `device_${Date.now()}`,
+      id: randomUUID(), // Use proper UUID instead of timestamp
       deviceId: deviceId,
       deviceName: deviceName,
       macAddress: macAddress || 'Unknown',
@@ -2561,7 +2649,6 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
     }
 
     // Remove any existing device with same deviceId
-    const existingDevices = currentDisplaySettings.linkedDevices || []
     const filteredDevices = existingDevices.filter((device: any) => device.deviceId !== deviceId)
 
     const updatedDisplaySettings = {
@@ -2575,6 +2662,18 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
     await prisma.outlet.update({
       where: { id: teleshopManager.branchId },
       data: { displaySettings: updatedDisplaySettings }
+    })
+
+    // Broadcast device configuration event to outlet displays
+    broadcast({
+      type: "DEVICE_CONFIGURED",
+      data: {
+        deviceId: deviceId,
+        deviceName: deviceName,
+        outletId: outlet.id,
+        configuredBy: teleshopManager.id,
+        configuredAt: deviceRecord.configuredAt
+      }
     })
 
     auditLog(
@@ -2650,11 +2749,22 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
     // Remove from displaySettings
     const outlet = await prisma.outlet.findUnique({
       where: { id: teleshopManager.branchId },
-      select: { displaySettings: true }
+      select: { id: true, name: true, displaySettings: true }
     })
 
-    const displaySettings = outlet?.displaySettings as any || {}
+    if (!outlet) {
+      return res.status(404).json({ error: "Outlet not found" })
+    }
+
+    const displaySettings = outlet.displaySettings as any || {}
     const linkedDevices = displaySettings.linkedDevices || []
+    
+    // Find the device being removed for logging
+    const deviceToRemove = linkedDevices.find((device: any) => device.deviceId === deviceId)
+    if (!deviceToRemove) {
+      return res.status(404).json({ error: "Device not found" })
+    }
+    
     const updatedDevices = linkedDevices.filter((device: any) => device.deviceId !== deviceId)
 
     await prisma.outlet.update({
@@ -2672,16 +2782,22 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
       "OUTLET_DEVICE_REMOVED", 
       "outlet", 
       teleshopManager.branchId, 
-      { deviceId: deviceId }
+      { 
+        deviceId: deviceId,
+        deviceName: deviceToRemove.deviceName,
+        outletName: outlet.name
+      }
     )
     
-    // Broadcast device removal to notify APK immediately
+    // Enhanced broadcast for device removal - tells APK to reset and show QR code
     broadcast({
       type: "DEVICE_REMOVED",
       data: {
         deviceId: deviceId,
+        deviceName: deviceToRemove.deviceName,
         outletId: teleshopManager.branchId,
-        removedBy: teleshopManager.id
+        removedBy: teleshopManager.id,
+        resetToQR: true // Signal APK to reset and display QR code
       }
     })
 
