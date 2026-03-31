@@ -2739,12 +2739,28 @@ router.get("/outlet-devices", async (req: any, res) => {
 // Remove/deactivate outlet device
 router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
   try {
+    console.log("🗑️  Device removal request received:", {
+      deviceId: req.params.deviceId,
+      managerId: req.teleshopManager?.id,
+      managerName: req.teleshopManager?.name,
+      branchId: req.teleshopManager?.branchId,
+      timestamp: new Date().toISOString()
+    })
+
     const teleshopManager = req.teleshopManager
     const { deviceId } = req.params
 
+    if (!teleshopManager) {
+      console.log("❌ No teleshop manager in request")
+      return res.status(401).json({ error: "Authentication required" })
+    }
+
     if (!teleshopManager.branchId) {
+      console.log("❌ Manager not assigned to branch:", teleshopManager.id)
       return res.status(403).json({ error: "You must be assigned to a branch" })
     }
+
+    console.log("✅ Authentication passed, proceeding with removal...")
 
     // Remove from displaySettings
     const outlet = await prisma.outlet.findUnique({
@@ -2753,20 +2769,30 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
     })
 
     if (!outlet) {
+      console.log("❌ Outlet not found:", teleshopManager.branchId)
       return res.status(404).json({ error: "Outlet not found" })
     }
+
+    console.log("✅ Outlet found:", outlet.name)
 
     const displaySettings = outlet.displaySettings as any || {}
     const linkedDevices = displaySettings.linkedDevices || []
     
+    console.log("📱 Current devices:", linkedDevices.length)
+    
     // Find the device being removed for logging
     const deviceToRemove = linkedDevices.find((device: any) => device.deviceId === deviceId)
     if (!deviceToRemove) {
+      console.log("❌ Device not found in outlet:", deviceId)
+      console.log("Available devices:", linkedDevices.map((d: any) => ({ name: d.deviceName, id: d.deviceId })))
       return res.status(404).json({ error: "Device not found" })
     }
     
+    console.log("✅ Device found for removal:", deviceToRemove.deviceName)
+    
     const updatedDevices = linkedDevices.filter((device: any) => device.deviceId !== deviceId)
 
+    console.log("🔄 Updating database...")
     await prisma.outlet.update({
       where: { id: teleshopManager.branchId },
       data: { 
@@ -2776,6 +2802,8 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
         }
       }
     })
+
+    console.log("✅ Database updated successfully")
 
     auditLog(
       teleshopManager.id, 
@@ -2789,6 +2817,8 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
       }
     )
     
+    console.log("✅ Audit log created")
+
     // Enhanced broadcast for device removal - tells APK to reset and show QR code
     broadcast({
       type: "DEVICE_REMOVED",
@@ -2801,12 +2831,32 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
       }
     })
 
-    res.json({ success: true, message: "Device removed successfully" })
+    console.log("✅ Broadcast sent")
+
+    res.json({ 
+      success: true, 
+      message: "Device removed successfully",
+      removedDevice: {
+        deviceId: deviceId,
+        deviceName: deviceToRemove.deviceName
+      }
+    })
+
+    console.log("✅ Device removal completed successfully")
 
   } catch (error: any) {
-    console.error("Remove outlet device error:", error)
-    res.status(500).json({ error: "Failed to remove device" })
+    console.error("❌ Remove outlet device error:", error)
+    console.error("Error details:", {
+      message: error.message,
+      stack: error.stack,
+      deviceId: req.params.deviceId,
+      managerId: req.teleshopManager?.id
+    })
+    res.status(500).json({ 
+      error: "Failed to remove device", 
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    })
   }
-})
+}))
 
 export default router
