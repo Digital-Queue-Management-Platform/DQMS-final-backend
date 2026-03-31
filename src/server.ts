@@ -183,6 +183,32 @@ export const broadcast = (data: any) => {
   })
 }
 
+// Priority broadcast for urgent messages (sends multiple times for reliability)
+export const priorityBroadcast = (data: any) => {
+  const message = JSON.stringify(data)
+  
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1) {
+      // Send immediately
+      client.send(message)
+      
+      // Send again after 100ms for reliability
+      setTimeout(() => {
+        if (client.readyState === 1) {
+          client.send(message)
+        }
+      }, 100)
+      
+      // Send once more after 500ms 
+      setTimeout(() => {
+        if (client.readyState === 1) {
+          client.send(message)
+        }
+      }, 500)
+    }
+  })
+}
+
 // Health checks and root routes for Azure/LB probes
 app.get("/", (req, res) => {
   res.json({ 
