@@ -2612,7 +2612,7 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
           }
           
           console.log(`✅ Successfully registered APK token: ${setupCode}`)
-        } catch (error) {
+        } catch (error: any) {
           console.error(`❌ Failed to register APK token: ${setupCode}`, error)
           // If registration fails, still proceed if this is the manager's own outlet
           // This handles race conditions where multiple requests try to create the same token
@@ -2624,7 +2624,6 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
             console.log(`✅ Token already exists (race condition), proceeding: ${setupCode}`)
           }
         }
-      }
       }
     }
     
