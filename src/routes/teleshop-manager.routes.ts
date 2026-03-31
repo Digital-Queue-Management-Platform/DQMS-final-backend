@@ -2608,11 +2608,17 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
       })
     }
 
-    // Get outlet information
-    const outlet = await prisma.outlet.findUnique({
-      where: { id: teleshopManager.branchId },
-      select: { id: true, name: true, location: true, displaySettings: true }
-    })
+    // Optimize: Get outlet information and validate setup code in parallel
+    const [outlet, dbToken] = await Promise.all([
+      prisma.outlet.findUnique({
+        where: { id: teleshopManager.branchId },
+        select: { id: true, name: true, location: true, displaySettings: true }
+      }),
+      // Only check database if not in memory cache
+      managerQRTokens && managerQRTokens.has(setupCode) 
+        ? null 
+        : prisma.managerQRToken.findUnique({ where: { token: setupCode } })
+    ])
 
     if (!outlet) {
       return res.status(404).json({ error: "Assigned outlet not found" })
@@ -2625,59 +2631,54 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
       })
     }
 
-    // Validate setup code exists in QR tokens (either in-memory or database)
+    // Validate setup code exists in QR tokens (check memory first, then database)
     const managerQRTokens = (global as any).globalManagerQRTokens
     let tokenData = null
     
     if (managerQRTokens && managerQRTokens.has(setupCode)) {
       tokenData = managerQRTokens.get(setupCode)
+    } else if (dbToken) {
+      tokenData = {
+        outletId: dbToken.outletId,
+        generatedAt: dbToken.generatedAt.toISOString()
+      }
+      // Cache in memory for future requests
+      if (managerQRTokens) {
+        managerQRTokens.set(setupCode, tokenData)
+      }
     } else {
-      // Fallback to database if not in memory
-      const dbToken = await prisma.managerQRToken.findUnique({ where: { token: setupCode } })
-      if (dbToken) {
+      // Fast auto-register APK-generated tokens for the manager's outlet
+      console.log(`🔄 Auto-registering APK token: ${setupCode}`)
+      
+      try {
+        // Use upsert for better performance and race condition handling
+        await prisma.managerQRToken.upsert({
+          where: { token: setupCode },
+          update: { outletId: teleshopManager.branchId }, // Update if exists
+          create: {
+            token: setupCode,
+            outletId: teleshopManager.branchId,
+            generatedAt: new Date()
+          }
+        })
+        
         tokenData = {
-          outletId: dbToken.outletId,
-          generatedAt: dbToken.generatedAt.toISOString()
+          outletId: teleshopManager.branchId,
+          generatedAt: new Date().toISOString()
         }
-        // Cache in memory for future requests
+        
+        // Cache in memory
         if (managerQRTokens) {
           managerQRTokens.set(setupCode, tokenData)
         }
-      } else {
-        // Auto-register APK-generated tokens for the manager's outlet
-        console.log(`🔄 Auto-registering APK-generated token: ${setupCode} for outlet: ${teleshopManager.branchId}`)
         
-        try {
-          await prisma.managerQRToken.create({
-            data: {
-              token: setupCode,
-              outletId: teleshopManager.branchId,
-              generatedAt: new Date()
-            }
-          })
-          
-          tokenData = {
-            outletId: teleshopManager.branchId,
-            generatedAt: new Date().toISOString()
-          }
-          
-          // Cache in memory
-          if (managerQRTokens) {
-            managerQRTokens.set(setupCode, tokenData)
-          }
-          
-          console.log(`✅ Successfully registered APK token: ${setupCode}`)
-        } catch (error: any) {
-          console.error(`❌ Failed to register APK token: ${setupCode}`, error)
-          // If registration fails, still proceed if this is the manager's own outlet
-          // This handles race conditions where multiple requests try to create the same token
-          if (error.code === 'P2002') { // Unique constraint violation
-            tokenData = {
-              outletId: teleshopManager.branchId,
-              generatedAt: new Date().toISOString()
-            }
-            console.log(`✅ Token already exists (race condition), proceeding: ${setupCode}`)
-          }
+        console.log(`✅ Auto-registered APK token: ${setupCode}`)
+      } catch (error: any) {
+        console.error(`❌ Auto-registration failed: ${setupCode}`, error.message)
+        // Continue anyway for manager's own outlet
+        tokenData = {
+          outletId: teleshopManager.branchId,
+          generatedAt: new Date().toISOString()
         }
       }
     }
@@ -2727,60 +2728,64 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
       console.log(`Device ${deviceId} already exists, replacing configuration`)
     }
     
+     // Optimize: Prepare device record with current timestamp (reuse)
+    const now = new Date()
     const deviceRecord = {
       id: randomUUID(), // Use proper UUID instead of timestamp
       deviceId: deviceId,
       deviceName: deviceName,
       macAddress: macAddress || 'Unknown',
       setupCode: setupCode,
-      configuredAt: new Date().toISOString(),
+      configuredAt: now.toISOString(),
       configuredBy: teleshopManager.id,
       isActive: true,
-      lastSeen: new Date().toISOString()
+      lastSeen: now.toISOString()
     }
 
-    // Remove any existing device with same deviceId
+    // Remove any existing device with same deviceId and prepare new settings
     const filteredDevices = existingDevices.filter((device: any) => device.deviceId !== deviceId)
-
     const updatedDisplaySettings = {
       ...currentDisplaySettings,
-      linkedDevices: [
-        ...filteredDevices,
-        deviceRecord
-      ]
+      linkedDevices: [...filteredDevices, deviceRecord]
     }
 
-    await prisma.outlet.update({
-      where: { id: teleshopManager.branchId },
-      data: { displaySettings: updatedDisplaySettings }
+    // Update outlet and send notifications in parallel for faster response
+    const [updateResult] = await Promise.all([
+      prisma.outlet.update({
+        where: { id: teleshopManager.branchId },
+        data: { displaySettings: updatedDisplaySettings }
+      }),
+      // Fire audit log async (don't wait)
+      auditLog(
+        teleshopManager.id, 
+        "OUTLET_DEVICE_CONFIGURED", 
+        "outlet", 
+        outlet.id, 
+        {
+          deviceId: deviceId,
+          deviceName: deviceName,
+          setupCode: setupCode,
+          outletName: outlet.name,
+          method: 'QR_CODE'
+        }
+      )
+    ])
+
+    // Send broadcast notification (async, don't block response)
+    setImmediate(() => {
+      broadcast({
+        type: "DEVICE_CONFIGURED",
+        data: {
+          deviceId: deviceId,
+          deviceName: deviceName,
+          outletId: outlet.id,
+          configuredBy: teleshopManager.id,
+          configuredAt: deviceRecord.configuredAt
+        }
+      })
     })
 
-    // Broadcast device configuration event to outlet displays
-    broadcast({
-      type: "DEVICE_CONFIGURED",
-      data: {
-        deviceId: deviceId,
-        deviceName: deviceName,
-        outletId: outlet.id,
-        configuredBy: teleshopManager.id,
-        configuredAt: deviceRecord.configuredAt
-      }
-    })
-
-    auditLog(
-      teleshopManager.id, 
-      "OUTLET_DEVICE_CONFIGURED", 
-      "outlet", 
-      outlet.id, 
-      {
-        deviceId: deviceId,
-        deviceName: deviceName,
-        setupCode: setupCode,
-        outletName: outlet.name,
-        method: 'QR_CODE'
-      }
-    )
-
+    // Send response immediately
     res.json({
       success: true,
       message: `Android TV "${deviceName}" has been successfully configured for ${outlet.name}`,
