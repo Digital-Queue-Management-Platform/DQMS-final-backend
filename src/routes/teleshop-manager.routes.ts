@@ -2563,8 +2563,8 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
       return res.status(404).json({ error: "Assigned outlet not found" })
     }
 
-     // Validate setup code format (should be alphanumeric string from QR generation)
-    if (!/^[a-zA-Z0-9]{15,30}$/.test(setupCode)) {
+     // Validate setup code format (allow alphanumeric with optional hyphens for APK compatibility)
+    if (!/^[a-zA-Z0-9-]{4,30}$/.test(setupCode)) {
       return res.status(400).json({ 
         error: "Invalid setup code format. Please scan a valid QR code from the outlet display." 
       })
