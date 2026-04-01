@@ -2925,7 +2925,7 @@ router.get("/check-device-config/:deviceId", async (req: any, res) => {
           isConfigured: true,
           outletId: outlet.id,
           outletName: outlet.name,
-          baseUrl: process.env.BASE_URL || "https://api.teleshop.dialog.lk",
+          baseUrl: process.env.BASE_URL || "https://sltsecmanage.slt.lk:7443/",
           device: device
         })
       }
