@@ -2807,8 +2807,19 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
       )
     ])
 
+    console.log(`✅ Device configured successfully:`, {
+      deviceId: deviceId,
+      deviceName: deviceName,
+      outletId: outlet.id,
+      outletName: outlet.name,
+      configuredAt: deviceRecord.configuredAt
+    })
+
     // Send instant WebSocket notification to device (if connected)
-    if (wsManager.isDeviceConnected(deviceId)) {
+    const isDeviceConnected = wsManager.isDeviceConnected(deviceId)
+    console.log(`📡 WebSocket device connected: ${isDeviceConnected}`)
+    
+    if (isDeviceConnected) {
       wsManager.sendToDevice(deviceId, {
         type: "SETUP_COMPLETE",
         data: {
@@ -2824,7 +2835,28 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
         }
       })
       console.log(`📡 Instant notification sent to device: ${deviceId}`)
+    } else {
+      console.log(`⚠️ Device ${deviceId} not connected via WebSocket - APK should poll /setup-status`)
     }
+
+    // ALWAYS broadcast SETUP_COMPLETE to ALL clients (this ensures APK gets it even if not registered by deviceId)
+    console.log(`📢 Broadcasting SETUP_COMPLETE to all WebSocket clients...`)
+    wsManager.broadcast({
+      type: "SETUP_COMPLETE",
+      data: {
+        success: true,
+        deviceId: deviceId,
+        deviceName: deviceName,
+        device: deviceRecord,
+        outlet: {
+          id: outlet.id,
+          name: outlet.name,
+          location: outlet.location
+        },
+        configuredBy: teleshopManager.name,
+        configuredAt: deviceRecord.configuredAt
+      }
+    })
 
     // Send broadcast notification (async, don't block response)
     setImmediate(() => {
@@ -2839,6 +2871,8 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
         }
       })
     })
+
+    console.log(`✅ QR setup complete - response sent to dashboard`)
 
     // Send response immediately
     res.json({
