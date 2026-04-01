@@ -2895,6 +2895,58 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
   }
 })
 
+// Check if device is configured (APK polling endpoint) - NO AUTH REQUIRED
+// This is called by APK to check if QR was scanned
+router.get("/check-device-config/:deviceId", async (req: any, res) => {
+  try {
+    const { deviceId } = req.params
+    
+    console.log(`📱 APK checking configuration for device: ${deviceId}`)
+
+    // Find device in any outlet's displaySettings
+    const outlets = await prisma.outlet.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        name: true,
+        location: true,
+        displaySettings: true
+      }
+    })
+
+    for (const outlet of outlets) {
+      const settings = outlet.displaySettings as any
+      const linkedDevices = settings?.linkedDevices || []
+      const device = linkedDevices.find((d: any) => d.deviceId === deviceId && d.isActive)
+      
+      if (device) {
+        console.log(`✅ Device ${deviceId} is configured for outlet: ${outlet.name}`)
+        return res.json({
+          isConfigured: true,
+          outletId: outlet.id,
+          outletName: outlet.name,
+          baseUrl: process.env.BASE_URL || "https://api.teleshop.dialog.lk",
+          device: device
+        })
+      }
+    }
+
+    // Not configured
+    res.json({
+      isConfigured: false,
+      outletId: null,
+      baseUrl: null
+    })
+
+  } catch (error: any) {
+    console.error("Check device config error:", error)
+    res.status(500).json({ 
+      isConfigured: false,
+      error: "Failed to check device configuration"
+    })
+  }
+})
+
 // Get linked outlet devices
 router.get("/outlet-devices", async (req: any, res) => {
   try {
