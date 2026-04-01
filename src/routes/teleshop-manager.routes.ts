@@ -505,6 +505,59 @@ router.get("/fast-heartbeat/:deviceId", async (req, res) => {
   }
 })
 
+// ========== HTTP POLLING ENDPOINTS FOR APK (Production Reliable) ==========
+// These endpoints are PUBLIC (no authentication) for APK polling
+
+// Get recent audio events for APK HTTP polling fallback
+router.get('/audio-events/:outletId', async (req: Request, res: Response) => {
+  try {
+    const { outletId } = req.params
+    const since = req.query.since ? new Date(req.query.since as string) : new Date(Date.now() - 30000) // Last 30 seconds
+    
+    // Get recent audio events for this outlet from global memory
+    const recentEvents = (global.recentAudioEvents || [])
+      .filter((event: any) => 
+        event.outletId === outletId && 
+        new Date(event.timestamp) > since
+      )
+    
+    console.log(`[APK_POLLING] Outlet ${outletId} polled for events since ${since.toISOString()}, found ${recentEvents.length} events`)
+    
+    res.json({
+      success: true,
+      events: recentEvents,
+      serverTime: new Date().toISOString(),
+      count: recentEvents.length
+    })
+    
+  } catch (error: any) {
+    console.error('[APK_POLLING] Get events error:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+// Acknowledge processed audio events (cleanup)
+router.post('/audio-events/:outletId/ack', async (req: Request, res: Response) => {
+  try {
+    const { eventIds } = req.body
+    
+    if (eventIds && Array.isArray(eventIds)) {
+      const initialCount = (global.recentAudioEvents || []).length
+      global.recentAudioEvents = (global.recentAudioEvents || [])
+        .filter((event: any) => !eventIds.includes(event.id))
+      
+      const removedCount = initialCount - global.recentAudioEvents.length
+      console.log(`[APK_POLLING] Acknowledged ${removedCount} events, ${global.recentAudioEvents.length} remaining`)
+    }
+    
+    res.json({ success: true })
+    
+  } catch (error: any) {
+    console.error('[APK_POLLING] Ack error:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
 // Apply authentication middleware to protected routes
 router.use(authenticateTeleshopManager)
 
@@ -3582,56 +3635,6 @@ router.get("/linked-devices", async (req: any, res) => {
   }
 })
 
-// ========== HTTP POLLING ENDPOINTS FOR APK (Production Reliable) ==========
 
-// Get recent audio events for APK HTTP polling fallback
-router.get('/audio-events/:outletId', async (req: Request, res: Response) => {
-  try {
-    const { outletId } = req.params
-    const since = req.query.since ? new Date(req.query.since as string) : new Date(Date.now() - 30000) // Last 30 seconds
-    
-    // Get recent audio events for this outlet from global memory
-    const recentEvents = (global.recentAudioEvents || [])
-      .filter((event: any) => 
-        event.outletId === outletId && 
-        new Date(event.timestamp) > since
-      )
-    
-    console.log(`[APK_POLLING] Outlet ${outletId} polled for events since ${since.toISOString()}, found ${recentEvents.length} events`)
-    
-    res.json({
-      success: true,
-      events: recentEvents,
-      serverTime: new Date().toISOString(),
-      count: recentEvents.length
-    })
-    
-  } catch (error: any) {
-    console.error('[APK_POLLING] Get events error:', error)
-    res.status(500).json({ success: false, error: error.message })
-  }
-})
-
-// Acknowledge processed audio events (cleanup)
-router.post('/audio-events/:outletId/ack', async (req: Request, res: Response) => {
-  try {
-    const { eventIds } = req.body
-    
-    if (eventIds && Array.isArray(eventIds)) {
-      const initialCount = (global.recentAudioEvents || []).length
-      global.recentAudioEvents = (global.recentAudioEvents || [])
-        .filter((event: any) => !eventIds.includes(event.id))
-      
-      const removedCount = initialCount - global.recentAudioEvents.length
-      console.log(`[APK_POLLING] Acknowledged ${removedCount} events, ${global.recentAudioEvents.length} remaining`)
-    }
-    
-    res.json({ success: true })
-    
-  } catch (error: any) {
-    console.error('[APK_POLLING] Ack error:', error)
-    res.status(500).json({ success: false, error: error.message })
-  }
-})
 
 export default router
