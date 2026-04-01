@@ -2807,6 +2807,25 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
       )
     ])
 
+    // Send instant WebSocket notification to device (if connected)
+    if (wsManager.isDeviceConnected(deviceId)) {
+      wsManager.sendToDevice(deviceId, {
+        type: "SETUP_COMPLETE",
+        data: {
+          success: true,
+          device: deviceRecord,
+          outlet: {
+            id: outlet.id,
+            name: outlet.name,
+            location: outlet.location
+          },
+          configuredBy: teleshopManager.name,
+          configuredAt: deviceRecord.configuredAt
+        }
+      })
+      console.log(`📡 Instant notification sent to device: ${deviceId}`)
+    }
+
     // Send broadcast notification (async, don't block response)
     setImmediate(() => {
       broadcast({
