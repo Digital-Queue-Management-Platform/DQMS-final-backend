@@ -483,6 +483,36 @@ router.post("/next-token", async (req, res) => {
 
     broadcast({ type: "TOKEN_CALLED", data: updatedToken })
 
+    // Store TOKEN_CALLED event for APK HTTP polling fallback
+    const audioEvent = {
+      id: Date.now().toString(),
+      outletId: updatedToken.outletId,
+      type: "TOKEN_CALLED",
+      testType: null,
+      lang: customerLang || 'en',
+      customText: null,
+      chimeVolume: 100,
+      voiceVolume: 300,
+      timestamp: new Date().toISOString(),
+      tokenData: {
+        tokenNumber: updatedToken.tokenNumber,
+        counterNumber: officer.counterNumber || 0,
+        customerName: firstName
+      }
+    }
+    
+    if (!global.recentAudioEvents) {
+      global.recentAudioEvents = []
+    }
+    global.recentAudioEvents.push(audioEvent)
+    
+    // Keep only last 20 events (prevent memory bloat)
+    if (global.recentAudioEvents.length > 20) {
+      global.recentAudioEvents = global.recentAudioEvents.slice(-20)
+    }
+    
+    console.log(`[HTTP_FALLBACK] TOKEN_CALLED event stored for APK polling: ${audioEvent.id} (outlet: ${audioEvent.outletId})`)
+
     // Also trigger hardware IP speaker if configured
     let tokenSpeech = ""
     if (customerLang === "si") tokenSpeech = `${firstName}. ටෝකන් අංක ${updatedToken.tokenNumber}, කරුණාකර කවුන්ටර අංක ${officer.counterNumber || 0} වෙත පැමිණෙන්න.`
@@ -700,6 +730,36 @@ router.post("/reannounce-token", async (req, res) => {
     // Broadcast again. The central display will speak it.
     broadcast({ type: 'TOKEN_CALLED', data: token })
 
+    // Store TOKEN_CALLED (re-announce) event for APK HTTP polling fallback
+    const audioEvent = {
+      id: Date.now().toString(),
+      outletId: token.outletId,
+      type: "TOKEN_CALLED",
+      testType: "re-announce",
+      lang: (token as any).preferredLanguages || 'en',
+      customText: null,
+      chimeVolume: 100,
+      voiceVolume: 300,
+      timestamp: new Date().toISOString(),
+      tokenData: {
+        tokenNumber: token.tokenNumber,
+        counterNumber: token.officer?.counterNumber || 0,
+        customerName: token.customer?.name || "Customer"
+      }
+    }
+    
+    if (!global.recentAudioEvents) {
+      global.recentAudioEvents = []
+    }
+    global.recentAudioEvents.push(audioEvent)
+    
+    // Keep only last 20 events
+    if (global.recentAudioEvents.length > 20) {
+      global.recentAudioEvents = global.recentAudioEvents.slice(-20)
+    }
+    
+    console.log(`[HTTP_FALLBACK] TOKEN_CALLED (re-announce) event stored for APK polling: ${audioEvent.id} (outlet: ${audioEvent.outletId})`)
+
     return res.json({ success: true })
   } catch (err) {
     console.error('Re-announce error:', err)
@@ -900,6 +960,36 @@ router.post("/call-token", async (req, res) => {
 
     // Broadcast update
     broadcast({ type: 'TOKEN_CALLED', data: called })
+
+    // Store TOKEN_CALLED (recall) event for APK HTTP polling fallback  
+    const audioEvent = {
+      id: Date.now().toString(),
+      outletId: called.outletId,
+      type: "TOKEN_CALLED", 
+      testType: "recall",
+      lang: (called as any).preferredLanguages || 'en',
+      customText: null,
+      chimeVolume: 100,
+      voiceVolume: 300,
+      timestamp: new Date().toISOString(),
+      tokenData: {
+        tokenNumber: called.tokenNumber,
+        counterNumber: called.officer?.counterNumber || 0,
+        customerName: called.customer?.name || "Customer"
+      }
+    }
+    
+    if (!global.recentAudioEvents) {
+      global.recentAudioEvents = []
+    }
+    global.recentAudioEvents.push(audioEvent)
+    
+    // Keep only last 20 events
+    if (global.recentAudioEvents.length > 20) {
+      global.recentAudioEvents = global.recentAudioEvents.slice(-20)
+    }
+    
+    console.log(`[HTTP_FALLBACK] TOKEN_CALLED (recall) event stored for APK polling: ${audioEvent.id} (outlet: ${audioEvent.outletId})`)
 
     res.json({ success: true, token: called })
   } catch (error) {

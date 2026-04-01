@@ -567,7 +567,33 @@ router.post("/test-sound", async (req: any, res) => {
       }
     })
 
-    // 2. If IP Speaker is enabled and this is a voice announcement, trigger hardware cast
+    // 2. Store audio event for HTTP polling fallback (for APK when WebSocket fails)
+    const audioEvent = {
+      id: Date.now().toString(),
+      outletId: teleshopManager.branchId,
+      type: "TEST_SOUND",
+      testType: type,
+      lang: lang || 'en',
+      customText: customText || null,
+      chimeVolume: chimeVolume || 100,
+      voiceVolume: voiceVolume || 300,
+      timestamp: new Date().toISOString()
+    }
+    
+    // Store in global memory for APK polling (simple reliable fallback)
+    if (!global.recentAudioEvents) {
+      global.recentAudioEvents = []
+    }
+    global.recentAudioEvents.push(audioEvent)
+    
+    // Keep only last 20 events (prevent memory bloat)
+    if (global.recentAudioEvents.length > 20) {
+      global.recentAudioEvents = global.recentAudioEvents.slice(-20)
+    }
+    
+    console.log(`[HTTP_FALLBACK] Audio event stored for APK polling: ${audioEvent.id} (outlet: ${audioEvent.outletId})`)
+
+    // 3. If IP Speaker is enabled and this is a voice announcement, trigger hardware cast
     if (type === 'voice') {
       const textToSpeak = customText || (lang === 'si' 
         ? "මෙය ස්පීකර් පරීක්ෂණ නිවේදනයකි." 
@@ -3553,6 +3579,58 @@ router.get("/linked-devices", async (req: any, res) => {
       error: "Failed to get linked devices",
       details: error.message
     })
+  }
+})
+
+// ========== HTTP POLLING ENDPOINTS FOR APK (Production Reliable) ==========
+
+// Get recent audio events for APK HTTP polling fallback
+router.get('/audio-events/:outletId', async (req: Request, res: Response) => {
+  try {
+    const { outletId } = req.params
+    const since = req.query.since ? new Date(req.query.since as string) : new Date(Date.now() - 30000) // Last 30 seconds
+    
+    // Get recent audio events for this outlet from global memory
+    const recentEvents = (global.recentAudioEvents || [])
+      .filter((event: any) => 
+        event.outletId === outletId && 
+        new Date(event.timestamp) > since
+      )
+    
+    console.log(`[APK_POLLING] Outlet ${outletId} polled for events since ${since.toISOString()}, found ${recentEvents.length} events`)
+    
+    res.json({
+      success: true,
+      events: recentEvents,
+      serverTime: new Date().toISOString(),
+      count: recentEvents.length
+    })
+    
+  } catch (error: any) {
+    console.error('[APK_POLLING] Get events error:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+// Acknowledge processed audio events (cleanup)
+router.post('/audio-events/:outletId/ack', async (req: Request, res: Response) => {
+  try {
+    const { eventIds } = req.body
+    
+    if (eventIds && Array.isArray(eventIds)) {
+      const initialCount = (global.recentAudioEvents || []).length
+      global.recentAudioEvents = (global.recentAudioEvents || [])
+        .filter((event: any) => !eventIds.includes(event.id))
+      
+      const removedCount = initialCount - global.recentAudioEvents.length
+      console.log(`[APK_POLLING] Acknowledged ${removedCount} events, ${global.recentAudioEvents.length} remaining`)
+    }
+    
+    res.json({ success: true })
+    
+  } catch (error: any) {
+    console.error('[APK_POLLING] Ack error:', error)
+    res.status(500).json({ success: false, error: error.message })
   }
 })
 
