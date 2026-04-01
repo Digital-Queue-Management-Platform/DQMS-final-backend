@@ -4,11 +4,13 @@
  */
 
 import express, { Request, Response } from "express"
+import { PrismaClient } from "@prisma/client"
 import { qrSessionService } from "../services/qrSessionService"
 import { deviceLinkService } from "../services/deviceLinkService"
 import { wsManager, QR_SESSION_ROOM } from "../services/wsManager"
 
 const router = express.Router()
+const prisma = new PrismaClient()
 
 /**
  * POST /api/outlet/generate-qr-session
@@ -283,6 +285,75 @@ router.get("/session-status/:sessionId", async (req: Request, res: Response) => 
     console.error("❌ Session status check error:", error)
     res.status(500).json({
       error: "Failed to check session status",
+      details: error.message
+    })
+  }
+})
+
+/**
+ * GET /api/outlet/setup-status
+ * Fast polling endpoint for OLD QR setup flow (setupCode-based)
+ * Called by outlet TV APK to check if device is configured
+ * Query params: deviceId, setupCode
+ */
+router.get("/setup-status", async (req: Request, res: Response) => {
+  try {
+    const { deviceId, setupCode } = req.query
+
+    if (!deviceId || typeof deviceId !== 'string') {
+      return res.status(400).json({
+        error: "Missing deviceId parameter"
+      })
+    }
+
+    // Query outlets to find device in displaySettings
+    const outlets = await prisma.outlet.findMany({
+      where: {
+        isActive: true
+      },
+      select: {
+        id: true,
+        name: true,
+        location: true,
+        displaySettings: true
+      }
+    })
+
+    // Find the device in displaySettings
+    for (const outlet of outlets) {
+      const settings = outlet.displaySettings as any
+      const linkedDevices = settings?.linkedDevices || []
+      const device = linkedDevices.find((d: any) => d.deviceId === deviceId)
+      
+      if (device && device.isActive) {
+        // Also check if it matches setupCode if provided
+        if (setupCode && device.setupCode !== setupCode) {
+          continue
+        }
+
+        return res.json({
+          configured: true,
+          device: device,
+          outlet: {
+            id: outlet.id,
+            name: outlet.name,
+            location: outlet.location
+          },
+          timestamp: new Date().toISOString()
+        })
+      }
+    }
+
+    // Not configured yet
+    res.json({
+      configured: false,
+      timestamp: new Date().toISOString()
+    })
+
+  } catch (error: any) {
+    console.error("❌ Setup status check error:", error)
+    res.status(500).json({
+      error: "Failed to check setup status",
       details: error.message
     })
   }
