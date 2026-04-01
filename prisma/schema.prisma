@@ -120,8 +120,10 @@ model Outlet {
   closureNotices    ClosureNotice[]
   completedServices CompletedService[]
   deviceHeartbeats  DeviceHeartbeat[]
+  deviceLinks       DeviceLink[]
   managerQRTokens   ManagerQRToken[]
   officers          Officer[]
+  qrSessions        QRSession[]
   region            Region             @relation(fields: [regionId], references: [id])
   serviceCases      ServiceCase[]
   systemLogs        SystemLog[]
@@ -600,4 +602,62 @@ model AuditLog {
   @@index([action, timestamp])
   @@index([outletId, timestamp])
   @@index([userRole, timestamp])
+}
+
+// =============================================================================
+// QR CODE SESSION MANAGEMENT - WhatsApp Web Style
+// =============================================================================
+
+model QRSession {
+  id                String    @id @default(uuid())
+  sessionId         String    @unique
+  qrToken           String    @unique
+  outletId          String
+  deviceId          String?
+  deviceName        String?
+  status            String    @default("pending") // pending, scanned, linked, expired, rejected, unlinked
+  generatedAt       DateTime  @default(now())
+  expiresAt         DateTime
+  scannedAt         DateTime?
+  scannedByManagerId String?
+  linkedAt          DateTime?
+  linkedManagerId   String?
+  linkedDeviceId    String?
+  unlinkedAt        DateTime?
+  unlinkedBy        String?   // managerId or deviceId
+  unlinkedReason    String?   // manager_logout, device_logout, expired, rejected
+  metadata          Json?     // Additional session data
+  
+  outlet            Outlet    @relation(fields: [outletId], references: [id])
+  
+  @@index([sessionId])
+  @@index([qrToken])
+  @@index([outletId, status])
+  @@index([status, expiresAt])
+  @@index([generatedAt])
+  @@index([linkedManagerId])
+}
+
+model DeviceLink {
+  id                String    @id @default(uuid())
+  deviceId          String    @unique
+  deviceName        String
+  macAddress        String?
+  outletId          String
+  managerId         String
+  status            String    @default("active") // active, inactive, suspended
+  linkedAt          DateTime  @default(now())
+  lastSeenAt        DateTime  @default(now())
+  lastHeartbeatAt   DateTime?
+  unlinkedAt        DateTime?
+  configData        Json?     // Device-specific configuration
+  metadata          Json?     // Additional device metadata
+  
+  outlet            Outlet    @relation(fields: [outletId], references: [id])
+  
+  @@index([deviceId])
+  @@index([outletId, status])
+  @@index([managerId])
+  @@index([status, lastSeenAt])
+  @@index([lastSeenAt])
 }
