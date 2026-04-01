@@ -31,8 +31,12 @@ import billRoutes from "./routes/bill.routes"
 import sltSmsRoutes from "./routes/slt-sms.routes"
 import utilsRoutes from "./routes/utils.routes"
 import logsRoutes from "./routes/logs.routes"
+import outletRoutes from "./routes/outlet.routes"
 import { healthTracker } from "./services/healthTracker"
 import { systemLogger, requestLoggerMiddleware, errorLoggerMiddleware } from "./services/systemLogger"
+import { wsManager, QR_SESSION_ROOM, OUTLET_DEVICES_ROOM, MANAGER_DEVICES_ROOM } from "./services/wsManager"
+import { qrSessionService } from "./services/qrSessionService"
+import { deviceLinkService } from "./services/deviceLinkService"
 
 export const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
@@ -147,6 +151,86 @@ wss.on("connection", (ws, req) => {
     metadata: { url: req.url }
   })
 
+  // Parse connection URL for QR session or device registration
+  const url = new URL(req.url || '/', `http://${req.headers.host}`)
+  const sessionId = url.searchParams.get('sessionId')
+  const deviceId = url.searchParams.get('deviceId')
+  const managerId = url.searchParams.get('managerId')
+  const outletId = url.searchParams.get('outletId')
+
+  // Register with wsManager
+  wsManager.registerClient(ws, {
+    sessionId: sessionId || undefined,
+    deviceId: deviceId || undefined,
+    managerId: managerId || undefined,
+    outletId: outletId || undefined
+  })
+
+  // Auto-join rooms based on connection type
+  if (sessionId) {
+    wsManager.joinRoom(ws, QR_SESSION_ROOM(sessionId))
+    logger.info({ sessionId }, "WS_JOINED_QR_SESSION_ROOM")
+  }
+  if (outletId && deviceId) {
+    wsManager.joinRoom(ws, OUTLET_DEVICES_ROOM(outletId))
+    logger.info({ outletId, deviceId }, "WS_JOINED_OUTLET_DEVICES_ROOM")
+  }
+  if (managerId) {
+    wsManager.joinRoom(ws, MANAGER_DEVICES_ROOM(managerId))
+    logger.info({ managerId }, "WS_JOINED_MANAGER_DEVICES_ROOM")
+  }
+
+  // Handle incoming messages
+  ws.on("message", async (data) => {
+    try {
+      const message = JSON.parse(data.toString())
+      
+      switch (message.type) {
+        case "HEARTBEAT":
+          // Update heartbeat for the client
+          wsManager.updateHeartbeat(ws)
+          ws.send(JSON.stringify({ type: "HEARTBEAT_ACK", timestamp: new Date().toISOString() }))
+          break
+
+        case "QR_SESSION_REGISTER":
+          // Device registering for QR session
+          if (message.sessionId) {
+            wsManager.joinRoom(ws, QR_SESSION_ROOM(message.sessionId))
+            ws.send(JSON.stringify({ 
+              type: "QR_SESSION_REGISTERED", 
+              sessionId: message.sessionId 
+            }))
+          }
+          break
+
+        case "SUBSCRIBE_OUTLET_DEVICES":
+          // Manager subscribing to outlet device updates
+          if (message.outletId) {
+            wsManager.joinRoom(ws, OUTLET_DEVICES_ROOM(message.outletId))
+            ws.send(JSON.stringify({ 
+              type: "SUBSCRIBED_OUTLET_DEVICES", 
+              outletId: message.outletId 
+            }))
+          }
+          break
+
+        case "DEVICE_HEARTBEAT":
+          // Device sending heartbeat with status update
+          if (message.deviceId) {
+            wsManager.updateHeartbeat(ws)
+            // Update device heartbeat in database
+            await deviceLinkService.updateHeartbeat(message.deviceId)
+          }
+          break
+
+        default:
+          logger.warn({ type: message.type }, "Unknown WebSocket message type")
+      }
+    } catch (error: any) {
+      logger.error({ error: error.message }, "WebSocket message handling error")
+    }
+  })
+
   ws.on("error", (err) => {
     logger.error({ err, ip }, "WS_CLIENT_ERROR")
     systemLogger.wsError('client-error', `WebSocket client error: ${err.message}`, {
@@ -160,6 +244,9 @@ wss.on("connection", (ws, req) => {
     systemLogger.wsEvent('client-disconnected', `WebSocket client disconnected from ${ip}`, {
       ipAddress: ip || undefined
     })
+    
+    // Unregister client from wsManager
+    wsManager.unregisterClient(ws)
   })
 })
 
@@ -247,6 +334,7 @@ app.use("/api/gm", gmRoutes)
 app.use("/api/logs", logsRoutes)
 app.use("/api/dgm", dgmRoutes)
 app.use("/api/utils", utilsRoutes)
+app.use("/api/outlet", outletRoutes)
 
 // Helper: parse "HH:MM" string to total minutes
 function parseTimeToMinutes(t: string): number {
@@ -465,6 +553,52 @@ server.listen(PORT, "0.0.0.0", () => {
   } catch (err) {
     logger.error({ err }, "HEALTH_TRACKER_INIT_FAILED");
   }
+
+  // Start QR session cleanup jobs (WhatsApp Web-style)
+  console.log("🔄 Starting QR session cleanup jobs...")
+  
+  // Job 1: Expire old QR sessions (every 30 seconds)
+  setInterval(async () => {
+    try {
+      await qrSessionService.expireOldSessions()
+    } catch (error: any) {
+      logger.error({ error: error.message }, "QR_SESSION_EXPIRE_JOB_FAILED")
+    }
+  }, 30000)  // 30 seconds
+  
+  // Job 2: Cleanup very old sessions (every 6 hours)
+  setInterval(async () => {
+    try {
+      await qrSessionService.cleanupOldSessions()
+    } catch (error: any) {
+      logger.error({ error: error.message }, "QR_SESSION_CLEANUP_JOB_FAILED")
+    }
+  }, 6 * 60 * 60 * 1000)  // 6 hours
+  
+  // Job 3: Mark stale devices as inactive (every 5 minutes)
+  setInterval(async () => {
+    try {
+      await deviceLinkService.markStaleDevicesInactive(5 * 60 * 1000) // 5 minutes
+    } catch (error: any) {
+      logger.error({ error: error.message }, "DEVICE_STALE_CHECK_JOB_FAILED")
+    }
+  }, 5 * 60 * 1000)  // 5 minutes
+  
+  // Job 4: Cleanup old inactive device links (once per day)
+  setInterval(async () => {
+    try {
+      await deviceLinkService.cleanupInactiveLinks(30) // 30 days
+    } catch (error: any) {
+      logger.error({ error: error.message }, "DEVICE_LINK_CLEANUP_JOB_FAILED")
+    }
+  }, 24 * 60 * 60 * 1000)  // 24 hours
+
+  console.log("✅ QR session cleanup jobs started")
+  systemLogger.info("QR session cleanup jobs initialized", {
+    service: 'backend',
+    module: 'qr-session',
+    event: 'cleanup-jobs-started'
+  })
 })
 
 // Periodic job: detect long-wait tokens and create alerts

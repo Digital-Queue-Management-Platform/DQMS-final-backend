@@ -3032,4 +3032,423 @@ router.delete("/outlet-devices/:deviceId", async (req: any, res) => {
   }
 })
 
+// =============================================================================
+// WHATSAPP WEB-STYLE QR CODE AUTHENTICATION - NEW IMPLEMENTATION
+// =============================================================================
+
+import { qrSessionService } from "../services/qrSessionService"
+import { deviceLinkService } from "../services/deviceLinkService"
+import { wsManager, QR_SESSION_ROOM, OUTLET_DEVICES_ROOM } from "../services/wsManager"
+
+/**
+ * POST /api/teleshop-manager/scan-outlet-qr
+ * Manager scans QR code from outlet TV display
+ * First step of WhatsApp Web-style linking
+ */
+router.post("/scan-outlet-qr", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+    const { qrData } = req.body
+
+    // Validate manager has branch assigned
+    if (!teleshopManager.branchId) {
+      return res.status(403).json({
+        error: "You must be assigned to a branch to link outlet displays"
+      })
+    }
+
+    // Parse QR data: format is "sessionId:qrToken"
+    if (!qrData || typeof qrData !== 'string') {
+      return res.status(400).json({
+        error: "Invalid QR code data"
+      })
+    }
+
+    const parts = qrData.split(':')
+    if (parts.length !== 2) {
+      return res.status(400).json({
+        error: "Invalid QR code format"
+      })
+    }
+
+    const [sessionId, qrToken] = parts
+
+    // Validate QR token
+    const session = await qrSessionService.validateQRToken(qrToken)
+
+    if (!session) {
+      return res.status(400).json({
+        error: "Invalid or expired QR code. Please generate a new one on the TV display."
+      })
+    }
+
+    // Verify the session matches
+    if (session.sessionId !== sessionId) {
+      return res.status(400).json({
+        error: "QR code mismatch. Please try again."
+      })
+    }
+
+    // Verify outlet matches manager's branch
+    if (session.outletId !== teleshopManager.branchId) {
+      return res.status(403).json({
+        error: "This QR code is for a different outlet. Please scan the correct code."
+      })
+    }
+
+    // Update session status to 'scanned'
+    await qrSessionService.updateSessionStatus({
+      sessionId: sessionId,
+      status: 'scanned',
+      scannedByManagerId: teleshopManager.id
+    })
+
+    // Notify the TV display that QR was scanned
+    wsManager.sendToSession(sessionId, {
+      type: "QR_SCANNED",
+      data: {
+        scannedBy: teleshopManager.name,
+        scannedAt: new Date().toISOString()
+      }
+    })
+
+    console.log(`📱 QR code scanned:`, {
+      sessionId,
+      managerId: teleshopManager.id,
+      managerName: teleshopManager.name,
+      outletId: session.outletId
+    })
+
+    // Return device info for manager to review before approving
+    res.json({
+      success: true,
+      session: {
+        sessionId: session.sessionId,
+        deviceId: session.deviceId,
+        deviceName: session.deviceName,
+        outlet: session.outlet
+      },
+      message: "QR code scanned successfully. Please review and approve the device."
+    })
+
+  } catch (error: any) {
+    console.error("❌ Scan QR code error:", error)
+    res.status(500).json({
+      error: "Failed to scan QR code",
+      details: error.message
+    })
+  }
+})
+
+/**
+ * POST /api/teleshop-manager/approve-link
+ * Manager approves device link after scanning QR
+ * Second step of WhatsApp Web-style linking
+ */
+router.post("/approve-link", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+    const { sessionId } = req.body
+
+    if (!sessionId) {
+      return res.status(400).json({
+        error: "Missing sessionId"
+      })
+    }
+
+    // Get session
+    const session = await qrSessionService.getSession(sessionId)
+
+    if (!session) {
+      return res.status(404).json({
+        error: "Session not found"
+      })
+    }
+
+    // Verify session was scanned by this manager
+    if (session.scannedByManagerId !== teleshopManager.id) {
+      return res.status(403).json({
+        error: "You did not scan this QR code"
+      })
+    }
+
+    // Verify outlet matches manager's branch
+    if (session.outletId !== teleshopManager.branchId) {
+      return res.status(403).json({
+        error: "Outlet mismatch"
+      })
+    }
+
+    // Create or update device link
+    const deviceLink = await deviceLinkService.createLink({
+      deviceId: session.deviceId!,
+      deviceName: session.deviceName!,
+      outletId: session.outletId,
+      managerId: teleshopManager.id,
+      configData: {
+        linkedVia: 'qr_session',
+        sessionId: sessionId
+      }
+    })
+
+    // Update session status to 'linked'
+    await qrSessionService.updateSessionStatus({
+      sessionId: sessionId,
+      status: 'linked',
+      linkedManagerId: teleshopManager.id,
+      linkedDeviceId: session.deviceId!
+    })
+
+    // Notify the TV display that link is established
+    const linkData = {
+      deviceId: deviceLink.deviceId,
+      deviceName: deviceLink.deviceName,
+      outletId: deviceLink.outletId,
+      outlet: deviceLink.outlet,
+      linkedAt: deviceLink.linkedAt,
+      managerId: teleshopManager.id,
+      managerName: teleshopManager.name
+    }
+
+    wsManager.sendToSession(sessionId, {
+      type: "LINK_ESTABLISHED",
+      data: linkData
+    })
+
+    // Also broadcast to outlet devices room
+    wsManager.broadcastToRoom(OUTLET_DEVICES_ROOM(session.outletId), {
+      type: "DEVICE_LINKED",
+      data: linkData
+    })
+
+    // Audit log
+    auditLog(
+      teleshopManager.id,
+      "DEVICE_LINKED_VIA_QR",
+      "device",
+      deviceLink.deviceId,
+      {
+        deviceName: deviceLink.deviceName,
+        sessionId: sessionId,
+        method: 'whatsapp_web_style'
+      }
+    )
+
+    console.log(`✅ Device link approved:`, {
+      sessionId,
+      deviceId: deviceLink.deviceId,
+      deviceName: deviceLink.deviceName,
+      managerId: teleshopManager.id
+    })
+
+    res.json({
+      success: true,
+      message: "Device linked successfully",
+      device: linkData
+    })
+
+  } catch (error: any) {
+    console.error("❌ Approve link error:", error)
+    res.status(500).json({
+      error: "Failed to approve device link",
+      details: error.message
+    })
+  }
+})
+
+/**
+ * POST /api/teleshop-manager/reject-link
+ * Manager rejects device link after scanning QR
+ * Alternative to approve - tells TV to regenerate QR
+ */
+router.post("/reject-link", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+    const { sessionId, reason } = req.body
+
+    if (!sessionId) {
+      return res.status(400).json({
+        error: "Missing sessionId"
+      })
+    }
+
+    // Get session
+    const session = await qrSessionService.getSession(sessionId)
+
+    if (!session) {
+      return res.status(404).json({
+        error: "Session not found"
+      })
+    }
+
+    // Update session status to 'rejected'
+    await qrSessionService.updateSessionStatus({
+      sessionId: sessionId,
+      status: 'rejected',
+      unlinkedReason: reason || 'manager_rejected'
+    })
+
+    // Notify the TV display
+    wsManager.sendToSession(sessionId, {
+      type: "LINK_REJECTED",
+      data: {
+        rejectedBy: teleshopManager.name,
+        rejectedAt: new Date().toISOString(),
+        reason: reason || 'Manager rejected the link'
+      }
+    })
+
+    console.log(`❌ Device link rejected:`, {
+      sessionId,
+      deviceId: session.deviceId,
+      managerId: teleshopManager.id,
+      reason
+    })
+
+    res.json({
+      success: true,
+      message: "Device link rejected"
+    })
+
+  } catch (error: any) {
+    console.error("❌ Reject link error:", error)
+    res.status(500).json({
+      error: "Failed to reject device link",
+      details: error.message
+    })
+  }
+})
+
+/**
+ * DELETE /api/teleshop-manager/unlink-device-instant/:deviceId
+ * Manager-initiated instant device unlink (WhatsApp Web logout style)
+ */
+router.delete("/unlink-device-instant/:deviceId", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+    const { deviceId } = req.params
+
+    if (!deviceId) {
+      return res.status(400).json({
+        error: "Missing deviceId"
+      })
+    }
+
+    // Get device link
+    const deviceLink = await deviceLinkService.getLink(deviceId)
+
+    if (!deviceLink) {
+      return res.status(404).json({
+        error: "Device not found"
+      })
+    }
+
+    // Verify manager has permission (same outlet)
+    if (deviceLink.outletId !== teleshopManager.branchId) {
+      return res.status(403).json({
+        error: "You don't have permission to unlink this device"
+      })
+    }
+
+    // Unlink the device
+    const success = await deviceLinkService.unlinkDevice(deviceId, 'manager_logout')
+
+    if (!success) {
+      return res.status(500).json({
+        error: "Failed to unlink device"
+      })
+    }
+
+    // Broadcast instant unlink to the TV display
+    wsManager.sendToDevice(deviceId, {
+      type: "DEVICE_UNLINKED",
+      data: {
+        unlinkedBy: 'manager',
+        managerName: teleshopManager.name,
+        unlinkedAt: new Date().toISOString(),
+        action: 'return_to_qr_screen'
+      }
+    })
+
+    // Also broadcast to outlet devices room
+    wsManager.broadcastToRoom(OUTLET_DEVICES_ROOM(deviceLink.outletId), {
+      type: "DEVICE_UNLINKED",
+      data: {
+        deviceId: deviceId,
+        deviceName: deviceLink.deviceName,
+        outletId: deviceLink.outletId,
+        unlinkedBy: 'manager'
+      }
+    })
+
+    // Audit log
+    auditLog(
+      teleshopManager.id,
+      "DEVICE_UNLINKED_INSTANT",
+      "device",
+      deviceId,
+      {
+        deviceName: deviceLink.deviceName,
+        method: 'whatsapp_web_style'
+      }
+    )
+
+    console.log(`📱 Device unlinked instantly:`, {
+      deviceId,
+      deviceName: deviceLink.deviceName,
+      managerId: teleshopManager.id,
+      managerName: teleshopManager.name
+    })
+
+    res.json({
+      success: true,
+      message: "Device unlinked successfully"
+    })
+
+  } catch (error: any) {
+    console.error("❌ Instant unlink device error:", error)
+    res.status(500).json({
+      error: "Failed to unlink device",
+      details: error.message
+    })
+  }
+})
+
+/**
+ * GET /api/teleshop-manager/linked-devices
+ * Get all devices linked to manager's outlet
+ */
+router.get("/linked-devices", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+
+    if (!teleshopManager.branchId) {
+      return res.json({
+        devices: []
+      })
+    }
+
+    // Get all active devices for the outlet
+    const devices = await deviceLinkService.getOutletDevices(teleshopManager.branchId, true)
+
+    // Enhance with WebSocket connection status
+    const devicesWithStatus = devices.map(device => ({
+      ...device,
+      websocketConnected: wsManager.isDeviceConnected(device.deviceId)
+    }))
+
+    res.json({
+      devices: devicesWithStatus,
+      total: devicesWithStatus.length
+    })
+
+  } catch (error: any) {
+    console.error("❌ Get linked devices error:", error)
+    res.status(500).json({
+      error: "Failed to get linked devices",
+      details: error.message
+    })
+  }
+})
+
 export default router
