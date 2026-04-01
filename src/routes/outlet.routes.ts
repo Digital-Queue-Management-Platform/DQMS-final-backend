@@ -1,76 +1,55 @@
 /**
  * Outlet Display APK Routes
- * Handles QR session generation and device linking for outlet TV displays
+ * Handles QR setup and device linking for outlet TV displays
+ * 
+ * SIMPLIFIED VERSION: Uses existing ManagerQRToken table and Outlet.displaySettings
+ * This avoids the Prisma issues with QRSession/DeviceLink tables
  */
 
 import express, { Request, Response } from "express"
 import { PrismaClient } from "@prisma/client"
-import { qrSessionService } from "../services/qrSessionService"
-import { deviceLinkService } from "../services/deviceLinkService"
-import { wsManager, QR_SESSION_ROOM } from "../services/wsManager"
+import { wsManager, OUTLET_DEVICES_ROOM } from "../services/wsManager"
 
 const router = express.Router()
 const prisma = new PrismaClient()
 
+// In-memory store for pending QR registrations (deviceId -> { setupCode, connectedAt })
+const pendingDevices = new Map<string, { setupCode: string; connectedAt: Date }>()
+
 /**
- * POST /api/outlet/generate-qr-session
- * Generate a new QR session for device linking
- * Called by outlet TV APK when it needs to display a QR code
+ * POST /api/outlet/register-qr
+ * Register APK's QR code for manager scanning
+ * Called by outlet TV APK when it generates a QR code
  */
-router.post("/generate-qr-session", async (req: Request, res: Response) => {
+router.post("/register-qr", async (req: Request, res: Response) => {
   try {
-    const { outletId, deviceId, deviceName } = req.body
+    const { setupCode, deviceId, deviceName } = req.body
 
-    // Validate required fields
-    if (!outletId || !deviceId || !deviceName) {
+    if (!setupCode || !deviceId) {
       return res.status(400).json({
-        error: "Missing required fields: outletId, deviceId, and deviceName are required"
+        error: "Missing required fields: setupCode and deviceId are required"
       })
     }
 
-    // Generate QR session
-    const session = await qrSessionService.generateSession({
-      outletId,
-      deviceId,
-      deviceName
+    // Store in memory for quick lookup
+    pendingDevices.set(deviceId, {
+      setupCode,
+      connectedAt: new Date()
     })
 
-    if (!session) {
-      return res.status(500).json({
-        error: "Failed to generate QR session"
-      })
-    }
-
-    console.log(`📱 QR session generated for device:`, {
-      sessionId: session.sessionId,
-      deviceId,
-      deviceName,
-      outletId
-    })
+    console.log(`📱 APK registered QR code: ${setupCode} for device: ${deviceId}`)
 
     res.json({
       success: true,
-      session: {
-        sessionId: session.sessionId,
-        qrToken: session.qrToken,
-        qrData: `${session.sessionId}:${session.qrToken}`, // Combined data for QR code
-        expiresAt: session.expiresAt,
-        expiresIn: Math.floor((session.expiresAt.getTime() - Date.now()) / 1000) // seconds
-      }
+      message: "QR code registered, waiting for manager scan",
+      setupCode: setupCode,
+      deviceId: deviceId
     })
 
   } catch (error: any) {
-    console.error("❌ Generate QR session error:", error)
-    
-    if (error.message === 'Rate limit exceeded. Please wait before generating another QR code.') {
-      return res.status(429).json({
-        error: error.message,
-        retryAfter: 60 // seconds
-      })
-    }
-
+    console.error("❌ Register QR error:", error)
     res.status(500).json({
-      error: "Failed to generate QR session",
+      error: "Failed to register QR code",
       details: error.message
     })
   }
@@ -79,7 +58,7 @@ router.post("/generate-qr-session", async (req: Request, res: Response) => {
 /**
  * GET /api/outlet/link-status
  * Check if device is linked and get link information
- * Called by outlet TV APK to check current link status
+ * Uses Outlet.displaySettings.linkedDevices
  */
 router.get("/link-status", async (req: Request, res: Response) => {
   try {
@@ -91,31 +70,46 @@ router.get("/link-status", async (req: Request, res: Response) => {
       })
     }
 
-    // Check device link status
-    const deviceLink = await deviceLinkService.getLink(deviceId)
+    // Find device in any outlet's displaySettings
+    const outlets = await prisma.outlet.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        name: true,
+        location: true,
+        displaySettings: true
+      }
+    })
 
-    if (!deviceLink) {
-      return res.json({
-        linked: false,
-        status: 'not_linked'
-      })
+    for (const outlet of outlets) {
+      const settings = outlet.displaySettings as any
+      const linkedDevices = settings?.linkedDevices || []
+      const device = linkedDevices.find((d: any) => d.deviceId === deviceId)
+      
+      if (device && device.isActive) {
+        return res.json({
+          linked: true,
+          status: 'active',
+          device: {
+            id: device.deviceId,
+            name: device.deviceName,
+            macAddress: device.macAddress,
+            linkedAt: device.configuredAt,
+            lastSeenAt: device.lastSeen
+          },
+          outlet: {
+            id: outlet.id,
+            name: outlet.name,
+            location: outlet.location
+          },
+          websocketConnected: wsManager.isDeviceConnected(deviceId)
+        })
+      }
     }
 
-    // Check if device is currently connected via WebSocket
-    const isConnected = wsManager.isDeviceConnected(deviceId)
-
-    res.json({
-      linked: true,
-      status: deviceLink.status,
-      device: {
-        id: deviceLink.deviceId,
-        name: deviceLink.deviceName,
-        macAddress: deviceLink.macAddress,
-        linkedAt: deviceLink.linkedAt,
-        lastSeenAt: deviceLink.lastSeenAt
-      },
-      outlet: deviceLink.outlet,
-      websocketConnected: isConnected
+    return res.json({
+      linked: false,
+      status: 'not_linked'
     })
 
   } catch (error: any) {
@@ -130,7 +124,7 @@ router.get("/link-status", async (req: Request, res: Response) => {
 /**
  * DELETE /api/outlet/unlink-device
  * Unlink device (APK-initiated logout)
- * Called by outlet TV APK when user wants to reset configuration
+ * Removes device from Outlet.displaySettings.linkedDevices
  */
 router.delete("/unlink-device", async (req: Request, res: Response) => {
   try {
@@ -142,41 +136,70 @@ router.delete("/unlink-device", async (req: Request, res: Response) => {
       })
     }
 
-    // Get device link before unlinking
-    const deviceLink = await deviceLinkService.getLink(deviceId)
-    
-    if (!deviceLink) {
+    // Find device in outlets
+    const outlets = await prisma.outlet.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        name: true,
+        displaySettings: true
+      }
+    })
+
+    let foundOutlet = null
+    let foundDevice = null
+
+    for (const outlet of outlets) {
+      const settings = outlet.displaySettings as any
+      const linkedDevices = settings?.linkedDevices || []
+      const device = linkedDevices.find((d: any) => d.deviceId === deviceId)
+      
+      if (device) {
+        foundOutlet = outlet
+        foundDevice = device
+        break
+      }
+    }
+
+    if (!foundOutlet || !foundDevice) {
       return res.status(404).json({
         error: "Device not linked"
       })
     }
 
-    // Unlink the device
-    const success = await deviceLinkService.unlinkDevice(deviceId, 'device_logout')
+    // Remove device from displaySettings
+    const settings = foundOutlet.displaySettings as any
+    const filteredDevices = (settings?.linkedDevices || []).filter((d: any) => d.deviceId !== deviceId)
+    
+    await prisma.outlet.update({
+      where: { id: foundOutlet.id },
+      data: {
+        displaySettings: {
+          ...settings,
+          linkedDevices: filteredDevices
+        }
+      }
+    })
 
-    if (!success) {
-      return res.status(500).json({
-        error: "Failed to unlink device"
-      })
-    }
-
-    // Broadcast unlink event to manager dashboard (if connected)
+    // Broadcast unlink event to manager dashboard
     wsManager.broadcast({
       type: "DEVICE_UNLINKED",
       data: {
         deviceId: deviceId,
-        deviceName: deviceLink.deviceName,
-        outletId: deviceLink.outletId,
+        deviceName: foundDevice.deviceName,
+        outletId: foundOutlet.id,
         unlinkedBy: 'device',
         unlinkedAt: new Date().toISOString()
-      },
-      targetManagerId: deviceLink.managerId
+      }
     })
+
+    // Remove from pending devices
+    pendingDevices.delete(deviceId)
 
     console.log(`📱 Device unlinked by APK:`, {
       deviceId,
-      deviceName: deviceLink.deviceName,
-      outletId: deviceLink.outletId
+      deviceName: foundDevice.deviceName,
+      outletId: foundOutlet.id
     })
 
     res.json({
@@ -195,8 +218,7 @@ router.delete("/unlink-device", async (req: Request, res: Response) => {
 
 /**
  * POST /api/outlet/heartbeat
- * Update device heartbeat timestamp
- * Called periodically by outlet TV APK to indicate it's alive
+ * Update device heartbeat/lastSeen timestamp
  */
 router.post("/heartbeat", async (req: Request, res: Response) => {
   try {
@@ -208,20 +230,45 @@ router.post("/heartbeat", async (req: Request, res: Response) => {
       })
     }
 
-    // Update device heartbeat
-    const success = await deviceLinkService.updateHeartbeat(deviceId)
+    // Find and update device lastSeen in displaySettings
+    const outlets = await prisma.outlet.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        displaySettings: true
+      }
+    })
 
-    if (!success) {
-      // Device might not be linked
-      return res.status(404).json({
-        error: "Device not linked",
-        action: "relink_required"
-      })
+    for (const outlet of outlets) {
+      const settings = outlet.displaySettings as any
+      const linkedDevices = settings?.linkedDevices || []
+      const deviceIndex = linkedDevices.findIndex((d: any) => d.deviceId === deviceId)
+      
+      if (deviceIndex !== -1) {
+        // Update lastSeen
+        linkedDevices[deviceIndex].lastSeen = new Date().toISOString()
+        
+        await prisma.outlet.update({
+          where: { id: outlet.id },
+          data: {
+            displaySettings: {
+              ...settings,
+              linkedDevices: linkedDevices
+            }
+          }
+        })
+
+        return res.json({
+          success: true,
+          timestamp: new Date().toISOString()
+        })
+      }
     }
 
-    res.json({
-      success: true,
-      timestamp: new Date().toISOString()
+    // Device not found
+    return res.status(404).json({
+      error: "Device not linked",
+      action: "relink_required"
     })
 
   } catch (error: any) {
@@ -234,67 +281,11 @@ router.post("/heartbeat", async (req: Request, res: Response) => {
 })
 
 /**
- * GET /api/outlet/session-status/:sessionId
- * Check QR session status (for polling if WebSocket is not available)
- * Called by outlet TV APK to check if QR was scanned/approved
- */
-router.get("/session-status/:sessionId", async (req: Request, res: Response) => {
-  try {
-    const { sessionId } = req.params
-
-    if (!sessionId) {
-      return res.status(400).json({
-        error: "Missing sessionId parameter"
-      })
-    }
-
-    // Get session status
-    const session = await qrSessionService.getSession(sessionId)
-
-    if (!session) {
-      return res.status(404).json({
-        error: "Session not found"
-      })
-    }
-
-    // Check if expired
-    if (new Date() > session.expiresAt && session.status === 'pending') {
-      await qrSessionService.updateSessionStatus({
-        sessionId: sessionId,
-        status: 'expired',
-        unlinkedReason: 'token_expired'
-      })
-      
-      return res.json({
-        status: 'expired',
-        message: 'QR session has expired'
-      })
-    }
-
-    // Return session status
-    res.json({
-      status: session.status,
-      sessionId: session.sessionId,
-      scannedAt: session.scannedAt,
-      linkedAt: session.linkedAt,
-      outlet: session.outlet,
-      expiresAt: session.expiresAt
-    })
-
-  } catch (error: any) {
-    console.error("❌ Session status check error:", error)
-    res.status(500).json({
-      error: "Failed to check session status",
-      details: error.message
-    })
-  }
-})
-
-/**
  * GET /api/outlet/setup-status
- * Fast polling endpoint for OLD QR setup flow (setupCode-based)
- * Called by outlet TV APK to check if device is configured
- * Query params: deviceId, setupCode
+ * Fast polling endpoint to check if device is configured
+ * Query params: deviceId, setupCode (optional)
+ * 
+ * This is the PRIMARY endpoint for APK to check if QR has been scanned
  */
 router.get("/setup-status", async (req: Request, res: Response) => {
   try {
@@ -308,9 +299,7 @@ router.get("/setup-status", async (req: Request, res: Response) => {
 
     // Query outlets to find device in displaySettings
     const outlets = await prisma.outlet.findMany({
-      where: {
-        isActive: true
-      },
+      where: { isActive: true },
       select: {
         id: true,
         name: true,
@@ -358,5 +347,10 @@ router.get("/setup-status", async (req: Request, res: Response) => {
     })
   }
 })
+
+/**
+ * Export pending devices map for use in WebSocket handler
+ */
+export const getPendingDevices = () => pendingDevices
 
 export default router

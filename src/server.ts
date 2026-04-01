@@ -34,9 +34,10 @@ import logsRoutes from "./routes/logs.routes"
 import outletRoutes from "./routes/outlet.routes"
 import { healthTracker } from "./services/healthTracker"
 import { systemLogger, requestLoggerMiddleware, errorLoggerMiddleware } from "./services/systemLogger"
-import { wsManager, QR_SESSION_ROOM, OUTLET_DEVICES_ROOM, MANAGER_DEVICES_ROOM } from "./services/wsManager"
-import { qrSessionService } from "./services/qrSessionService"
-import { deviceLinkService } from "./services/deviceLinkService"
+import { wsManager, OUTLET_DEVICES_ROOM, MANAGER_DEVICES_ROOM } from "./services/wsManager"
+// NOTE: qrSessionService and deviceLinkService disabled - using ManagerQRToken table instead
+// import { qrSessionService } from "./services/qrSessionService"
+// import { deviceLinkService } from "./services/deviceLinkService"
 
 export const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
@@ -167,10 +168,7 @@ wss.on("connection", (ws, req) => {
   })
 
   // Auto-join rooms based on connection type
-  if (sessionId) {
-    wsManager.joinRoom(ws, QR_SESSION_ROOM(sessionId))
-    logger.info({ sessionId }, "WS_JOINED_QR_SESSION_ROOM")
-  }
+  // NOTE: QR_SESSION_ROOM disabled - using simplified flow with OUTLET_DEVICES_ROOM
   if (outletId && deviceId) {
     wsManager.joinRoom(ws, OUTLET_DEVICES_ROOM(outletId))
     logger.info({ outletId, deviceId }, "WS_JOINED_OUTLET_DEVICES_ROOM")
@@ -178,6 +176,10 @@ wss.on("connection", (ws, req) => {
   if (managerId) {
     wsManager.joinRoom(ws, MANAGER_DEVICES_ROOM(managerId))
     logger.info({ managerId }, "WS_JOINED_MANAGER_DEVICES_ROOM")
+  }
+  // Device-based subscription for instant notifications
+  if (deviceId) {
+    logger.info({ deviceId }, "WS_DEVICE_CONNECTED")
   }
 
   // Handle incoming messages
@@ -190,17 +192,6 @@ wss.on("connection", (ws, req) => {
           // Update heartbeat for the client
           wsManager.updateHeartbeat(ws)
           ws.send(JSON.stringify({ type: "HEARTBEAT_ACK", timestamp: new Date().toISOString() }))
-          break
-
-        case "QR_SESSION_REGISTER":
-          // Device registering for QR session
-          if (message.sessionId) {
-            wsManager.joinRoom(ws, QR_SESSION_ROOM(message.sessionId))
-            ws.send(JSON.stringify({ 
-              type: "QR_SESSION_REGISTERED", 
-              sessionId: message.sessionId 
-            }))
-          }
           break
 
         case "SUBSCRIBE_OUTLET_DEVICES":
@@ -218,13 +209,13 @@ wss.on("connection", (ws, req) => {
           // Device sending heartbeat with status update
           if (message.deviceId) {
             wsManager.updateHeartbeat(ws)
-            // Update device heartbeat in database
-            await deviceLinkService.updateHeartbeat(message.deviceId)
+            // Heartbeat acknowledged - no DB update needed (saves DB load)
+            ws.send(JSON.stringify({ type: "HEARTBEAT_ACK", timestamp: new Date().toISOString() }))
           }
           break
 
         default:
-          logger.warn({ type: message.type }, "Unknown WebSocket message type")
+          logger.debug({ type: message.type }, "Unknown WebSocket message type")
       }
     } catch (error: any) {
       logger.error({ error: error.message }, "WebSocket message handling error")
@@ -554,47 +545,30 @@ server.listen(PORT, "0.0.0.0", () => {
     logger.error({ err }, "HEALTH_TRACKER_INIT_FAILED");
   }
 
-  // Start QR session cleanup jobs (WhatsApp Web-style)
-  console.log("🔄 Starting QR session cleanup jobs...")
+  // NOTE: QR Session cleanup jobs disabled - using ManagerQRToken table instead of QRSession
+  // The QRSession and DeviceLink tables have Prisma client issues - keeping disabled until resolved
+  console.log("ℹ️ QR session cleanup jobs disabled - using existing ManagerQRToken flow")
   
-  // Job 1: Expire old QR sessions (every 30 seconds)
+  // Cleanup job for ManagerQRToken (cleanup tokens older than 24 hours)
   setInterval(async () => {
     try {
-      await qrSessionService.expireOldSessions()
+      const cutoffDate = new Date(Date.now() - 24 * 60 * 60 * 1000) // 24 hours ago
+      const result = await prisma.managerQRToken.deleteMany({
+        where: {
+          generatedAt: { lt: cutoffDate }
+        }
+      })
+      if (result.count > 0) {
+        console.log(`🧹 Cleaned up ${result.count} old ManagerQRToken records`)
+      }
     } catch (error: any) {
-      logger.error({ error: error.message }, "QR_SESSION_EXPIRE_JOB_FAILED")
+      // Silently ignore errors - this is just cleanup
+      logger.debug({ error: error.message }, "MANAGER_QR_TOKEN_CLEANUP_FAILED")
     }
-  }, 30000)  // 30 seconds
-  
-  // Job 2: Cleanup very old sessions (every 6 hours)
-  setInterval(async () => {
-    try {
-      await qrSessionService.cleanupOldSessions()
-    } catch (error: any) {
-      logger.error({ error: error.message }, "QR_SESSION_CLEANUP_JOB_FAILED")
-    }
-  }, 6 * 60 * 60 * 1000)  // 6 hours
-  
-  // Job 3: Mark stale devices as inactive (every 5 minutes)
-  setInterval(async () => {
-    try {
-      await deviceLinkService.markStaleDevicesInactive(5 * 60 * 1000) // 5 minutes
-    } catch (error: any) {
-      logger.error({ error: error.message }, "DEVICE_STALE_CHECK_JOB_FAILED")
-    }
-  }, 5 * 60 * 1000)  // 5 minutes
-  
-  // Job 4: Cleanup old inactive device links (once per day)
-  setInterval(async () => {
-    try {
-      await deviceLinkService.cleanupInactiveLinks(30) // 30 days
-    } catch (error: any) {
-      logger.error({ error: error.message }, "DEVICE_LINK_CLEANUP_JOB_FAILED")
-    }
-  }, 24 * 60 * 60 * 1000)  // 24 hours
+  }, 6 * 60 * 60 * 1000)  // Every 6 hours
 
-  console.log("✅ QR session cleanup jobs started")
-  systemLogger.info("QR session cleanup jobs initialized", {
+  console.log("✅ ManagerQRToken cleanup job started")
+  systemLogger.info("ManagerQRToken cleanup job initialized", {
     service: 'backend',
     module: 'qr-session',
     event: 'cleanup-jobs-started'
