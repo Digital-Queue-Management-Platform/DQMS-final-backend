@@ -108,6 +108,7 @@ app.use(compression({ threshold: Number(process.env.COMPRESS_THRESHOLD || 1024) 
 app.use(cookieParser())
 app.use(express.json({ limit: '20mb' }))
 app.use("/uploads", express.static(UPLOAD_DIR))
+app.use("/public", express.static("public")) // 🚀 Serve the fixed outlet display
 
 // System logging middleware (logs errors and slow requests to database)
 app.use(requestLoggerMiddleware)
@@ -167,7 +168,7 @@ wss.on("connection", (ws, req) => {
     outletId: outletId || undefined
   })
 
-  // Auto-join rooms based on connection type
+  // Auto-join rooms based connection type
   // NOTE: QR_SESSION_ROOM disabled - using simplified flow with OUTLET_DEVICES_ROOM
   if (outletId && deviceId) {
     wsManager.joinRoom(ws, OUTLET_DEVICES_ROOM(outletId))
@@ -181,7 +182,20 @@ wss.on("connection", (ws, req) => {
   if (deviceId) {
     logger.info({ deviceId }, "WS_DEVICE_CONNECTED")
   }
+  
+  // 🚀 DELIVER QUEUED MESSAGES FOR OUTLET DISPLAYS
+  if (outletId) {
+    setTimeout(() => {
+      deliverQueuedMessages(ws, outletId)
+    }, 1000) // Wait 1 second for connection to stabilize
+  }
 
+  // Handle WebSocket pong responses (automatic heartbeat)
+  ws.on("pong", () => {
+    wsManager.updateHeartbeat(ws)
+    console.log(`📡 Pong received - connection alive`)
+  })
+  
   // Handle incoming messages
   ws.on("message", async (data) => {
     try {
@@ -251,14 +265,97 @@ wss.on("error", (err) => {
   })
 })
 
-// Broadcast function for real-time updates
-export const broadcast = (data: any) => {
-  wss.clients.forEach((client) => {
-    if (client.readyState === 1) {
-      // OPEN
-      client.send(JSON.stringify(data))
+// Message queue for disconnected clients (in-memory store)
+interface QueuedMessage {
+  id: string
+  outletId: string
+  message: any
+  timestamp: Date
+  attempts: number
+}
+
+const messageQueue = new Map<string, QueuedMessage[]>() // outletId -> messages
+const MAX_QUEUE_SIZE = 10
+const MAX_MESSAGE_AGE = 5 * 60 * 1000 // 5 minutes
+
+// Clean up old messages periodically
+setInterval(() => {
+  const now = Date.now()
+  messageQueue.forEach((messages, outletId) => {
+    const filtered = messages.filter(msg => 
+      now - msg.timestamp.getTime() < MAX_MESSAGE_AGE
+    )
+    if (filtered.length !== messages.length) {
+      messageQueue.set(outletId, filtered)
+      console.log(`🧹 Cleaned ${messages.length - filtered.length} old messages for outlet ${outletId}`)
     }
   })
+}, 60000) // Clean every minute
+
+// Enhanced broadcast with message queuing for disconnected clients
+export const broadcast = (data: any) => {
+  const message = JSON.stringify(data)
+  let delivered = 0
+  let queued = 0
+  
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1) { // OPEN
+      client.send(message)
+      delivered++
+    }
+  })
+  
+  // If this is an audio/token event, queue it for disconnected outlet displays
+  if (data.type === 'TOKEN_CALLED' || data.type === 'TOKEN_RECALLED' || data.type === 'TEST_SOUND') {
+    const outletId = data.outletId || 'default'
+    
+    if (!messageQueue.has(outletId)) {
+      messageQueue.set(outletId, [])
+    }
+    
+    const queue = messageQueue.get(outletId)!
+    const queuedMessage: QueuedMessage = {
+      id: Date.now().toString(),
+      outletId,
+      message: data,
+      timestamp: new Date(),
+      attempts: 0
+    }
+    
+    queue.push(queuedMessage)
+    
+    // Keep only latest messages
+    if (queue.length > MAX_QUEUE_SIZE) {
+      queue.splice(0, queue.length - MAX_QUEUE_SIZE)
+    }
+    
+    queued++
+    console.log(`📨 Message queued for outlet ${outletId} (delivered: ${delivered}, queued: ${queued})`)
+  }
+  
+  console.log(`📡 Broadcast complete - delivered: ${delivered}, queued: ${queued}`)
+}
+
+// Function to deliver queued messages when client reconnects
+export const deliverQueuedMessages = (ws: any, outletId: string) => {
+  const queue = messageQueue.get(outletId)
+  if (!queue || queue.length === 0) return
+  
+  console.log(`📬 Delivering ${queue.length} queued messages to outlet ${outletId}`)
+  
+  queue.forEach(queuedMsg => {
+    if (ws.readyState === 1) { // OPEN
+      ws.send(JSON.stringify({
+        ...queuedMsg.message,
+        _queued: true,
+        _originalTimestamp: queuedMsg.timestamp
+      }))
+      queuedMsg.attempts++
+    }
+  })
+  
+  // Clear delivered messages
+  messageQueue.delete(outletId)
 }
 
 // Priority broadcast for urgent messages (sends multiple times for reliability)
@@ -286,6 +383,33 @@ export const priorityBroadcast = (data: any) => {
     }
   })
 }
+
+// 🚀 NEW ENDPOINT: Get queued messages for outlet displays
+app.get("/api/outlet/:outletId/queued-messages", (req, res) => {
+  const { outletId } = req.params
+  const queue = messageQueue.get(outletId) || []
+  
+  res.json({
+    outletId,
+    messages: queue.map(msg => ({
+      id: msg.id,
+      message: msg.message,
+      timestamp: msg.timestamp,
+      attempts: msg.attempts
+    })),
+    count: queue.length
+  })
+})
+
+// 🚀 NEW ENDPOINT: WebSocket connection status
+app.get("/api/websocket/status", (req, res) => {
+  const stats = wsManager.getStats()
+  res.json({
+    ...stats,
+    queuedOutlets: Array.from(messageQueue.keys()),
+    totalQueuedMessages: Array.from(messageQueue.values()).reduce((sum, queue) => sum + queue.length, 0)
+  })
+})
 
 // Health checks and root routes for Azure/LB probes
 app.get("/", (req, res) => {

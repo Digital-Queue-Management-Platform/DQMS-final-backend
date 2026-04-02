@@ -327,28 +327,44 @@ class WebSocketManager {
   }
 
   /**
-   * Start heartbeat checker - disconnects stale connections
+   * Start smart heartbeat checker - graceful connection management
    */
   private startHeartbeatChecker(): void {
     this.heartbeatInterval = setInterval(() => {
       const now = Date.now()
-      const staleTimeout = 90000 // 90 seconds
+      const staleTimeout = 600000 // 10 minutes - extended timeout
+      const pingTimeout = 180000  // 3 minutes - send ping first
 
       this.clients.forEach((client, ws) => {
         const timeSinceHeartbeat = now - client.lastHeartbeat.getTime()
         
-        if (timeSinceHeartbeat > staleTimeout) {
-          console.log(`⚠️  Closing stale connection:`, {
+        // Send ping to check if client is still alive (at 3 minutes)
+        if (timeSinceHeartbeat > pingTimeout && timeSinceHeartbeat < staleTimeout) {
+          if (ws.readyState === 1) { // WebSocket.OPEN
+            try {
+              ws.ping() // Send WebSocket ping frame
+              console.log(`📡 Ping sent to client (${Math.round(timeSinceHeartbeat / 1000)}s since last heartbeat)`)
+            } catch (error) {
+              console.log(`⚠️  Failed to ping client, marking for closure`)
+              ws.close(1000, 'Ping failed')
+              this.unregisterClient(ws)
+            }
+          }
+        }
+        
+        // Only close if no response for 10 minutes
+        else if (timeSinceHeartbeat > staleTimeout) {
+          console.log(`⚠️  Closing stale connection after extended timeout:`, {
             deviceId: client.deviceId,
             sessionId: client.sessionId,
             timeSinceHeartbeat: Math.round(timeSinceHeartbeat / 1000) + 's'
           })
           
-          ws.close(1000, 'Stale connection')
+          ws.close(1000, 'Extended timeout - no heartbeat')
           this.unregisterClient(ws)
         }
       })
-    }, 30000) // Check every 30 seconds
+    }, 60000) // Check every 60 seconds (less aggressive)
   }
 
   /**
