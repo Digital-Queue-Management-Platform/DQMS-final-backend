@@ -15,7 +15,7 @@
     "prisma:studio": "prisma studio",
     "seed:outlets": "tsx ./scripts/seedOutlets.ts",
     "qr:lookup": "tsx ./scripts/qrTokenLookup.ts",
-    "qr:generate": "tsx ./scripts/generateQRCodes.ts", 
+    "qr:generate": "tsx ./scripts/generateQRCodes.ts",
     "test:device-removal": "tsx ./scripts/testDeviceRemoval.ts",
     "test:email": "tsx ./scripts/testEmail.ts",
     "test:slt-billing": "tsx ./scripts/testSltBilling.ts",
