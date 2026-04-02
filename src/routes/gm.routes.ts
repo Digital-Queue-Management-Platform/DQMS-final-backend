@@ -246,20 +246,15 @@ router.get("/dgms", async (req, res) => {
 
         const dgms = await (prisma as any).dGM.findMany({
             where: { gmId: auth.gmId },
+            include: {
+                province: {
+                    select: { id: true, name: true, regionId: true }
+                }
+            },
             orderBy: { createdAt: "desc" }
         })
 
-        // Enrich with region names
-        const allRegionIds = [...new Set(dgms.flatMap((d: any) => d.regionIds))] as string[]
-        const regions = await prisma.region.findMany({ where: { id: { in: allRegionIds } }, select: { id: true, name: true } })
-        const regionMap = Object.fromEntries(regions.map(r => [r.id, r.name]))
-
-        const enriched = dgms.map((d: any) => ({
-            ...d,
-            regionNames: d.regionIds.map((id: string) => regionMap[id] || id)
-        }))
-
-        res.json({ success: true, dgms: enriched })
+        res.json({ success: true, dgms })
     } catch (err) {
         console.error("GM list DGMs error:", err)
         res.status(500).json({ error: "Failed to fetch DGMs" })
@@ -389,30 +384,24 @@ router.get("/regions", async (req, res) => {
         const auth = verifyGMToken(req)
         if (!auth) return res.status(401).json({ error: "GM authentication required" })
 
-        const regions = await prisma.region.findMany({
-            include: {
-                outlets: { select: { id: true, name: true, location: true, isActive: true } }
-            },
-            orderBy: { name: "asc" }
+        // Get GM with region information
+        const gm = await (prisma as any).gM.findUnique({
+            where: { id: auth.gmId },
+            include: { 
+                region: {
+                    include: {
+                        outlets: { select: { id: true, name: true, location: true, isActive: true } }
+                    }
+                }
+            }
         })
 
-        // Find which DGM owns which region (globally)
-        const allDgms = await (prisma as any).dGM.findMany({
-            select: { id: true, name: true, regionIds: true }
-        })
-        const regionDgmMap = new Map<string, { id: string, name: string }>()
-        allDgms.forEach((d: any) => {
-            d.regionIds.forEach((rid: string) => {
-                regionDgmMap.set(rid, { id: d.id, name: d.name })
-            })
-        })
+        if (!gm || !gm.region) {
+            return res.status(404).json({ error: "GM region not found" })
+        }
 
-        const enrichedRegions = regions.map(r => ({
-            ...r,
-            assignedDgm: regionDgmMap.get(r.id) || null
-        }))
-
-        res.json({ success: true, regions: enrichedRegions })
+        // Return only the GM's region
+        res.json({ success: true, regions: [gm.region] })
     } catch (err) {
         console.error("GM regions error:", err)
         res.status(500).json({ error: "Failed to fetch regions" })
@@ -597,6 +586,143 @@ router.get("/analytics", async (req, res) => {
         console.error("GM Analytics error:", error)
         res.status(500).json({ error: "Failed to fetch analytics" })
     }
+})
+
+// ====== NEW PROVINCE-BASED DGM MANAGEMENT ======
+
+// Get provinces in GM's region
+router.get("/provinces", async (req, res) => {
+  try {
+    const auth = verifyGMToken(req)
+    if (!auth) return res.status(401).json({ error: "GM authentication required" })
+
+    // Get GM with region information
+    const gm = await (prisma as any).gM.findUnique({
+      where: { id: auth.gmId },
+      include: { region: true }
+    })
+
+    if (!gm || !gm.regionId) {
+      return res.status(404).json({ error: "GM region not found" })
+    }
+
+    const provinces = await (prisma as any).province.findMany({
+      where: { regionId: gm.regionId },
+      include: {
+        dgm: {
+          select: { 
+            id: true, 
+            name: true, 
+            mobileNumber: true, 
+            email: true,
+            isActive: true,
+            lastLoginAt: true
+          }
+        }
+      },
+      orderBy: { name: 'asc' }
+    })
+
+    res.json({
+      success: true,
+      region: gm.region,
+      provinces
+    })
+  } catch (error) {
+    console.error("Get provinces error:", error)
+    res.status(500).json({ error: "Failed to fetch provinces" })
+  }
+})
+
+// Create DGM and assign to province (NEW VERSION)
+router.post("/dgms/province-assignment", async (req, res) => {
+  try {
+    const auth = verifyGMToken(req)
+    if (!auth) return res.status(401).json({ error: "GM authentication required" })
+
+    const { name, mobileNumber, email, provinceId } = req.body
+
+    if (!name || name.trim().length === 0) {
+      return res.status(400).json({ error: "DGM name is required" })
+    }
+
+    if (!mobileNumber) {
+      return res.status(400).json({ error: "Valid Sri Lankan mobile number is required" })
+    }
+
+    if (!provinceId) {
+      return res.status(400).json({ error: "Province assignment is required" })
+    }
+
+    // Get GM with region
+    const gm = await (prisma as any).gM.findUnique({
+      where: { id: auth.gmId },
+      include: { region: true }
+    })
+
+    if (!gm || !gm.regionId) {
+      return res.status(404).json({ error: "GM region not found" })
+    }
+
+    // Verify province belongs to GM's region and doesn't have DGM
+    const province = await (prisma as any).province.findUnique({
+      where: { id: provinceId },
+      include: { dgm: true }
+    })
+
+    if (!province || province.regionId !== gm.regionId) {
+      return res.status(400).json({ error: "Invalid province or not in your region" })
+    }
+
+    if (province.dgm) {
+      return res.status(400).json({ error: "This province already has a DGM assigned" })
+    }
+
+    // Check if mobile number already exists
+    const existingDGM = await (prisma as any).dGM.findUnique({
+      where: { mobileNumber }
+    })
+
+    if (existingDGM) {
+      return res.status(400).json({ error: "DGM with this mobile number already exists" })
+    }
+
+    // Generate temporary password (for now, using simple method)
+    const tempPassword = Math.random().toString(36).slice(-8)
+
+    const dgm = await (prisma as any).dGM.create({
+      data: {
+        name: name.trim(),
+        mobileNumber,
+        email: email?.trim() || null,
+        gmId: gm.id,
+        provinceId,
+        regionIds: [province.regionId], // For backward compatibility
+        isActive: true
+      },
+      include: {
+        province: {
+          select: { id: true, name: true }
+        }
+      }
+    })
+
+    res.json({
+      success: true,
+      dgm: {
+        id: dgm.id,
+        name: dgm.name,
+        mobileNumber: dgm.mobileNumber,
+        email: dgm.email,
+        province: dgm.province,
+        isActive: dgm.isActive
+      },
+      message: `DGM created and assigned to ${province.name} province. Login credentials will be sent via SMS.`
+    })
+  } catch (error) {
+    console.error("Create DGM with province error:", error)
+    res.status(500).json({ error: "Failed to create DGM" })
+  }
 })
 
 export default router

@@ -431,11 +431,46 @@ router.delete('/services/:id', async (req, res) => {
 // Create a new outlet (branch)
 router.post('/outlets', async (req, res) => {
   try {
-    const { name, location, regionId, counterCount } = req.body
-    if (!name || !location || !regionId) return res.status(400).json({ error: 'name, location and regionId are required' })
+    const { name, location, regionId, provinceId, counterCount } = req.body
+    
+    // Support both old (regionId) and new (provinceId) approaches
+    if (!name || !location) {
+      return res.status(400).json({ error: 'name and location are required' })
+    }
+
+    let finalRegionId = regionId
+    let finalProvinceId = provinceId
+
+    // If provinceId is provided, get the regionId from the province
+    if (provinceId) {
+      const province = await prisma.province.findUnique({
+        where: { id: provinceId },
+        include: { region: true }
+      })
+      
+      if (!province) {
+        return res.status(400).json({ error: 'Province not found' })
+      }
+      
+      finalRegionId = province.regionId
+      finalProvinceId = provinceId
+    } else if (regionId) {
+      // Legacy support: if only regionId provided, create without province
+      finalRegionId = regionId
+      finalProvinceId = null
+    } else {
+      return res.status(400).json({ error: 'Either regionId or provinceId must be provided' })
+    }
 
     const outlet = await prisma.outlet.create({
-      data: { name, location, regionId, isActive: true, counterCount: counterCount ?? 0 }
+      data: { 
+        name, 
+        location, 
+        regionId: finalRegionId, 
+        provinceId: finalProvinceId,
+        isActive: true, 
+        counterCount: counterCount ?? 0 
+      }
     })
 
     // Auto-generate initial QR code for the outlet
@@ -472,14 +507,37 @@ router.post('/outlets', async (req, res) => {
 router.patch('/outlets/:id', async (req, res) => {
   try {
     const { id } = req.params
-    const { name, location, regionId, isActive, counterCount } = req.body
+    const { name, location, regionId, provinceId, isActive, counterCount } = req.body
 
     const data: any = {}
     if (name !== undefined) data.name = name
     if (location !== undefined) data.location = location
-    if (regionId !== undefined) data.regionId = regionId
     if (isActive !== undefined) data.isActive = isActive
     if (counterCount !== undefined) data.counterCount = counterCount
+    
+    // Handle region/province updates
+    if (provinceId !== undefined) {
+      if (provinceId) {
+        // If provinceId is provided, get the regionId from the province
+        const province = await prisma.province.findUnique({
+          where: { id: provinceId },
+          include: { region: true }
+        })
+        
+        if (!province) {
+          return res.status(400).json({ error: 'Province not found' })
+        }
+        
+        data.regionId = province.regionId
+        data.provinceId = provinceId
+      } else {
+        // If provinceId is explicitly set to null, clear it
+        data.provinceId = null
+      }
+    } else if (regionId !== undefined) {
+      // Legacy support: if only regionId provided, update region but keep province as-is
+      data.regionId = regionId
+    }
 
     const outlet = await prisma.outlet.update({ where: { id }, data })
     res.json({ success: true, outlet })

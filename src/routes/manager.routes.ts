@@ -29,18 +29,18 @@ router.post("/request-otp", async (req, res) => {
       return res.status(400).json({ error: "Mobile number is required" })
     }
 
-    // Check if RTOM exists
-    const region = await prisma.region.findFirst({
-      where: { managerMobile: mobileNumber },
-      select: { managerId: true, name: true }
+    // Check if RTOM exists in the RTOM table
+    const rtom = await prisma.rTOM.findFirst({
+      where: { mobileNumber },
+      select: { id: true, name: true, email: true }
     })
 
-    if (!region) {
+    if (!rtom) {
       return res.status(404).json({ error: "RTOM not found with this mobile number" })
     }
 
-    // Generate and send OTP (managerId is used as the manager's name)
-    const result = await otpService.generateOTP(mobileNumber, 'rtom', region.managerId ?? undefined)
+    // Generate and send OTP
+    const result = await otpService.generateOTP(mobileNumber, 'rtom', rtom.name ?? undefined)
 
     if (!result.success) {
       return res.status(500).json({ error: result.message })
@@ -49,8 +49,8 @@ router.post("/request-otp", async (req, res) => {
     res.json({
       success: true,
       message: result.message,
-      managerName: region.managerId,
-      regionName: region.name
+      managerName: rtom.name,
+      regionName: rtom.region?.name
     })
   } catch (error) {
     console.error("Request OTP error:", error)
@@ -74,54 +74,58 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ error: verifyResult.message })
     }
 
-    // Find manager by mobile number in the Region model
-    const region = await prisma.region.findFirst({
+    // Find RTOM by mobile number in the RTOM table
+    const rtom = await prisma.rTOM.findFirst({
       where: {
-        managerMobile: mobileNumber,
+        mobileNumber: mobileNumber,
       },
       include: {
-        outlets: {
+        region: true,
+        teleshopManagers: {
           include: {
-            officers: true,
-            teleshopManagers: true,
+            branch: {
+              include: {
+                officers: true
+              }
+            }
           }
         }
       }
     })
 
-    if (!region) {
+    if (!rtom) {
       return res.status(401).json({ error: "RTOM not found with this mobile number" })
     }
 
     try {
-      await prisma.region.update({
-        where: { id: region.id },
-        data: { managerLastLoginAt: new Date() }
+      await prisma.rTOM.update({
+        where: { id: rtom.id },
+        data: { lastLoginAt: new Date() }
       })
     } catch (error) {
-      if (!isMissingManagerLastLoginFieldError(error)) throw error
+      console.log("Could not update lastLoginAt:", error)
     }
 
     console.log("RTOM mobile login successful for:", mobileNumber)
 
-    // Create manager object from region data
+    // Create manager object from RTOM data
     const manager = {
-      id: region.managerId,
-      name: region.managerId, // Manager name from admin registration
-      email: region.managerEmail,
-      mobileNumber: region.managerMobile,
-      regionId: region.id,
-      regionName: region.name,
-      outlets: region.outlets
+      id: rtom.id,
+      name: rtom.name, // RTOM name
+      email: rtom.email,
+      mobileNumber: rtom.mobileNumber,
+      regionId: rtom.regionId,
+      regionName: rtom.region?.name,
+      outlets: rtom.teleshopManagers.map(tm => tm.branch).filter(Boolean)
     }
 
-    // Create JWT token for manager authentication (no expiration)
+    // Create JWT token for RTOM authentication (no expiration)
     const tokenOptions: any = {
-      managerId: region.managerId,
-      managerName: region.managerId, // Include name in token
-      mobileNumber: region.managerMobile,
-      email: region.managerEmail, // Keep for backward compatibility 
-      regionId: region.id
+      managerId: rtom.id,
+      managerName: rtom.name, 
+      mobileNumber: rtom.mobileNumber,
+      email: rtom.email,
+      regionId: rtom.regionId
     }
 
     const signOptions: any = {}
@@ -215,39 +219,131 @@ router.get("/me", async (req, res) => {
       }
     }
 
-    // Find region using the manager mobile or email (fallback)
-    const region = await prisma.region.findFirst({
-      where: managerMobile ?
-        { managerMobile: managerMobile } :
-        { managerEmail: managerEmail },
+    // Find RTOM using mobile number from JWT token
+    const rtom = await prisma.rTOM.findFirst({
+      where: { mobileNumber: managerMobile },
       include: {
-        outlets: {
+        region: true,
+        teleshopManagers: {
           include: {
-            officers: true,
-            teleshopManagers: true,
+            branch: {
+              include: {
+                officers: true
+              }
+            }
           }
         }
       }
     })
 
-    if (!region) {
+    if (!rtom) {
       return res.status(404).json({ error: "RTOM not found" })
     }
 
+    // Get all outlets in RTOM's region (not just assigned ones)
+    const outlets = await prisma.outlet.findMany({
+      where: {
+        regionId: rtom.regionId,
+        isActive: true
+      },
+      include: {
+        officers: true,
+        teleshopManagers: true
+      },
+      orderBy: {
+        name: 'asc'
+      }
+    })
+
     const manager = {
-      id: region.managerId,
-      name: region.managerId, // Manager name from admin registration
-      email: region.managerEmail,
-      mobileNumber: region.managerMobile,
-      regionId: region.id,
-      regionName: region.name,
-      outlets: region.outlets
+      id: rtom.id,
+      name: rtom.name,
+      email: rtom.email,
+      mobileNumber: rtom.mobileNumber,
+      regionId: rtom.regionId,
+      regionName: rtom.region?.name,
+      outlets: outlets
     }
 
     res.json({ manager })
   } catch (error) {
     console.error("Manager profile fetch error:", error)
     res.status(500).json({ error: "Failed to fetch manager profile" })
+  }
+})
+
+// Get RTOM alerts
+router.get("/alerts", async (req, res) => {
+  try {
+    // Return empty array for alerts (not wrapped in object)
+    res.json([])
+  } catch (error) {
+    console.error("RTOM alerts error:", error)
+    res.status(500).json({ error: "Failed to fetch alerts" })
+  }
+})
+
+// Get RTOM feedback
+router.get("/feedback", async (req, res) => {
+  try {
+    // Return expected object structure for feedback
+    res.json({ 
+      feedback: [], 
+      stats: null, 
+      pagination: { totalPages: 0, currentPage: 1, totalItems: 0 }
+    })
+  } catch (error) {
+    console.error("RTOM feedback error:", error)
+    res.status(500).json({ error: "Failed to fetch feedback" })
+  }
+})
+
+// Get teleshop managers under this RTOM
+router.get("/teleshop-managers", async (req, res) => {
+  try {
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+    
+    if (!token) {
+      return res.status(401).json({ error: "Authentication required" })
+    }
+    
+    const payload = (jwt as any).verify(token, JWT_SECRET)
+    const rtom = await prisma.rTOM.findFirst({
+      where: { mobileNumber: payload.mobileNumber },
+      include: {
+        teleshopManagers: {
+          include: {
+            branch: true
+          }
+        }
+      }
+    })
+    
+    if (!rtom) {
+      return res.status(404).json({ error: "RTOM not found" })
+    }
+    
+    res.json({ teleshopManagers: rtom.teleshopManagers || [] })
+  } catch (error) {
+    console.error("RTOM teleshop managers error:", error)
+    res.status(500).json({ error: "Failed to fetch teleshop managers" })
+  }
+})
+
+// Get closure notices
+router.get("/closure-notices", async (req, res) => {
+  try {
+    // For now, return empty notices - can be implemented later
+    res.json({ notices: [] })
+  } catch (error) {
+    console.error("RTOM closure notices error:", error)
+    res.status(500).json({ error: "Failed to fetch closure notices" })
   }
 })
 
@@ -571,7 +667,7 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
     const { outletId } = req.params
     const { startDate, endDate } = req.query
 
-    // Check for JWT token
+    // Check for JWT token from cookie or header
     let token = req.cookies?.dq_manager_jwt
     if (!token) {
       const authHeader = req.headers.authorization
@@ -580,36 +676,36 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
       }
     }
 
-    let managerEmail: string | undefined
-
-    if (token) {
-      try {
-        const payload = (jwt as any).verify(token, JWT_SECRET)
-        managerEmail = payload.email
-      } catch (e) {
-        return res.status(401).json({ error: "Invalid token" })
-      }
-    } else {
-      // Fallback: check for email in query params
-      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
-
-      if (!managerEmail) {
-        return res.status(401).json({ error: "Manager authentication required" })
-      }
+    if (!token) {
+      return res.status(401).json({ error: "RTOM authentication required" })
     }
 
-    // Find manager's region and verify outlet belongs to them
-    const region = await prisma.region.findFirst({
-      where: { managerEmail: managerEmail },
-      include: { outlets: true }
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch (e) {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    // Find RTOM using mobile number from JWT token
+    const rtom = await prisma.rTOM.findFirst({
+      where: { mobileNumber: payload.mobileNumber },
+      include: { region: true }
     })
 
-    if (!region) {
-      return res.status(404).json({ error: "Manager not found" })
+    if (!rtom || !rtom.region) {
+      return res.status(404).json({ error: "RTOM not found or not assigned to region" })
     }
 
-    // Verify the outlet belongs to this manager's region
-    const outlet = region.outlets.find(o => o.id === outletId)
+    // Verify the outlet belongs to this RTOM's region
+    const outlet = await prisma.outlet.findFirst({
+      where: {
+        id: outletId,
+        regionId: rtom.region.id,
+        isActive: true
+      }
+    })
+
     if (!outlet) {
       return res.status(403).json({ error: "Outlet not found in your region" })
     }
@@ -997,36 +1093,32 @@ router.get("/teleshop-managers", async (req, res) => {
       }
     }
 
-    let managerEmail: string | undefined
-
-    if (token) {
-      try {
-        const payload = (jwt as any).verify(token, JWT_SECRET)
-        managerEmail = payload.email
-      } catch (e) {
-        return res.status(401).json({ error: "Invalid token" })
-      }
-    } else {
-      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
-
-      if (!managerEmail) {
-        return res.status(401).json({ error: "Manager authentication required" })
-      }
+    if (!token) {
+      return res.status(401).json({ error: "RTOM authentication required" })
     }
 
-    // Find manager's region
-    const region = await prisma.region.findFirst({
-      where: { managerEmail: managerEmail }
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch (e) {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    // Find RTOM using mobile number from JWT token
+    const rtom = await prisma.rTOM.findFirst({
+      where: { mobileNumber: payload.mobileNumber },
+      include: { region: true }
     })
 
-    if (!region) {
-      return res.status(404).json({ error: "Manager not found" })
+    if (!rtom || !rtom.region) {
+      return res.status(404).json({ error: "RTOM not found or not assigned to region" })
     }
-
     // Get teleshop managers in this region
+    console.log(`Fetching teleshop managers for RTOM: ${rtom.name} in region: ${rtom.region.name} (ID: ${rtom.region.id})`)
+    
     const teleshopManagers = await prisma.teleshopManager.findMany({
       where: {
-        regionId: region.id
+        regionId: rtom.region.id
       },
       include: {
         branch: true
@@ -1036,10 +1128,40 @@ router.get("/teleshop-managers", async (req, res) => {
       }
     })
 
+    console.log(`Found ${teleshopManagers.length} teleshop managers in region ${rtom.region.id}:`, 
+      teleshopManagers.map(tm => `${tm.name} (${tm.mobileNumber}) - Region: ${tm.regionId}`))
+
     res.json(teleshopManagers)
   } catch (error) {
     console.error("Get teleshop managers error:", error)
     res.status(500).json({ error: "Failed to get teleshop managers" })
+  }
+})
+
+// Debug endpoint - list all teleshop managers in system
+router.get("/debug/all-teleshop-managers", async (req, res) => {
+  try {
+    const allTeleshopManagers = await prisma.teleshopManager.findMany({
+      include: {
+        region: { select: { id: true, name: true } },
+        rtom: { select: { id: true, name: true } },
+        branch: { select: { id: true, name: true } }
+      },
+      orderBy: { name: 'asc' }
+    })
+
+    console.log(`DEBUG: Total ${allTeleshopManagers.length} teleshop managers in system`)
+    allTeleshopManagers.forEach(tm => {
+      console.log(`- ${tm.name} (${tm.mobileNumber}) | Region: ${tm.region?.name} (${tm.regionId}) | RTOM: ${tm.rtom?.name || 'None'} | Branch: ${tm.branch?.name || 'None'}`)
+    })
+
+    res.json({ 
+      total: allTeleshopManagers.length, 
+      teleshopManagers: allTeleshopManagers 
+    })
+  } catch (error) {
+    console.error("Debug teleshop managers error:", error)
+    res.status(500).json({ error: "Failed to debug teleshop managers" })
   }
 })
 
@@ -1055,33 +1177,28 @@ router.post("/teleshop-managers", async (req, res) => {
       }
     }
 
-    let managerEmail: string | undefined
-
-    if (token) {
-      try {
-        const payload = (jwt as any).verify(token, JWT_SECRET)
-        managerEmail = payload.email
-      } catch (e) {
-        return res.status(401).json({ error: "Invalid token" })
-      }
-    } else {
-      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
-
-      if (!managerEmail) {
-        return res.status(401).json({ error: "Manager authentication required" })
-      }
+    if (!token) {
+      return res.status(401).json({ error: "RTOM authentication required" })
     }
 
-    // Find manager's region
-    const region = await prisma.region.findFirst({
-      where: { managerEmail: managerEmail }
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch (e) {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    // Find RTOM using mobile number from JWT token
+    const rtom = await prisma.rTOM.findFirst({
+      where: { mobileNumber: payload.mobileNumber },
+      include: { region: true }
     })
 
-    if (!region) {
-      return res.status(404).json({ error: "Manager not found" })
+    if (!rtom || !rtom.region) {
+      return res.status(404).json({ error: "RTOM not found or not assigned to region" })
     }
 
-    const { name, mobileNumber, email } = req.body
+    const { name, mobileNumber, email, branchId } = req.body
 
     if (!name || !mobileNumber || !email) {
       return res.status(400).json({ error: "Name, mobile number, and email are required" })
@@ -1090,16 +1207,32 @@ router.post("/teleshop-managers", async (req, res) => {
     if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
     if (!isValidEmail(email)) return res.status(400).json({ error: "Invalid email address format" })
 
+    // If branchId provided, validate it exists and belongs to RTOM's region
+    if (branchId) {
+      const branch = await prisma.outlet.findFirst({
+        where: { 
+          id: branchId,
+          region: { id: rtom.region.id }
+        }
+      })
+      if (!branch) {
+        return res.status(400).json({ error: "Invalid branch selection or branch not in your region" })
+      }
+    }
+
     // Create teleshop manager
     const teleshopManager = await prisma.teleshopManager.create({
       data: {
         name: name.trim(),
         mobileNumber: mobileNumber.trim(),
         email: email.trim(),
-        regionId: region.id
+        regionId: rtom.region.id,
+        rtomId: rtom.id,
+        branchId: branchId || null
       },
       include: {
-        region: true
+        region: true,
+        branch: true
       }
     })
 
@@ -1113,7 +1246,7 @@ router.post("/teleshop-managers", async (req, res) => {
         email: teleshopManager.email,
         mobileNumber: teleshopManager.mobileNumber,
         role: "Teleshop Manager",
-        regionName: region.name,
+        regionName: rtom.region.name,
         loginUrl
       }).catch(err => console.error("Teleshop manager welcome email failed:", err))
     }
@@ -1125,7 +1258,49 @@ router.post("/teleshop-managers", async (req, res) => {
       loginUrl
     }).catch(err => console.error("Teleshop manager welcome SMS failed:", err))
 
-    res.json({ success: true, teleshopManager })
+    console.log(`Created teleshop manager: ${teleshopManager.name} (${teleshopManager.mobileNumber})`)
+
+    // Auto-generate QR code for teleshop manager when assigned to branch
+    let qrCode = null
+    if (branchId && teleshopManager.branch) {
+      try {
+        // Generate random token for QR code
+        const generateRandomToken = (): string => {
+          const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+          let result = ''
+          for (let i = 0; i < 32; i++) {
+            result += chars.charAt(Math.floor(Math.random() * chars.length))
+          }
+          return result
+        }
+
+        const token = generateRandomToken()
+        const generatedAt = new Date()
+
+        // Create QR token in database
+        await prisma.managerQRToken.create({
+          data: {
+            token,
+            outletId: branchId,
+            generatedAt,
+            createdAt: generatedAt
+          }
+        })
+
+        qrCode = {
+          outletId: branchId,
+          token,
+          generatedAt: generatedAt.toISOString()
+        }
+
+        console.log(`Auto-generated QR code for teleshop manager ${teleshopManager.name} at branch ${teleshopManager.branch.name}`)
+      } catch (qrError) {
+        console.error("Failed to auto-generate QR code:", qrError)
+        // Don't fail the whole operation if QR generation fails
+      }
+    }
+
+    res.json({ success: true, teleshopManager, qrCode })
   } catch (error: any) {
     console.error("Create teleshop manager error:", error)
 
@@ -1224,7 +1399,7 @@ router.patch("/teleshop-managers/:teleshopManagerId/assign-branch", async (req, 
     const { teleshopManagerId } = req.params
     const { branchId } = req.body
 
-    // Authenticate manager
+    // Authenticate RTOM
     let token = req.cookies?.dq_manager_jwt
     if (!token) {
       const authHeader = req.headers.authorization
@@ -1234,31 +1409,31 @@ router.patch("/teleshop-managers/:teleshopManagerId/assign-branch", async (req, 
     }
 
     if (!token) {
-      return res.status(401).json({ error: "Authentication required" })
+      return res.status(401).json({ error: "RTOM authentication required" })
     }
 
-    let managerEmail: string | undefined
+    let payload: any
     try {
-      const payload = (jwt as any).verify(token, JWT_SECRET)
-      managerEmail = payload.email
+      payload = (jwt as any).verify(token, JWT_SECRET)
     } catch (e) {
       return res.status(401).json({ error: "Invalid token" })
     }
 
-    // Find manager's region
-    const region = await prisma.region.findFirst({
-      where: { managerEmail: managerEmail }
+    // Find RTOM using mobile number from JWT token
+    const rtom = await prisma.rTOM.findFirst({
+      where: { mobileNumber: payload.mobileNumber },
+      include: { region: true }
     })
 
-    if (!region) {
-      return res.status(403).json({ error: "Manager region not found" })
+    if (!rtom || !rtom.region) {
+      return res.status(404).json({ error: "RTOM not found or not assigned to region" })
     }
 
     // Verify teleshop manager belongs to this region
     const teleshopManager = await prisma.teleshopManager.findFirst({
       where: {
         id: teleshopManagerId,
-        regionId: region.id
+        regionId: rtom.region.id
       }
     })
 
@@ -1272,7 +1447,7 @@ router.patch("/teleshop-managers/:teleshopManagerId/assign-branch", async (req, 
       const branch = await prisma.outlet.findFirst({
         where: {
           id: branchId,
-          regionId: region.id
+          regionId: rtom.region.id
         }
       })
 
@@ -1305,7 +1480,51 @@ router.patch("/teleshop-managers/:teleshopManagerId/assign-branch", async (req, 
       }
     })
 
-    res.json({ success: true, teleshopManager: updated })
+    // Auto-generate QR code for teleshop manager when assigned to branch
+    let qrCode = null
+    if (branchId && updated.branch) {
+      try {
+        // Generate random token for QR code
+        const generateRandomToken = (): string => {
+          const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+          let result = ''
+          for (let i = 0; i < 32; i++) {
+            result += chars.charAt(Math.floor(Math.random() * chars.length))
+          }
+          return result
+        }
+
+        const token = generateRandomToken()
+        const generatedAt = new Date()
+
+        // Store QR token in database
+        await prisma.managerQRToken.create({
+          data: {
+            token,
+            outletId: branchId,
+            generatedAt,
+            createdAt: generatedAt
+          }
+        })
+
+        qrCode = {
+          outletId: branchId,
+          token,
+          generatedAt: generatedAt.toISOString()
+        }
+
+        console.log(`Auto-generated QR code for teleshop manager ${updated.name} at branch ${updated.branch.name}`)
+      } catch (qrError) {
+        console.error("Failed to auto-generate QR code:", qrError)
+        // Don't fail the whole operation if QR generation fails
+      }
+    }
+
+    res.json({ 
+      success: true, 
+      teleshopManager: updated,
+      qrCode // Include QR code info if generated
+    })
   } catch (error: any) {
     console.error("Assign branch error:", error)
     res.status(500).json({ error: "Failed to assign branch" })
@@ -1324,30 +1543,25 @@ router.delete("/teleshop-managers/:teleshopManagerId", async (req, res) => {
       }
     }
 
-    let managerEmail: string | undefined
-
-    if (token) {
-      try {
-        const payload = (jwt as any).verify(token, JWT_SECRET)
-        managerEmail = payload.email
-      } catch (e) {
-        return res.status(401).json({ error: "Invalid token" })
-      }
-    } else {
-      managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
-
-      if (!managerEmail) {
-        return res.status(401).json({ error: "Manager authentication required" })
-      }
+    if (!token) {
+      return res.status(401).json({ error: "RTOM authentication required" })
     }
 
-    // Find manager's region
-    const region = await prisma.region.findFirst({
-      where: { managerEmail: managerEmail }
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch (e) {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    // Find RTOM using mobile number from JWT token
+    const rtom = await prisma.rTOM.findFirst({
+      where: { mobileNumber: payload.mobileNumber },
+      include: { region: true }
     })
 
-    if (!region) {
-      return res.status(404).json({ error: "Manager not found" })
+    if (!rtom || !rtom.region) {
+      return res.status(404).json({ error: "RTOM not found or not assigned to region" })
     }
 
     const { teleshopManagerId } = req.params
@@ -1356,7 +1570,7 @@ router.delete("/teleshop-managers/:teleshopManagerId", async (req, res) => {
     const existingTeleshopManager = await prisma.teleshopManager.findFirst({
       where: {
         id: teleshopManagerId,
-        regionId: region.id
+        regionId: rtom.region.id
       }
     })
 
@@ -1378,18 +1592,51 @@ router.delete("/teleshop-managers/:teleshopManagerId", async (req, res) => {
 
 // Get outlets in manager's region
 router.get("/outlets", async (req, res) => {
+  console.log('=== OUTLETS REQUEST ===');
+  console.log('Cookies:', req.cookies);
+  console.log('Authorization header:', req.headers.authorization);
+  
   try {
-    const authHeader = req.headers.authorization
-    if (!authHeader) {
-      return res.status(401).json({ error: "Authorization header required" })
+    // Check for JWT token from cookie or header
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
     }
 
-    const token = authHeader.split(" ")[1]
-    const decoded = (jwt as any).verify(token, JWT_SECRET) as { regionId: string }
+    if (!token) {
+      return res.status(401).json({ error: "RTOM authentication required" })
+    }
+
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+      console.log('JWT payload:', payload);
+    } catch (e) {
+      console.log('JWT verification error:', e);
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    // Find RTOM using mobile number from JWT token
+    const rtom = await prisma.rTOM.findFirst({
+      where: { mobileNumber: payload.mobileNumber },
+      include: { region: true }
+    })
+
+    console.log('Found RTOM:', rtom ? {name: rtom.name, mobile: rtom.mobileNumber, regionId: rtom.regionId} : 'null');
+
+    if (!rtom || !rtom.region) {
+      console.log('RTOM not found or not assigned to region');
+      return res.status(404).json({ error: "RTOM not found or not assigned to region" })
+    }
+
+    console.log(`Fetching outlets for RTOM: ${rtom.name} (${rtom.mobileNumber}) in region: ${rtom.region.name} (ID: ${rtom.region.id})`)
 
     const outlets = await prisma.outlet.findMany({
       where: {
-        regionId: decoded.regionId,
+        regionId: rtom.region.id,
         isActive: true,
       },
       include: {
@@ -1418,6 +1665,8 @@ router.get("/outlets", async (req, res) => {
       }
     })
 
+    console.log(`Found ${outlets.length} outlets in region ${rtom.region.name}`)
+
     res.json(outlets)
   } catch (error) {
     console.error("Get outlets error:", error)
@@ -1428,13 +1677,35 @@ router.get("/outlets", async (req, res) => {
 // Create new outlet in manager's region
 router.post("/outlets", async (req, res) => {
   try {
-    const authHeader = req.headers.authorization
-    if (!authHeader) {
-      return res.status(401).json({ error: "Authorization header required" })
+    // Check for JWT token from cookie or header
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
     }
 
-    const token = authHeader.split(" ")[1]
-    const decoded = (jwt as any).verify(token, JWT_SECRET) as { regionId: string }
+    if (!token) {
+      return res.status(401).json({ error: "RTOM authentication required" })
+    }
+
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch (e) {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    // Find RTOM using mobile number from JWT token
+    const rtom = await prisma.rTOM.findFirst({
+      where: { mobileNumber: payload.mobileNumber },
+      include: { region: true }
+    })
+
+    if (!rtom || !rtom.region) {
+      return res.status(404).json({ error: "RTOM not found or not assigned to region" })
+    }
 
     const { name, location, counters } = req.body
 
@@ -1451,11 +1722,13 @@ router.post("/outlets", async (req, res) => {
     // Generate secure password for Walk-in Appoinment
     const kioskPassword = generateSecurePassword()
 
+    console.log(`Creating outlet "${name}" in region "${rtom.region.name}" by RTOM "${rtom.name}"`)
+
     const outlet = await prisma.outlet.create({
       data: {
         name: name.trim(),
         location: location.trim(),
-        regionId: decoded.regionId,
+        regionId: rtom.region.id,
         counterCount: counterCount,
         isActive: true,
         kioskPassword: kioskPassword
