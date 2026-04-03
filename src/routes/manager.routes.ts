@@ -2817,11 +2817,30 @@ router.get("/branch/:branchId/officers", async (req, res) => {
       }
     }
 
-    // Find manager's region
-    const region = await prisma.region.findFirst({
+    // Try to find manager as Region manager first
+    let region = await prisma.region.findFirst({
       where: { managerEmail: managerEmail },
       include: { outlets: true }
     })
+
+    // If not a region manager, check if RTOM
+    if (!region) {
+      const rtom = await prisma.rTOM.findFirst({
+        where: { email: managerEmail },
+        include: {
+          region: {
+            include: { outlets: true }
+          },
+          teleshopManagers: {
+            include: { branch: true }
+          }
+        }
+      })
+
+      if (rtom) {
+        region = rtom.region
+      }
+    }
 
     if (!region) {
       return res.status(404).json({ error: "Manager not found" })
@@ -2930,11 +2949,27 @@ router.patch("/officers/:officerId/assign-counter", async (req, res) => {
       }
     }
 
-    // Find manager's region
-    const region = await prisma.region.findFirst({
+    // Try to find manager as Region manager first
+    let region = await prisma.region.findFirst({
       where: { managerEmail: managerEmail },
       include: { outlets: true }
     })
+
+    // If not a region manager, check if RTOM
+    if (!region) {
+      const rtom = await prisma.rTOM.findFirst({
+        where: { email: managerEmail },
+        include: {
+          region: {
+            include: { outlets: true }
+          }
+        }
+      })
+
+      if (rtom) {
+        region = rtom.region
+      }
+    }
 
     if (!region) {
       return res.status(404).json({ error: "Manager not found" })

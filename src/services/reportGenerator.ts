@@ -276,6 +276,13 @@ export const generateReportHTML = (data: ReportData): string => {
             size: A4;
             margin: 1cm;
         }
+        @media print {
+            thead { display: table-header-group !important; }
+            tbody { display: table-row-group !important; }
+            tr { display: table-row !important; page-break-inside: avoid; }
+            th, td { display: table-cell !important; }
+            table { page-break-inside: auto; }
+        }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             line-height: 1.4;
@@ -342,7 +349,6 @@ export const generateReportHTML = (data: ReportData): string => {
             border-collapse: collapse;
             margin-top: 8px;
             font-size: 10px;
-            page-break-inside: avoid;
         }
         caption {
             caption-side: top;
@@ -360,20 +366,33 @@ export const generateReportHTML = (data: ReportData): string => {
             vertical-align: top;
         }
         th {
-            background-color: #f3f4f6;
-            font-weight: bold;
-            color: #111827;
-            font-size: 9px;
+            background-color: #f3f4f6 !important;
+            font-weight: bold !important;
+            color: #111827 !important;
+            font-size: 10px !important;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            border-bottom: 2px solid #9ca3af;
+            border: 2px solid #9ca3af !important;
+            border-bottom: 3px solid #6b7280 !important;
+            padding: 10px 8px !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
         }
         td {
             color: #374151;
             font-size: 10px;
         }
         thead {
-            display: table-header-group;
+            display: table-header-group !important;
+        }
+        tbody {
+            display: table-row-group !important;
+        }
+        tr {
+            display: table-row !important;
+        }
+        th, td {
+            display: table-cell !important;
         }
         tbody {
             display: table-row-group;
@@ -420,10 +439,10 @@ export const generateReportHTML = (data: ReportData): string => {
     <div class="section">
         <div class="section-title">I. Executive Summary</div>
         <table>
-            <thead>
-                <tr>
-                    <th>Operational Metric</th>
-                    <th class="number">Statistical Value</th>
+            <thead style="display: table-header-group; background-color: #f3f4f6;">
+                <tr style="background-color: #f3f4f6;">
+                    <th style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Operational Metric</th>
+                    <th class="number" style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Statistical Value</th>
                 </tr>
             </thead>
             <tbody>
@@ -446,11 +465,11 @@ export const generateReportHTML = (data: ReportData): string => {
     <div class="section">
         <div class="section-title">II. Customer Satisfaction Analysis</div>
         <table>
-            <thead>
-                <tr>
-                    <th>Satisfaction Level</th>
-                    <th class="number">Token Count</th>
-                    <th class="number">Percentage Share</th>
+            <thead style="display: table-header-group; background-color: #f3f4f6;">
+                <tr style="background-color: #f3f4f6;">
+                    <th style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Satisfaction Level</th>
+                    <th class="number" style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Token Count</th>
+                    <th class="number" style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Percentage Share</th>
                 </tr>
             </thead>
             <tbody>
@@ -486,10 +505,10 @@ export const generateReportHTML = (data: ReportData): string => {
     <div class="section">
         <div class="section-title">III. Service Utilization Breakdown</div>
         <table>
-            <thead>
-                <tr>
-                    <th>Service Category</th>
-                    <th class="number">Tokens Issued</th>
+            <thead style="display: table-header-group; background-color: #f3f4f6;">
+                <tr style="background-color: #f3f4f6;">
+                    <th style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Service Category</th>
+                    <th class="number" style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Tokens Issued</th>
                 </tr>
             </thead>
             <tbody>
@@ -503,20 +522,17 @@ export const generateReportHTML = (data: ReportData): string => {
         </table>
     </div>
 
-    <div class="page-break"></div>
-
-    <div class="section">
+    <div class="section" style="page-break-before: always;">
         <div class="section-title">IV. Regional Performance Audit</div>
         <table>
-            <caption style="caption-side: top; text-align: left; font-weight: bold; margin-bottom: 5px; color: #374151;">Outlet-wise Performance Metrics</caption>
             <thead>
                 <tr>
                     <th>Outlet Name</th>
-                    <th class="number">Tokens Issued</th>
-                    <th class="number">Avg Wait Time</th>
-                    <th class="number">Avg Service Time</th>
-                    <th class="number">Customer Rating</th>
-                    <th class="number">Total Feedbacks</th>
+                    <th class="number">Tokens</th>
+                    <th class="number">Avg Wait</th>
+                    <th class="number">Avg Svc</th>
+                    <th class="number">Rating</th>
+                    <th class="number">Feedbacks</th>
                 </tr>
             </thead>
             <tbody>
@@ -537,15 +553,14 @@ export const generateReportHTML = (data: ReportData): string => {
     <div class="section">
         <div class="section-title">V. Officer Efficiency Insights</div>
         <table>
-            <caption style="caption-side: top; text-align: left; font-weight: bold; margin-bottom: 5px; color: #374151;">Customer Service Officer Performance Analysis</caption>
             <thead>
                 <tr>
                     <th>Officer Name</th>
-                    <th>Outlet Assignment</th>
+                    <th>Outlet</th>
                     <th>Status</th>
-                    <th class="number">Tokens Served</th>
-                    <th class="number">Avg Rating</th>
-                    <th class="number">Total Feedbacks</th>
+                    <th class="number">Tokens</th>
+                    <th class="number">Rating</th>
+                    <th class="number">Feedbacks</th>
                 </tr>
             </thead>
             <tbody>
