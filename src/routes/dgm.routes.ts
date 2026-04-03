@@ -298,17 +298,21 @@ router.get("/rtoms", async (req, res) => {
             }
         })
 
-        // Transform to match frontend expectations but with new hierarchy
+        // Transform to properly support multiple RTOMs per DGM
         const transformedRegions = regions.map(region => ({
             id: region.id,
             name: region.name,
-            // For backward compatibility, use first RTOM as the "manager"
-            managerId: region.rtoms[0]?.id || null,
-            managerEmail: region.rtoms[0]?.email || null,
-            managerMobile: region.rtoms[0]?.mobileNumber || null,
-            managerName: region.rtoms[0]?.name || null,
             outlets: region.outlets,
-            rtoms: region.rtoms
+            rtoms: region.rtoms.map(rtom => ({
+                id: rtom.id,
+                name: rtom.name,
+                email: rtom.email,
+                mobileNumber: rtom.mobileNumber,
+                isActive: rtom.isActive,
+                lastLoginAt: rtom.lastLoginAt,
+                createdAt: rtom.createdAt,
+                teleshopManagers: rtom.teleshopManagers
+            }))
         }))
 
         res.json({ success: true, regions: transformedRegions })
