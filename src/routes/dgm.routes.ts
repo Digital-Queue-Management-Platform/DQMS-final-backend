@@ -354,7 +354,7 @@ router.post("/rtoms", async (req, res) => {
         })
 
         // Send notifications
-        const loginUrl = "https://sltsecmanage.slt.lk:7443/manager/login"
+        const loginUrl = `${process.env.FRONTEND_BASE_URL || 'https://sltsecmanage.slt.lk:7443'}/manager/login`
 
         // Email
         if (email) {

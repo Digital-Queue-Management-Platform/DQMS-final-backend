@@ -15,8 +15,8 @@ const router = Router()
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 // No expiration for production system - admin needs continuous access
 const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
-const ADMIN_EMAIL = "admindqms@slt.lk"
-const ADMIN_PASSWORD = "dqms2026@"
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admindqms@slt.lk"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "dqms2026@"
 const STAFF_PRESENCE_WINDOW_MINUTES = Math.max(1, Number(process.env.ADMIN_STAFF_PRESENCE_MINUTES || 30))
 
 // Interface for manager credentials

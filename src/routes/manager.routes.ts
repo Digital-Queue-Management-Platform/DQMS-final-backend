@@ -3110,24 +3110,20 @@ router.get("/teleshop-analytics", async (req, res) => {
     const rtom = await prisma.rTOM.findFirst({
       where: { mobileNumber: payload.mobileNumber },
       include: {
-        region: {
+        region: true,
+        teleshopManagers: {
           include: {
-            outlets: {
+            branch: {
               include: {
-                teleshopManager: true,
                 officers: true,
                 tokens: {
                   where: {
                     createdAt: {
                       gte: new Date(Date.now() - 30*24*60*60*1000) // Last 30 days
                     }
-                  }
-                },
-                feedbacks: {
-                  where: {
-                    createdAt: {
-                      gte: new Date(Date.now() - 30*24*60*60*1000) // Last 30 days
-                    }
+                  },
+                  include: {
+                    feedback: true
                   }
                 }
               }
@@ -3140,12 +3136,13 @@ router.get("/teleshop-analytics", async (req, res) => {
     if (!rtom) return res.status(404).json({ error: "RTOM not found" })
     
     // Calculate teleshop manager analytics
-    const teleshopManagers = rtom.region.outlets
-      .filter(outlet => outlet.teleshopManager)
-      .map(outlet => {
-        const completedTokens = outlet.tokens.filter(token => token.completedAt)
+    const teleshopManagers = rtom.teleshopManagers
+      .filter((manager: any) => manager.branch) // Only managers with assigned branches
+      .map((manager: any) => {
+        const outlet = manager.branch!
+        const completedTokens = outlet.tokens.filter((token: any) => token.completedAt)
         const avgWaitTime = completedTokens.length > 0 
-          ? completedTokens.reduce((sum, token) => {
+          ? completedTokens.reduce((sum: number, token: any) => {
               if (token.calledAt && token.createdAt) {
                 return sum + ((new Date(token.calledAt).getTime() - new Date(token.createdAt).getTime()) / (1000 * 60))
               }
@@ -3154,7 +3151,7 @@ router.get("/teleshop-analytics", async (req, res) => {
           : 0
           
         const avgServiceTime = completedTokens.length > 0
-          ? completedTokens.reduce((sum, token) => {
+          ? completedTokens.reduce((sum: number, token: any) => {
               if (token.completedAt && token.calledAt) {
                 return sum + ((new Date(token.completedAt).getTime() - new Date(token.calledAt).getTime()) / (1000 * 60))
               }
@@ -3162,19 +3159,21 @@ router.get("/teleshop-analytics", async (req, res) => {
             }, 0) / completedTokens.length
           : 0
           
-        const avgRating = outlet.feedbacks.length > 0
-          ? outlet.feedbacks.reduce((sum, feedback) => sum + feedback.rating, 0) / outlet.feedbacks.length
+        const tokensWithFeedback = outlet.tokens.filter((token: any) => token.feedback)
+        
+        const avgRating = tokensWithFeedback.length > 0
+          ? tokensWithFeedback.reduce((sum: number, token: any) => sum + token.feedback.rating, 0) / tokensWithFeedback.length
           : 0
           
-        const activeOfficers = outlet.officers.filter(officer => officer.isActive).length
+        const activeOfficers = outlet.officers.filter((officer: any) => officer.isActive).length
         
         return {
-          id: outlet.teleshopManager.id,
-          name: outlet.teleshopManager.name,
-          email: outlet.teleshopManager.email,
-          mobileNumber: outlet.teleshopManager.mobileNumber,
+          id: manager.id,
+          name: manager.name,
+          email: manager.email,
+          mobileNumber: manager.mobileNumber,
           branchName: outlet.name,
-          branchAddress: outlet.address,
+          branchAddress: outlet.location,
           branchId: outlet.id,
           totalCustomers: completedTokens.length,
           avgWaitTime: Math.round(avgWaitTime * 10) / 10,
@@ -3182,8 +3181,8 @@ router.get("/teleshop-analytics", async (req, res) => {
           customerSatisfaction: Math.round(avgRating * 10) / 10,
           activeOfficers,
           totalOfficers: outlet.officers.length,
-          lastActive: outlet.teleshopManager.lastLoginAt || outlet.teleshopManager.createdAt,
-          alerts: outlet.feedbacks.filter(f => f.rating <= 2).length
+          lastActive: manager.lastLoginAt || manager.createdAt,
+          alerts: tokensWithFeedback.filter((token: any) => token.feedback.rating <= 2).length
         }
       })
     

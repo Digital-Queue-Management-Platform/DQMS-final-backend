@@ -14,6 +14,8 @@ async function main() {
   console.log("Found region:", region.id, region.name)
 
   // Assign a test manager to the region
+  // WARNING: This is test data - do not use in production!
+  // TODO: Remove this script or make it environment-variable driven
   const testManager = {
     managerId: "test-manager-id",
     managerEmail: "manager@test.com", 
