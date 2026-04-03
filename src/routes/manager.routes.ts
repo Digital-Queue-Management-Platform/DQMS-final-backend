@@ -776,13 +776,123 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
       }
     })
 
+    // Get outlet details with officers and calculate officer-specific metrics
+    const outletDetails = await prisma.outlet.findUnique({
+      where: { id: outletId },
+      include: {
+        officers: true,
+        teleshopManagers: true
+      }
+    })
+
+    // Calculate customer satisfaction
+    const totalFeedbacks = feedbackStats.reduce((sum, stat) => sum + stat._count, 0)
+    const totalRatingPoints = feedbackStats.reduce((sum, stat) => sum + (stat.rating * stat._count), 0)
+    const avgRating = totalFeedbacks > 0 ? totalRatingPoints / totalFeedbacks : 0
+
+    // Calculate active officers
+    const activeOfficers = outletDetails?.officers.filter((officer: any) => 
+      officer.status === 'available' || officer.status === 'online'
+    ).length || 0
+
+    // Get teleshop manager
+    const teleshopManager = outletDetails?.teleshopManagers?.[0] || null
+
+    // Calculate officer-specific performance metrics
+    const officerPerformance = await Promise.all(outletDetails?.officers.map(async (officer: any) => {
+      // Get tokens assigned to this officer
+      const officerTokens = await prisma.token.findMany({
+        where: {
+          assignedTo: officer.id,
+          status: "completed",
+          outletId: outletId,
+          completedAt: startDate && endDate ? {
+            gte: new Date(startDate as string),
+            lte: new Date(endDate as string),
+          } : undefined
+        },
+        include: {
+          feedback: true
+        }
+      })
+      
+      // Calculate average service time for this officer
+      let totalServiceTime = 0
+      let validServiceTimes = 0
+      
+      officerTokens.forEach((token: any) => {
+        if (token.completedAt && token.startedAt) {
+          totalServiceTime += (token.completedAt.getTime() - token.startedAt.getTime()) / (1000 * 60)
+          validServiceTimes++
+        }
+      })
+      
+      const avgServiceTime = validServiceTimes > 0 ? totalServiceTime / validServiceTimes : 0
+      
+      // Calculate average rating for this officer
+      const tokensWithFeedback = officerTokens.filter((token: any) => token.feedback)
+      const totalRating = tokensWithFeedback.reduce((sum: number, token: any) => sum + token.feedback.rating, 0)
+      const avgRating = tokensWithFeedback.length > 0 ? totalRating / tokensWithFeedback.length : 0
+      
+      return {
+        id: officer.id,
+        name: officer.name,
+        tokensServed: officerTokens.length,
+        avgServiceTime: Math.round(avgServiceTime * 10) / 10,
+        rating: Math.round(avgRating * 10) / 10
+      }
+    }) || [])
+
     res.json({
       outletId: outlet.id,
       outletName: outlet.name,
+      totalCustomers: totalTokens, // Frontend expects this name
       totalTokens,
       avgWaitTime: Math.round(avgWaitTime * 10) / 10,
       avgServiceTime: Math.round(avgServiceTime * 10) / 10,
-      feedbackStats
+      feedbackStats,
+      customerSatisfaction: Math.round(avgRating * 10) / 10,
+      activeOfficers,
+      totalOfficers: outletDetails?.officers.length || 0,
+      totalIssued: totalTokens, // For completion rate calculation
+      totalCompleted: totalTokens, // All tokens in query are completed
+      totalDropOffs: 0, // Would need additional tracking for this
+      completionRate: totalTokens > 0 ? 100 : 0, // All queried tokens are completed
+      changePercents: {
+        customers: 0, // Would need historical comparison
+        waitTime: 0,
+        serviceTime: 0,
+        satisfaction: 0
+      },
+      hourlyData: completedTokens.filter(token => token.completedAt).map((token, index) => {
+        const hour = new Date(token.completedAt!).getHours()
+        const waitTime = token.startedAt && token.createdAt ? 
+          (new Date(token.startedAt).getTime() - new Date(token.createdAt).getTime()) / (1000 * 60) : 0
+        const serviceTime = token.completedAt && token.startedAt ? 
+          (new Date(token.completedAt).getTime() - new Date(token.startedAt).getTime()) / (1000 * 60) : 0
+        
+        return {
+          hour: `${hour}:00`,
+          waitTime: Math.round(waitTime * 10) / 10,
+          serviceTime: Math.round(serviceTime * 10) / 10,
+          issued: 1,
+          completed: 1,
+          dropOffs: 0,
+          activeCounters: 1
+        }
+      }),
+      ratingDistribution: feedbackStats.map(stat => ({
+        rating: stat.rating,
+        count: stat._count
+      })),
+      officers: officerPerformance,
+      teleshopManager: teleshopManager ? {
+        id: teleshopManager.id,
+        name: teleshopManager.name,
+        email: teleshopManager.email,
+        mobileNumber: teleshopManager.mobileNumber
+      } : null,
+      alerts: feedbackStats.filter(stat => stat.rating <= 2).reduce((sum, stat) => sum + stat._count, 0)
     })
   } catch (error) {
     console.error("Manager outlet analytics error:", error)
@@ -1655,6 +1765,14 @@ router.get("/outlets", async (req, res) => {
             counterNumber: true
           }
         },
+        teleshopManagers: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            mobileNumber: true
+          }
+        },
         _count: {
           select: {
             tokens: {
@@ -1674,7 +1792,13 @@ router.get("/outlets", async (req, res) => {
 
     console.log(`Found ${outlets.length} outlets in region ${rtom.region.name}`)
 
-    res.json(outlets)
+    // Transform the response to match frontend expectations
+    const outletData = outlets.map(outlet => ({
+      ...outlet,
+      teleshopManager: outlet.teleshopManagers?.[0] || null // Convert array to single object
+    }))
+
+    res.json(outletData)
   } catch (error) {
     console.error("Get outlets error:", error)
     res.status(500).json({ error: "Failed to get outlets" })
@@ -3165,7 +3289,9 @@ router.get("/teleshop-analytics", async (req, res) => {
           ? tokensWithFeedback.reduce((sum: number, token: any) => sum + token.feedback.rating, 0) / tokensWithFeedback.length
           : 0
           
-        const activeOfficers = outlet.officers.filter((officer: any) => officer.isActive).length
+        const activeOfficers = outlet.officers.filter((officer: any) => 
+          officer.status === 'available' || officer.status === 'online'
+        ).length
         
         return {
           id: manager.id,
