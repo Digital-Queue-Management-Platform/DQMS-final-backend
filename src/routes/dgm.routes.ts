@@ -262,7 +262,7 @@ router.delete("/closure-notices/:id", async (req, res) => {
 
 // ---- RTOM MANAGEMENT (DGM creates and manages RTOMs for their regions) ----
 
-// GET /rtoms - list all RTOM managers in DGM's assigned regions
+// GET /rtoms - list all RTOM managers in DGM's assigned regions (updated for new hierarchy)
 router.get("/rtoms", async (req, res) => {
     try {
         const auth = verifyDGMToken(req)
@@ -271,25 +271,58 @@ router.get("/rtoms", async (req, res) => {
         const dgm = await (prisma as any).dGM.findUnique({ where: { id: auth.dgmId } })
         if (!dgm) return res.status(404).json({ error: "DGM not found" })
 
+        // Get regions assigned to this DGM
         const regions = await prisma.region.findMany({
             where: { id: { in: dgm.regionIds } },
-            select: {
-                id: true, name: true,
-                managerId: true, managerEmail: true, managerMobile: true,
-                outlets: { select: { id: true, name: true, isActive: true } }
-            },
-            orderBy: { name: "asc" }
+            include: {
+                rtoms: {
+                    where: { dgmId: auth.dgmId }, // Only RTOMs assigned to this DGM
+                    include: {
+                        teleshopManagers: {
+                            select: {
+                                id: true,
+                                name: true,
+                                mobileNumber: true,
+                                isActive: true
+                            }
+                        }
+                    }
+                },
+                outlets: {
+                    select: {
+                        id: true,
+                        name: true,
+                        isActive: true
+                    }
+                }
+            }
         })
 
-        res.json({ success: true, regions })
+        // Transform to properly support multiple RTOMs per DGM
+        const transformedRegions = regions.map(region => ({
+            id: region.id,
+            name: region.name,
+            outlets: region.outlets,
+            rtoms: region.rtoms.map(rtom => ({
+                id: rtom.id,
+                name: rtom.name,
+                email: rtom.email,
+                mobileNumber: rtom.mobileNumber,
+                isActive: rtom.isActive,
+                lastLoginAt: rtom.lastLoginAt,
+                createdAt: rtom.createdAt,
+                teleshopManagers: rtom.teleshopManagers
+            }))
+        }))
+
+        res.json({ success: true, regions: transformedRegions })
     } catch (err) {
         console.error("DGM list RTOMs error:", err)
         res.status(500).json({ error: "Failed to fetch RTOMs" })
     }
 })
 
-// POST /rtoms - create/assign an RTOM to one of DGM's regions
-// This sets the manager details on an existing region
+// POST /rtoms - create/assign an RTOM to one of DGM's regions (updated for new hierarchy)
 router.post("/rtoms", async (req, res) => {
     try {
         const auth = verifyDGMToken(req)
@@ -307,17 +340,25 @@ router.post("/rtoms", async (req, res) => {
         if (!dgm.regionIds.includes(regionId)) return res.status(403).json({ error: "Region not assigned to you" })
 
         // Check mobile not already in use by another RTOM
-        const existing = await prisma.region.findFirst({ where: { managerMobile: mobileNumber, id: { not: regionId } } })
+        const existing = await prisma.rTOM.findUnique({ where: { mobileNumber } })
         if (existing) return res.status(400).json({ error: "This mobile number is already used by another RTOM" })
 
-        const region = await prisma.region.update({
-            where: { id: regionId },
-            data: { managerId: name, managerMobile: mobileNumber, managerEmail: email || null } as any,
-            select: { id: true, name: true, managerId: true, managerMobile: true, managerEmail: true }
+        // Create new RTOM entity
+        const rtom = await prisma.rTOM.create({
+            data: {
+                name,
+                mobileNumber,
+                email: email || null,
+                dgmId: auth.dgmId,
+                regionId
+            },
+            include: {
+                region: { select: { id: true, name: true } }
+            }
         })
 
         // Send notifications
-        const loginUrl = "https://sltsecmanage.slt.lk:7443/manager/login"
+        const loginUrl = `${process.env.FRONTEND_BASE_URL || 'https://sltsecmanage.slt.lk:7443'}/manager/login`
 
         // Email
         if (email) {
@@ -326,7 +367,7 @@ router.post("/rtoms", async (req, res) => {
                 email,
                 mobileNumber,
                 role: "RTOM",
-                regionName: region.name,
+                regionName: rtom.region.name,
                 loginUrl
             }).catch(err => console.error("RTOM welcome email failed:", err))
         }
@@ -338,7 +379,18 @@ router.post("/rtoms", async (req, res) => {
             loginUrl
         }).catch(err => console.error("RTOM welcome SMS failed:", err))
 
-        res.status(201).json({ success: true, region })
+        // Return RTOM with backward-compatible format
+        const response = {
+            id: rtom.region.id, // regionId for frontend compatibility
+            name: rtom.region.name,
+            managerId: rtom.id,
+            managerEmail: rtom.email,
+            managerMobile: rtom.mobileNumber,
+            managerName: rtom.name,
+            rtom: rtom
+        }
+
+        res.status(201).json({ success: true, region: response, rtom })
     } catch (err) {
         console.error("DGM create RTOM error:", err)
         res.status(500).json({ error: "Failed to create RTOM" })

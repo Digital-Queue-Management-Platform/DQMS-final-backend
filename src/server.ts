@@ -193,7 +193,7 @@ wss.on("connection", (ws, req) => {
   // Handle WebSocket pong responses (automatic heartbeat)
   ws.on("pong", () => {
     wsManager.updateHeartbeat(ws)
-    console.log(`📡 Pong received - connection alive`)
+    console.log(`Pong received - connection alive`)
   })
   
   // Handle incoming messages
@@ -333,7 +333,7 @@ export const broadcast = (data: any) => {
     console.log(`📨 Message queued for outlet ${outletId} (delivered: ${delivered}, queued: ${queued})`)
   }
   
-  console.log(`📡 Broadcast complete - delivered: ${delivered}, queued: ${queued}`)
+  console.log(`Broadcast complete - delivered: ${delivered}, queued: ${queued}`)
 }
 
 // Function to deliver queued messages when client reconnects
@@ -671,7 +671,7 @@ server.listen(PORT, "0.0.0.0", () => {
 
   // NOTE: QR Session cleanup jobs disabled - using ManagerQRToken table instead of QRSession
   // The QRSession and DeviceLink tables have Prisma client issues - keeping disabled until resolved
-  console.log("ℹ️ QR session cleanup jobs disabled - using existing ManagerQRToken flow")
+  console.log("QR session cleanup jobs disabled - using existing ManagerQRToken flow")
   
   // Cleanup job for ManagerQRToken (cleanup tokens older than 24 hours)
   setInterval(async () => {
@@ -691,7 +691,7 @@ server.listen(PORT, "0.0.0.0", () => {
     }
   }, 6 * 60 * 60 * 1000)  // Every 6 hours
 
-  console.log("✅ ManagerQRToken cleanup job started")
+  console.log("ManagerQRToken cleanup job started")
   systemLogger.info("ManagerQRToken cleanup job initialized", {
     service: 'backend',
     module: 'qr-session',

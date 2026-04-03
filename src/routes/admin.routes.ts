@@ -9,14 +9,15 @@ import { generateSecurePassword } from "../utils/passwordGenerator"
 import { getFrontendBaseUrl } from "../utils/urlHelper"
 import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
 import { healthTracker } from "../services/healthTracker"
+import { generateAnalyticsReport, generateReportHTML } from "../services/reportGenerator"
 
 const router = Router()
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 // No expiration for production system - admin needs continuous access
 const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
-const ADMIN_EMAIL = "admindqms@slt.lk"
-const ADMIN_PASSWORD = "dqms2026@"
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admindqms@slt.lk"
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "dqms2026@"
 const STAFF_PRESENCE_WINDOW_MINUTES = Math.max(1, Number(process.env.ADMIN_STAFF_PRESENCE_MINUTES || 30))
 
 // Interface for manager credentials
@@ -600,6 +601,48 @@ router.get("/analytics", async (req, res) => {
   }
 })
 
+// Export comprehensive analytics report as PDF
+router.get("/analytics/export-pdf", async (req, res) => {
+  try {
+    const { startDate, endDate, scope } = req.query
+    
+    // Default to today if no dates provided
+    const defaultStart = new Date()
+    defaultStart.setHours(0, 0, 0, 0)
+    const defaultEnd = new Date()
+    defaultEnd.setHours(23, 59, 59, 999)
+    
+    const sDate = startDate ? new Date(startDate as string) : defaultStart
+    const eDate = endDate ? new Date(endDate as string) : defaultEnd
+    
+    if (isNaN(sDate.getTime()) || isNaN(eDate.getTime())) {
+      return res.status(400).json({ error: "Invalid date format provided" })
+    }
+    
+    const reportScope = scope as string || "Island-wide (All Outlets)"
+    
+    // Generate comprehensive report data
+    const reportData = await generateAnalyticsReport(sDate, eDate, reportScope)
+    
+    // Generate HTML report
+    const htmlContent = generateReportHTML(reportData)
+    
+    // Set response headers for PDF download
+    const filename = `DQMP-Analytics-Report-${reportData.period.startDate}-${reportData.period.endDate}.pdf`
+    res.setHeader('Content-Type', 'text/html')
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+    res.setHeader('X-Filename', filename)
+    res.setHeader('X-Report-Type', 'analytics')
+    
+    // Return HTML that can be converted to PDF on frontend
+    res.send(htmlContent)
+    
+  } catch (error) {
+    console.error("PDF export error:", error)
+    res.status(500).json({ error: "Failed to generate report" })
+  }
+})
+
 // Get alerts
 router.get("/alerts", async (req, res) => {
   try {
@@ -791,7 +834,12 @@ router.post("/register-region", async (req, res) => {
 router.get("/regions", async (req, res) => {
   try {
     const regions = await prisma.region.findMany({
-      select: { id: true, name: true, managerId: true, managerEmail: true, managerMobile: true, outlets: { select: { id: true, name: true } } },
+      include: {
+        gm: {
+          select: { id: true, name: true, mobileNumber: true, email: true }
+        },
+        outlets: { select: { id: true, name: true } }
+      },
       orderBy: { name: "asc" }
     })
     res.json({ regions })
@@ -823,16 +871,13 @@ router.delete("/regions/:id", async (req, res) => {
   }
 })
 
-// Get all regions (used for DGM assignment dropdown and RTOM listing)
+// Get all regions with their RTOMs (updated to use proper RTOM hierarchy)
 router.get("/managers", async (req, res) => {
   try {
     const regions = await prisma.region.findMany({
       select: {
         id: true,
         name: true,
-        managerId: true,
-        managerEmail: true,
-        managerMobile: true,
         createdAt: true,
         outlets: {
           select: {
@@ -841,34 +886,214 @@ router.get("/managers", async (req, res) => {
             location: true,
             isActive: true
           }
+        },
+        rtoms: {
+          select: {
+            id: true,
+            name: true,
+            mobileNumber: true,
+            email: true,
+            isActive: true,
+            createdAt: true,
+            lastLoginAt: true,
+            dgm: {
+              select: {
+                id: true,
+                name: true,
+                gm: {
+                  select: {
+                    id: true,
+                    name: true
+                  }
+                }
+              }
+            }
+          }
         }
       }
     })
 
-    // Find which DGM owns which region (globally)
-    const allDgms = await (prisma as any).dGM.findMany({
-      select: { id: true, name: true, regionIds: true }
-    })
-    const regionDgmMap = new Map<string, { id: string, name: string }>()
-    allDgms.forEach((d: any) => {
-      d.regionIds.forEach((rid: string) => {
-        regionDgmMap.set(rid, { id: d.id, name: d.name })
-      })
-    })
+    // Transform to match frontend expectations but with proper hierarchy
+    // Only include regions that have at least one RTOM
+    const managersData = regions
+      .filter(region => region.rtoms && region.rtoms.length > 0)
+      .map(region => ({
+        ...region,
+        managerId: region.rtoms[0].id,
+        managerEmail: region.rtoms[0].email || null,
+        managerMobile: region.rtoms[0].mobileNumber || null,
+        managerName: region.rtoms[0].name,
+        managerLastLoginAt: region.rtoms[0].lastLoginAt || null,
+        rtoms: region.rtoms,
+        assignedDgm: region.rtoms[0].dgm || null,
+        assignedGm: region.rtoms[0].dgm?.gm || null
+      }))
 
-    const enrichedRegions = regions.map(r => ({
-      ...r,
-      assignedDgm: regionDgmMap.get(r.id) || null
-    }))
-
-    res.json({ success: true, managers: enrichedRegions })
+    res.json({ success: true, managers: managersData })
   } catch (error) {
     console.error("Get managers error:", error)
     res.status(500).json({ error: "Failed to fetch managers" })
   }
 })
 
-// Reset manager password (generates new password and sends email)
+// === RTOM Management Endpoints ===
+
+// Get RTOMs for a DGM  
+router.get("/rtoms", async (req, res) => {
+  try {
+    const { dgmId } = req.query
+    
+    const where = dgmId ? { dgmId: dgmId as string } : {}
+    
+    const rtoms = await prisma.rTOM.findMany({
+      where,
+      include: {
+        region: true,
+        dgm: {
+          include: { gm: true }
+        },
+        teleshopManagers: {
+          select: {
+            id: true,
+            name: true,
+            mobileNumber: true,
+            isActive: true
+          }
+        }
+      },
+      orderBy: [
+        { region: { name: 'asc' } },
+        { name: 'asc' }
+      ]
+    })
+
+    res.json({ success: true, rtoms })
+  } catch (error) {
+    console.error("Get RTOMs error:", error)
+    res.status(500).json({ error: "Failed to fetch RTOMs" })
+  }
+})
+
+// Create new RTOM
+router.post("/rtoms", async (req, res) => {
+  try {
+    const { name, mobileNumber, email, dgmId, regionId } = req.body
+
+    if (!name || !mobileNumber || !dgmId || !regionId) {
+      return res.status(400).json({ error: "Name, mobile number, DGM ID, and region ID are required" })
+    }
+
+    if (!isValidSLMobile(mobileNumber)) {
+      return res.status(400).json({ error: "Invalid Sri Lankan mobile number format" })
+    }
+
+    // Check if RTOM already exists
+    const existing = await prisma.rTOM.findUnique({
+      where: { mobileNumber }
+    })
+    if (existing) {
+      return res.status(400).json({ error: "RTOM with this mobile number already exists" })
+    }
+
+    const rtom = await prisma.rTOM.create({
+      data: {
+        name,
+        mobileNumber,
+        email,
+        dgmId,
+        regionId
+      },
+      include: {
+        region: true,
+        dgm: {
+          include: { gm: true }
+        }
+      }
+    })
+
+    // Send welcome notifications
+    const loginUrl = `${getFrontendBaseUrl()}/manager/login`
+    
+    if (email) {
+      emailService.sendStaffWelcomeEmail({
+        name,
+        email,
+        mobileNumber,
+        role: "RTOM",
+        regionName: rtom.region.name,
+        loginUrl
+      }).catch(err => console.error("RTOM welcome email failed:", err))
+    }
+
+    sltSmsService.sendStaffWelcomeSMS(mobileNumber, {
+      name,
+      role: "RTOM", 
+      loginUrl
+    }).catch(err => console.error("RTOM welcome SMS failed:", err))
+
+    res.json({ success: true, rtom })
+  } catch (error) {
+    console.error("Create RTOM error:", error)
+    res.status(500).json({ error: "Failed to create RTOM" })
+  }
+})
+
+// Update RTOM
+router.put("/rtoms/:rtomId", async (req, res) => {
+  try {
+    const { rtomId } = req.params
+    const { name, email, isActive } = req.body
+
+    const rtom = await prisma.rTOM.update({
+      where: { id: rtomId },
+      data: { 
+        ...(name && { name }),
+        ...(email !== undefined && { email }),
+        ...(isActive !== undefined && { isActive })
+      },
+      include: {
+        region: true,
+        dgm: {
+          include: { gm: true }
+        }
+      }
+    })
+
+    res.json({ success: true, rtom })
+  } catch (error) {
+    console.error("Update RTOM error:", error)
+    res.status(500).json({ error: "Failed to update RTOM" })
+  }
+})
+
+// Delete RTOM
+router.delete("/rtoms/:rtomId", async (req, res) => {
+  try {
+    const { rtomId } = req.params
+
+    // Check if RTOM has teleshop managers
+    const teleshopCount = await prisma.teleshopManager.count({
+      where: { rtomId }
+    })
+
+    if (teleshopCount > 0) {
+      return res.status(400).json({ 
+        error: `Cannot delete RTOM. ${teleshopCount} teleshop manager(s) are assigned to this RTOM.` 
+      })
+    }
+
+    await prisma.rTOM.delete({
+      where: { id: rtomId }
+    })
+
+    res.json({ success: true, message: "RTOM deleted successfully" })
+  } catch (error) {
+    console.error("Delete RTOM error:", error)  
+    res.status(500).json({ error: "Failed to delete RTOM" })
+  }
+})
+
+// Reset manager password (for legacy Region-based RTOMs - kept for backward compatibility)
 router.post("/managers/:regionId/reset-password", async (req, res) => {
   try {
     const { regionId } = req.params
@@ -1000,11 +1225,14 @@ router.put("/managers/:regionId", async (req, res) => {
 // Get all outlets with kiosk passwords (admin can view all outlets)
 router.get('/outlets', async (req, res) => {
   try {
-    const { regionId } = req.query
+    const { regionId, provinceId } = req.query
 
     const where: any = {}
     if (regionId) {
       where.regionId = regionId as string
+    }
+    if (provinceId) {
+      where.provinceId = provinceId as string
     }
 
     const outlets = await prisma.outlet.findMany({
@@ -1012,7 +1240,24 @@ router.get('/outlets', async (req, res) => {
       include: {
         region: {
           select: {
-            name: true
+            name: true,
+            rtoms: {
+              select: {
+                id: true,
+                name: true,
+                mobileNumber: true
+              }
+            }
+          }
+        },
+        province: {
+          select: {
+            name: true,
+            dgm: {
+              select: {
+                name: true
+              }
+            }
           }
         },
         _count: {
@@ -1034,6 +1279,10 @@ router.get('/outlets', async (req, res) => {
       location: outlet.location,
       regionName: outlet.region.name,
       regionId: outlet.regionId,
+      provinceName: outlet.province?.name || null,
+      provinceId: outlet.provinceId,
+      rtoms: outlet.region.rtoms || [],
+      dgmName: outlet.province?.dgm?.name || null,
       isActive: outlet.isActive,
       kioskPassword: outlet.kioskPassword, // Admin can see passwords
       counterCount: outlet.counterCount,
@@ -1877,83 +2126,16 @@ router.get("/gms", async (req, res) => {
   }
 })
 
-// Create a GM (no region assignment - island-wide admin)
-router.post("/gms", async (req, res) => {
-  try {
-    const { name, mobileNumber, email } = req.body
-    if (!name || !mobileNumber) return res.status(400).json({ error: "name and mobileNumber are required" })
-    if (!isValidName(name)) return res.status(400).json({ error: "Name must be between 2 and 100 characters" })
-    if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
-    if (email && !isValidEmail(email)) return res.status(400).json({ error: "Invalid email address format" })
-    const existing = await (prisma as any).gM.findFirst({ where: { mobileNumber } })
-    if (existing) return res.status(400).json({ error: "A GM with this mobile number already exists" })
-    const gm = await (prisma as any).gM.create({ data: { name, mobileNumber, email: email || null } })
-
-    // Send notifications
-    const loginUrl = `${getFrontendBaseUrl()}/gm/login`
-
-    // Email
-    if (email) {
-      emailService.sendStaffWelcomeEmail({
-        name,
-        email,
-        mobileNumber,
-        role: "GM",
-        loginUrl
-      }).catch(err => console.error("GM welcome email failed:", err))
-    }
-
-    // SMS
-    sltSmsService.sendStaffWelcomeSMS(mobileNumber, {
-      name,
-      role: "GM",
-      loginUrl
-    }).catch(err => console.error("GM welcome SMS failed:", err))
-
-    res.json({ success: true, gm })
-  } catch (err) {
-    console.error("Create GM error:", err)
-    res.status(500).json({ error: "Failed to create GM" })
-  }
-})
-
-// Update a GM
-router.put("/gms/:gmId", async (req, res) => {
-  try {
-    const { gmId } = req.params
-    const { name, mobileNumber, email, isActive } = req.body
-    const gm = await (prisma as any).gM.update({
-      where: { id: gmId },
-      data: { ...(name && { name }), ...(mobileNumber && { mobileNumber }), ...(email !== undefined && { email }), ...(isActive !== undefined && { isActive }) }
-    })
-    res.json({ success: true, gm })
-  } catch (err: any) {
-    if (err.code === "P2025") return res.status(404).json({ error: "GM not found" })
-    console.error("Update GM error:", err)
-    res.status(500).json({ error: "Failed to update GM" })
-  }
-})
-
-// Delete a GM
-router.delete("/gms/:gmId", async (req, res) => {
-  try {
-    const { gmId } = req.params
-    await (prisma as any).gM.delete({ where: { id: gmId } })
-    res.json({ success: true })
-  } catch (err: any) {
-    if (err.code === "P2025") return res.status(404).json({ error: "GM not found" })
-    console.error("Delete GM error:", err)
-    res.status(500).json({ error: "Failed to delete GM" })
-  }
-})
-
 // ========= DGM MANAGEMENT =========
 
 // List all DGMs (Admin view)
 router.get("/dgms", async (req, res) => {
   try {
     const dgms = await (prisma as any).dGM.findMany({
-      include: { gm: { select: { id: true, name: true } } },
+      include: { 
+        gm: { select: { id: true, name: true } },
+        province: { select: { id: true, name: true, regionId: true } }
+      },
       orderBy: { createdAt: "desc" }
     })
     res.json({ success: true, dgms })
@@ -1966,28 +2148,40 @@ router.get("/dgms", async (req, res) => {
 // Create a DGM (Admin)
 router.post("/dgms", async (req, res) => {
   try {
-    const { name, mobileNumber, email, gmId, regionIds } = req.body
+    const { name, mobileNumber, email, gmId, provinceId } = req.body
     if (!name || !mobileNumber || !gmId) return res.status(400).json({ error: "name, mobileNumber, and gmId are required" })
     if (!isValidName(name)) return res.status(400).json({ error: "Name must be between 2 and 100 characters" })
     if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
     if (email && !isValidEmail(email)) return res.status(400).json({ error: "Invalid email address format" })
+    
     const existing = await (prisma as any).dGM.findFirst({ where: { mobileNumber } })
     if (existing) return res.status(400).json({ error: "A DGM with this mobile number already exists" })
+    
     const gm = await (prisma as any).gM.findUnique({ where: { id: gmId } })
     if (!gm) return res.status(404).json({ error: "GM not found" })
 
-    // Region conflict check
-    const ids = regionIds || []
-    if (ids.length > 0) {
-      const conflicting = await (prisma as any).dGM.findFirst({ where: { regionIds: { hasSome: ids } } })
-      if (conflicting) {
-        const takenRegions = await prisma.region.findMany({ where: { id: { in: ids.filter((id: string) => conflicting.regionIds.includes(id)) } }, select: { name: true } })
-        const names = takenRegions.map((r: any) => r.name).join(", ")
-        return res.status(400).json({ error: `Region(s) already assigned to another DGM: ${names}` })
+    // Province validation and conflict check
+    if (provinceId) {
+      const province = await prisma.province.findUnique({ where: { id: provinceId } })
+      if (!province) return res.status(404).json({ error: "Province not found" })
+      
+      const existingProvinceAssignment = await (prisma as any).dGM.findFirst({ where: { provinceId } })
+      if (existingProvinceAssignment) {
+        const provinceName = province.name
+        return res.status(400).json({ error: `Province "${provinceName}" is already assigned to another DGM` })
       }
     }
 
-    const dgm = await (prisma as any).dGM.create({ data: { name, mobileNumber, email: email || null, gmId, regionIds: ids } })
+    const dgm = await (prisma as any).dGM.create({ 
+      data: { 
+        name, 
+        mobileNumber, 
+        email: email || null, 
+        gmId, 
+        provinceId: provinceId || null,
+        regionIds: [] // Keep empty array for backward compatibility
+      } 
+    })
 
     // Send notifications
     const loginUrl = `${getFrontendBaseUrl()}/dgm/login`
@@ -2021,22 +2215,32 @@ router.post("/dgms", async (req, res) => {
 router.put("/dgms/:dgmId", async (req, res) => {
   try {
     const { dgmId } = req.params
-    const { name, mobileNumber, email, gmId, regionIds, isActive } = req.body
+    const { name, mobileNumber, email, gmId, provinceId, isActive } = req.body
 
-    // Region conflict check (exclude this DGM)
-    if (regionIds !== undefined && regionIds.length > 0) {
-      const conflicting = await (prisma as any).dGM.findFirst({ where: { regionIds: { hasSome: regionIds }, id: { not: dgmId } } })
-      if (conflicting) {
-        const takenIds = regionIds.filter((id: string) => conflicting.regionIds.includes(id))
-        const takenRegions = await prisma.region.findMany({ where: { id: { in: takenIds } }, select: { name: true } })
-        const names = takenRegions.map((r: any) => r.name).join(", ")
-        return res.status(400).json({ error: `Region(s) already assigned to another DGM: ${names}` })
+    // Province conflict check (exclude this DGM)
+    if (provinceId) {
+      const province = await prisma.province.findUnique({ where: { id: provinceId } })
+      if (!province) return res.status(404).json({ error: "Province not found" })
+      
+      const existingProvinceAssignment = await (prisma as any).dGM.findFirst({ 
+        where: { provinceId, id: { not: dgmId } } 
+      })
+      if (existingProvinceAssignment) {
+        const provinceName = province.name
+        return res.status(400).json({ error: `Province "${provinceName}" is already assigned to another DGM` })
       }
     }
 
     const dgm = await (prisma as any).dGM.update({
       where: { id: dgmId },
-      data: { ...(name && { name }), ...(mobileNumber && { mobileNumber }), ...(email !== undefined && { email }), ...(gmId && { gmId }), ...(regionIds !== undefined && { regionIds }), ...(isActive !== undefined && { isActive }) }
+      data: { 
+        ...(name && { name }), 
+        ...(mobileNumber && { mobileNumber }), 
+        ...(email !== undefined && { email }), 
+        ...(gmId && { gmId }), 
+        ...(provinceId !== undefined && { provinceId }), 
+        ...(isActive !== undefined && { isActive }) 
+      }
     })
     res.json({ success: true, dgm })
   } catch (err: any) {
@@ -2443,6 +2647,694 @@ router.post("/test/sms", async (req, res) => {
   } catch (error: any) {
     console.error("Test SMS error:", error)
     res.status(500).json({ error: "Test SMS failed: " + (error?.message || "Unknown error") })
+  }
+})
+
+// ====== HIERARCHY MANAGEMENT APIS ======
+
+// Region Management
+router.get("/regions", async (req, res) => {
+  try {
+    const regions = await prisma.region.findMany({
+      include: {
+        gm: {
+          select: { id: true, name: true, mobileNumber: true, email: true }
+        },
+        provinces: {
+          include: {
+            dgm: {
+              select: { id: true, name: true, mobileNumber: true, email: true }
+            }
+          }
+        },
+        _count: {
+          select: { provinces: true, rtoms: true, teleshopManagers: true }
+        }
+      },
+      orderBy: { name: 'asc' }
+    })
+
+    res.json({
+      success: true,
+      regions
+    })
+  } catch (error) {
+    console.error("Get regions error:", error)
+    res.status(500).json({ error: "Failed to fetch regions" })
+  }
+})
+
+router.post("/regions", async (req, res) => {
+  try {
+    const { name } = req.body
+
+    if (!name || name.trim().length === 0) {
+      return res.status(400).json({ error: "Region name is required" })
+    }
+
+    // Check if region already exists
+    const existingRegion = await prisma.region.findFirst({
+      where: { name: name.trim() }
+    })
+
+    if (existingRegion) {
+      return res.status(400).json({ error: "Region with this name already exists" })
+    }
+
+    const region = await prisma.region.create({
+      data: {
+        name: name.trim()
+      }
+    })
+
+    res.json({
+      success: true,
+      region
+    })
+  } catch (error) {
+    console.error("Create region error:", error)
+    res.status(500).json({ error: "Failed to create region" })
+  }
+})
+
+router.put("/regions/:regionId", async (req, res) => {
+  try {
+    const { regionId } = req.params
+    const { name } = req.body
+
+    if (!name || name.trim().length === 0) {
+      return res.status(400).json({ error: "Region name is required" })
+    }
+
+    // Check if another region has this name
+    const existingRegion = await prisma.region.findFirst({
+      where: { 
+        name: name.trim(),
+        NOT: { id: regionId }
+      }
+    })
+
+    if (existingRegion) {
+      return res.status(400).json({ error: "Another region with this name already exists" })
+    }
+
+    const region = await prisma.region.update({
+      where: { id: regionId },
+      data: { name: name.trim() }
+    })
+
+    res.json({
+      success: true,
+      region
+    })
+  } catch (error) {
+    console.error("Update region error:", error)
+    res.status(500).json({ error: "Failed to update region" })
+  }
+})
+
+router.delete("/regions/:regionId", async (req, res) => {
+  try {
+    const { regionId } = req.params
+
+    // Check if region has dependencies
+    const region = await prisma.region.findUnique({
+      where: { id: regionId },
+      include: {
+        provinces: true,
+        gm: true,
+        rtoms: true,
+        teleshopManagers: true,
+        outlets: true
+      }
+    })
+
+    if (!region) {
+      return res.status(404).json({ error: "Region not found" })
+    }
+
+    if (region.provinces.length > 0 || region.gm || region.rtoms.length > 0 || 
+        region.teleshopManagers.length > 0 || region.outlets.length > 0) {
+      return res.status(400).json({ 
+        error: "Cannot delete region with existing provinces, GM, RTOMs, managers, or outlets. Remove dependencies first." 
+      })
+    }
+
+    await prisma.region.delete({
+      where: { id: regionId }
+    })
+
+    res.json({
+      success: true,
+      message: "Region deleted successfully"
+    })
+  } catch (error) {
+    console.error("Delete region error:", error)
+    res.status(500).json({ error: "Failed to delete region" })
+  }
+})
+
+// Province Management
+router.get("/provinces", async (req, res) => {
+  try {
+    const { regionId } = req.query
+
+    const where: any = {}
+    if (regionId) {
+      where.regionId = regionId as string
+    }
+
+    const provinces = await prisma.province.findMany({
+      where,
+      include: {
+        region: {
+          select: { id: true, name: true }
+        },
+        dgm: {
+          select: { id: true, name: true, mobileNumber: true, email: true }
+        }
+      },
+      orderBy: [{ region: { name: 'asc' } }, { name: 'asc' }]
+    })
+
+    res.json({
+      success: true,
+      provinces
+    })
+  } catch (error) {
+    console.error("Get provinces error:", error)
+    res.status(500).json({ error: "Failed to fetch provinces" })
+  }
+})
+
+router.post("/provinces", async (req, res) => {
+  try {
+    const { name, regionId } = req.body
+
+    if (!name || name.trim().length === 0) {
+      return res.status(400).json({ error: "Province name is required" })
+    }
+
+    if (!regionId) {
+      return res.status(400).json({ error: "Region is required" })
+    }
+
+    // Verify region exists
+    const region = await prisma.region.findUnique({
+      where: { id: regionId }
+    })
+
+    if (!region) {
+      return res.status(400).json({ error: "Invalid region selected" })
+    }
+
+    // Check if province already exists in this region
+    const existingProvince = await prisma.province.findFirst({
+      where: { 
+        name: name.trim(),
+        regionId 
+      }
+    })
+
+    if (existingProvince) {
+      return res.status(400).json({ error: "Province with this name already exists in this region" })
+    }
+
+    const province = await prisma.province.create({
+      data: {
+        name: name.trim(),
+        regionId
+      },
+      include: {
+        region: {
+          select: { id: true, name: true }
+        }
+      }
+    })
+
+    res.json({
+      success: true,
+      province
+    })
+  } catch (error) {
+    console.error("Create province error:", error)
+    res.status(500).json({ error: "Failed to create province" })
+  }
+})
+
+router.put("/provinces/:provinceId", async (req, res) => {
+  try {
+    const { provinceId } = req.params
+    const { name } = req.body
+
+    if (!name || name.trim().length === 0) {
+      return res.status(400).json({ error: "Province name is required" })
+    }
+
+    // Get current province to check region
+    const currentProvince = await prisma.province.findUnique({
+      where: { id: provinceId }
+    })
+
+    if (!currentProvince) {
+      return res.status(404).json({ error: "Province not found" })
+    }
+
+    // Check if another province has this name in the same region
+    const existingProvince = await prisma.province.findFirst({
+      where: { 
+        name: name.trim(),
+        regionId: currentProvince.regionId,
+        NOT: { id: provinceId }
+      }
+    })
+
+    if (existingProvince) {
+      return res.status(400).json({ error: "Another province with this name already exists in this region" })
+    }
+
+    const province = await prisma.province.update({
+      where: { id: provinceId },
+      data: { name: name.trim() },
+      include: {
+        region: {
+          select: { id: true, name: true }
+        }
+      }
+    })
+
+    res.json({
+      success: true,
+      province
+    })
+  } catch (error) {
+    console.error("Update province error:", error)
+    res.status(500).json({ error: "Failed to update province" })
+  }
+})
+
+router.delete("/provinces/:provinceId", async (req, res) => {
+  try {
+    const { provinceId } = req.params
+
+    // Check if province has DGM
+    const province = await prisma.province.findUnique({
+      where: { id: provinceId },
+      include: {
+        dgm: true
+      }
+    })
+
+    if (!province) {
+      return res.status(404).json({ error: "Province not found" })
+    }
+
+    if (province.dgm) {
+      return res.status(400).json({ 
+        error: "Cannot delete province with assigned DGM. Remove DGM first." 
+      })
+    }
+
+    await prisma.province.delete({
+      where: { id: provinceId }
+    })
+
+    res.json({
+      success: true,
+      message: "Province deleted successfully"
+    })
+  } catch (error) {
+    console.error("Delete province error:", error)
+    res.status(500).json({ error: "Failed to delete province" })
+  }
+})
+
+// GM Management
+router.get("/gms", async (req, res) => {
+  try {
+    const gms = await prisma.gM.findMany({
+      include: {
+        region: true,  // Include full region object instead of select
+        dgms: {
+          select: { id: true, name: true, mobileNumber: true, province: { select: { name: true } } }
+        }
+      },
+      orderBy: { name: 'asc' }
+    })
+
+    console.log("GMs with region data:", JSON.stringify(gms, null, 2))
+
+    res.json({
+      success: true,
+      gms
+    })
+  } catch (error) {
+    console.error("Get GMs error:", error)
+    res.status(500).json({ error: "Failed to fetch GMs" })
+  }
+})
+
+router.post("/gms", async (req, res) => {
+  try {
+    const { name, mobileNumber, email, regionId } = req.body
+
+    if (!name || name.trim().length === 0) {
+      return res.status(400).json({ error: "GM name is required" })
+    }
+
+    if (!mobileNumber || !isValidSLMobile(mobileNumber)) {
+      return res.status(400).json({ error: "Valid Sri Lankan mobile number is required" })
+    }
+
+    if (!regionId) {
+      return res.status(400).json({ error: "Region assignment is required" })
+    }
+
+    // Verify region exists and doesn't already have a GM
+    const region = await prisma.region.findUnique({
+      where: { id: regionId },
+      include: { gm: true }
+    })
+
+    if (!region) {
+      return res.status(400).json({ error: "Invalid region selected" })
+    }
+
+    if (region.gm) {
+      return res.status(400).json({ error: "This region already has a GM assigned" })
+    }
+
+    // Check if mobile number already exists
+    const existingGM = await prisma.gM.findUnique({
+      where: { mobileNumber }
+    })
+
+    if (existingGM) {
+      return res.status(400).json({ error: "GM with this mobile number already exists" })
+    }
+
+    // Create GM and assign to region (uses OTP login but needs placeholder password)
+    const gm = await prisma.gM.create({
+      data: {
+        name: name.trim(),
+        mobileNumber,
+        email: email?.trim() || null,
+        regionId,
+        password: 'OTP_LOGIN' // Placeholder since GMs use OTP login
+      }
+    })
+
+    // Update region with GM reference
+    await prisma.region.update({
+      where: { id: regionId },
+      data: { gmId: gm.id }  // Set the correct GM ID
+    })
+
+    res.json({
+      success: true,
+      gm: {
+        id: gm.id,
+        name: gm.name,
+        mobileNumber: gm.mobileNumber,
+        email: gm.email,
+        regionId: gm.regionId,
+        isActive: gm.isActive
+      }
+    })
+  } catch (error) {
+    console.error("Create GM error:", error)
+    res.status(500).json({ error: "Failed to create GM" })
+  }
+})
+
+router.put("/gms/:gmId", async (req, res) => {
+  try {
+    const { gmId } = req.params
+    const { name, email, isActive } = req.body
+
+    if (!name || name.trim().length === 0) {
+      return res.status(400).json({ error: "GM name is required" })
+    }
+
+    const updateData: any = {
+      name: name.trim(),
+      email: email?.trim() || null
+    }
+
+    if (typeof isActive === 'boolean') {
+      updateData.isActive = isActive
+    }
+
+    const gm = await prisma.gM.update({
+      where: { id: gmId },
+      data: updateData,
+      include: {
+        region: {
+          select: { id: true, name: true }
+        }
+      }
+    })
+
+    res.json({
+      success: true,
+      gm: {
+        id: gm.id,
+        name: gm.name,
+        mobileNumber: gm.mobileNumber,
+        email: gm.email,
+        regionId: gm.regionId,
+        isActive: gm.isActive,
+        region: gm.region
+      }
+    })
+  } catch (error) {
+    console.error("Update GM error:", error)
+    res.status(500).json({ error: "Failed to update GM" })
+  }
+})
+
+router.delete("/gms/:gmId", async (req, res) => {
+  try {
+    const { gmId } = req.params
+
+    // Check if GM has DGMs
+    const gm = await prisma.gM.findUnique({
+      where: { id: gmId },
+      include: {
+        dgms: true,
+        region: true
+      }
+    })
+
+    if (!gm) {
+      return res.status(404).json({ error: "GM not found" })
+    }
+
+    if (gm.dgms.length > 0) {
+      return res.status(400).json({ 
+        error: "Cannot delete GM with existing DGMs. Remove or reassign DGMs first." 
+      })
+    }
+
+    // Remove GM from region and delete GM
+    await prisma.$transaction([
+      prisma.region.update({
+        where: { id: gm.regionId! },
+        data: { gmId: null }
+      }),
+      prisma.gM.delete({
+        where: { id: gmId }
+      })
+    ])
+
+    res.json({
+      success: true,
+      message: "GM deleted successfully"
+    })
+  } catch (error) {
+    console.error("Delete GM error:", error)
+    res.status(500).json({ error: "Failed to delete GM" })
+  }
+})
+
+// === Teleshop Manager Management Endpoints ===
+
+// Get all teleshop managers
+router.get("/teleshop-managers", async (req, res) => {
+  try {
+    console.log("Fetching teleshop managers...")
+    const teleshopManagers = await prisma.teleshopManager.findMany({
+      include: {
+        rtom: {
+          include: {
+            region: true
+          }
+        },
+        branch: {
+          include: {
+            officers: true // Include officers for count calculation
+          }
+        },
+        region: true
+      },
+      orderBy: [
+        { name: 'asc' }
+      ]
+    })
+
+    console.log("Found teleshop managers:", teleshopManagers.length)
+    if (teleshopManagers.length > 0) {
+      console.log("First manager branch structure:", JSON.stringify((teleshopManagers[0] as any).branch, null, 2))
+    }
+
+    res.json({ 
+      success: true, 
+      teleshopManagers: teleshopManagers.map((manager: any) => {
+        // Get officers from the manager's branch
+        const officers = manager.branch?.officers || []
+        const activeOfficers = officers.filter((officer: any) => officer.status === 'online' || officer.status === 'available')
+        
+        return {
+          ...manager,
+          officers: officers.map((officer: any) => ({
+            id: officer.id,
+            name: officer.name,
+            isActive: officer.status === 'online' || officer.status === 'available'
+          })),
+          officerCount: officers.length,
+          activeOfficerCount: activeOfficers.length
+        }
+      })
+    })
+  } catch (error) {
+    console.error("Get teleshop managers error:", error)
+    res.status(500).json({ error: "Failed to fetch teleshop managers" })
+  }
+})
+
+// Debug endpoint to check GM and region data
+router.get("/debug/gm-regions", async (req, res) => {
+  try {
+    const gms = await prisma.gM.findMany({ include: { region: true } })
+    const regions = await prisma.region.findMany({ include: { gm: true } })
+    
+    res.json({
+      gms: gms.map(gm => ({
+        id: gm.id,
+        name: gm.name,
+        regionId: gm.regionId,
+        region: gm.region
+      })),
+      regions: regions.map(region => ({
+        id: region.id,
+        name: region.name,
+        gmId: region.gmId,
+        gm: region.gm
+      }))
+    })
+  } catch (error) {
+    console.error("Debug error:", error)
+    res.status(500).json({ error: "Debug failed" })
+  }
+})
+
+// Fix GM without region assignment
+router.post("/debug/fix-gm-regions", async (req, res) => {
+  try {
+    // Find GMs without regions
+    const gmsWithoutRegions = await prisma.gM.findMany({
+      where: { regionId: null },
+      include: { region: true }
+    })
+    
+    // Find regions without GMs
+    const regionsWithoutGMs = await prisma.region.findMany({
+      where: { gmId: null },
+      include: { gm: true }
+    })
+    
+    const fixes = []
+    
+    // Auto-assign first available region to GMs without regions
+    for (let i = 0; i < Math.min(gmsWithoutRegions.length, regionsWithoutGMs.length); i++) {
+      const gm = gmsWithoutRegions[i]
+      const region = regionsWithoutGMs[i]
+      
+      await prisma.$transaction([
+        prisma.gM.update({
+          where: { id: gm.id },
+          data: { regionId: region.id }
+        }),
+        prisma.region.update({
+          where: { id: region.id },
+          data: { gmId: gm.id }
+        })
+      ])
+      
+      fixes.push({ 
+        gmName: gm.name, 
+        gmId: gm.id, 
+        regionName: region.name, 
+        regionId: region.id 
+      })
+    }
+    
+    res.json({
+      success: true,
+      fixes,
+      message: `Fixed ${fixes.length} GM-region assignments`
+    })
+  } catch (error) {
+    console.error("Fix GM regions error:", error)
+    res.status(500).json({ error: "Failed to fix GM regions" })
+  }
+})
+
+// Fix existing GMs without regions
+router.post("/debug/fix-gm", async (req, res) => {
+  try {
+    // Find the GM without region
+    const gm = await prisma.gM.findFirst({
+      where: { 
+        OR: [
+          { regionId: null },
+          { regionId: "" }
+        ]
+      }
+    })
+    
+    if (!gm) {
+      return res.json({ success: true, message: "No GMs need fixing" })
+    }
+    
+    // Find an available region
+    const region = await prisma.region.findFirst({
+      where: { gmId: null }
+    })
+    
+    if (!region) {
+      return res.json({ success: true, message: "No available regions to assign" })
+    }
+    
+    // Update both GM and region
+    await prisma.$transaction([
+      prisma.gM.update({
+        where: { id: gm.id },
+        data: { regionId: region.id }
+      }),
+      prisma.region.update({
+        where: { id: region.id },
+        data: { gmId: gm.id }
+      })
+    ])
+    
+    res.json({
+      success: true,
+      message: `Assigned GM "${gm.name}" to region "${region.name}"`
+    })
+  } catch (error) {
+    console.error("Fix GM error:", error)
+    res.status(500).json({ error: "Failed to fix GM" })
   }
 })
 
