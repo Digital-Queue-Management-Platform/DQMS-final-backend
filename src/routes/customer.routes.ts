@@ -26,7 +26,7 @@ const otpStore = new Map<string, OtpRecord>()
 
 const now = () => Date.now()
 const genOtp = () => Math.floor(1000 + Math.random() * 9000).toString()
-const FIVE_MIN = 1 * 60 * 1000
+const FIVE_MIN = 5 * 60 * 1000
 const RESEND_WINDOW = 30 * 1000
 
 function normalizeLang(input: unknown): 'en' | 'si' | 'ta' {
