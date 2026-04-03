@@ -791,7 +791,12 @@ router.post("/register-region", async (req, res) => {
 router.get("/regions", async (req, res) => {
   try {
     const regions = await prisma.region.findMany({
-      select: { id: true, name: true, managerId: true, managerEmail: true, managerMobile: true, outlets: { select: { id: true, name: true } } },
+      include: {
+        gm: {
+          select: { id: true, name: true, mobileNumber: true, email: true }
+        },
+        outlets: { select: { id: true, name: true } }
+      },
       orderBy: { name: "asc" }
     })
     res.json({ regions })
@@ -1192,7 +1197,14 @@ router.get('/outlets', async (req, res) => {
       include: {
         region: {
           select: {
-            name: true
+            name: true,
+            rtoms: {
+              select: {
+                id: true,
+                name: true,
+                mobileNumber: true
+              }
+            }
           }
         },
         province: {
@@ -1200,14 +1212,7 @@ router.get('/outlets', async (req, res) => {
             name: true,
             dgm: {
               select: {
-                name: true,
-                rtoms: {
-                  select: {
-                    id: true,
-                    name: true,
-                    mobileNumber: true
-                  }
-                }
+                name: true
               }
             }
           }
@@ -1233,7 +1238,7 @@ router.get('/outlets', async (req, res) => {
       regionId: outlet.regionId,
       provinceName: outlet.province?.name || null,
       provinceId: outlet.provinceId,
-      rtoms: outlet.province?.dgm?.rtoms || [],
+      rtoms: outlet.region.rtoms || [],
       dgmName: outlet.province?.dgm?.name || null,
       isActive: outlet.isActive,
       kioskPassword: outlet.kioskPassword, // Admin can see passwords
@@ -3114,51 +3119,40 @@ router.delete("/gms/:gmId", async (req, res) => {
 // Get all teleshop managers
 router.get("/teleshop-managers", async (req, res) => {
   try {
+    console.log("Fetching teleshop managers...")
     const teleshopManagers = await prisma.teleshopManager.findMany({
       include: {
-        rtom: {
+        rtom: true,
+        branch: {
           include: {
-            region: true,
-            dgm: {
+            province: {
               include: {
-                gm: true,
-                province: true
+                dgm: true
               }
             }
           }
         },
-        branch: true, // This is the outlet relationship
         region: true
       },
       orderBy: [
-        { region: { name: 'asc' } },
         { name: 'asc' }
       ]
     })
 
-    // Fetch officers for each teleshop manager's branch
-    const teleshopManagersWithOfficers = await Promise.all(
-      teleshopManagers.map(async (manager) => {
-        let officers = []
-        if (manager.branchId) {
-          officers = await prisma.officer.findMany({
-            where: { outletId: manager.branchId },
-            select: {
-              id: true,
-              name: true,
-              isActive: true
-            }
-          })
-        }
-        
-        return {
-          ...manager,
-          officers
-        }
-      })
-    )
+    console.log("Found teleshop managers:", teleshopManagers.length)
+    if (teleshopManagers.length > 0) {
+      console.log("First manager branch structure:", JSON.stringify(teleshopManagers[0].branch, null, 2))
+    }
 
-    res.json({ success: true, teleshopManagers: teleshopManagersWithOfficers })
+    res.json({ 
+      success: true, 
+      teleshopManagers: teleshopManagers.map(manager => ({
+        ...manager,
+        officers: [],
+        officerCount: 0,
+        activeOfficerCount: 0
+      }))
+    })
   } catch (error) {
     console.error("Get teleshop managers error:", error)
     res.status(500).json({ error: "Failed to fetch teleshop managers" })

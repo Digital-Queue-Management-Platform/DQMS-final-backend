@@ -3086,4 +3086,108 @@ router.delete("/holidays/:holidayId", async (req, res) => {
   }
 })
 
+// Get teleshop analytics for RTOM
+router.get("/teleshop-analytics", async (req, res) => {
+  try {
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader?.startsWith('Bearer ')) token = authHeader.substring(7)
+    }
+    
+    if (!token) return res.status(401).json({ error: "RTOM authentication required" })
+    
+    const payload = jwt.verify(token, JWT_SECRET) as any
+    
+    // Find the RTOM
+    const rtom = await prisma.rTOM.findFirst({
+      where: { mobileNumber: payload.mobileNumber },
+      include: {
+        region: {
+          include: {
+            outlets: {
+              include: {
+                teleshopManager: true,
+                officers: true,
+                tokens: {
+                  where: {
+                    createdAt: {
+                      gte: new Date(Date.now() - 30*24*60*60*1000) // Last 30 days
+                    }
+                  }
+                },
+                feedbacks: {
+                  where: {
+                    createdAt: {
+                      gte: new Date(Date.now() - 30*24*60*60*1000) // Last 30 days
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    })
+    
+    if (!rtom) return res.status(404).json({ error: "RTOM not found" })
+    
+    // Calculate teleshop manager analytics
+    const teleshopManagers = rtom.region.outlets
+      .filter(outlet => outlet.teleshopManager)
+      .map(outlet => {
+        const completedTokens = outlet.tokens.filter(token => token.completedAt)
+        const avgWaitTime = completedTokens.length > 0 
+          ? completedTokens.reduce((sum, token) => {
+              if (token.calledAt && token.createdAt) {
+                return sum + ((new Date(token.calledAt).getTime() - new Date(token.createdAt).getTime()) / (1000 * 60))
+              }
+              return sum
+            }, 0) / completedTokens.length
+          : 0
+          
+        const avgServiceTime = completedTokens.length > 0
+          ? completedTokens.reduce((sum, token) => {
+              if (token.completedAt && token.calledAt) {
+                return sum + ((new Date(token.completedAt).getTime() - new Date(token.calledAt).getTime()) / (1000 * 60))
+              }
+              return sum
+            }, 0) / completedTokens.length
+          : 0
+          
+        const avgRating = outlet.feedbacks.length > 0
+          ? outlet.feedbacks.reduce((sum, feedback) => sum + feedback.rating, 0) / outlet.feedbacks.length
+          : 0
+          
+        const activeOfficers = outlet.officers.filter(officer => officer.isActive).length
+        
+        return {
+          id: outlet.teleshopManager.id,
+          name: outlet.teleshopManager.name,
+          email: outlet.teleshopManager.email,
+          mobileNumber: outlet.teleshopManager.mobileNumber,
+          branchName: outlet.name,
+          branchAddress: outlet.address,
+          branchId: outlet.id,
+          totalCustomers: completedTokens.length,
+          avgWaitTime: Math.round(avgWaitTime * 10) / 10,
+          avgServiceTime: Math.round(avgServiceTime * 10) / 10,
+          customerSatisfaction: Math.round(avgRating * 10) / 10,
+          activeOfficers,
+          totalOfficers: outlet.officers.length,
+          lastActive: outlet.teleshopManager.lastLoginAt || outlet.teleshopManager.createdAt,
+          alerts: outlet.feedbacks.filter(f => f.rating <= 2).length
+        }
+      })
+    
+    res.json({
+      regionName: rtom.region.name,
+      teleshopManagers
+    })
+  } catch (error) {
+    console.error("Teleshop analytics error:", error)
+    res.status(500).json({ error: "Failed to fetch teleshop analytics" })
+  }
+})
+
 export default router

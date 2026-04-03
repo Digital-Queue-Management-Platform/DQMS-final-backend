@@ -408,14 +408,65 @@ router.get("/regions", async (req, res) => {
     }
 })
 
-// GET /analytics - Analytics for GMs (island-wide access)
+// GET /outlets - Get all teleshop outlets in GM's region
+router.get("/outlets", async (req, res) => {
+    try {
+        const auth = verifyGMToken(req)
+        if (!auth) return res.status(401).json({ error: "GM authentication required" })
+
+        // Get GM with region information
+        const gm = await (prisma as any).gM.findUnique({
+            where: { id: auth.gmId },
+            include: { region: true }
+        })
+
+        if (!gm || !gm.regionId) {
+            return res.status(404).json({ error: "GM region not found" })
+        }
+
+        // Get all outlets in the GM's region
+        const outlets = await prisma.outlet.findMany({
+            where: { 
+                regionId: gm.regionId,
+                isActive: true 
+            },
+            select: {
+                id: true,
+                name: true,
+                location: true,
+                isActive: true,
+                region: {
+                    select: {
+                        id: true,
+                        name: true
+                    }
+                }
+            },
+            orderBy: { name: 'asc' }
+        })
+
+        // Transform to match frontend expectations
+        const formattedOutlets = outlets.map(outlet => ({
+            id: outlet.id,
+            name: outlet.name,
+            regionName: outlet.region.name
+        }))
+
+        res.json({ success: true, outlets: formattedOutlets })
+    } catch (err) {
+        console.error("GM outlets error:", err)
+        res.status(500).json({ error: "Failed to fetch outlets" })
+    }
+})
+
+// GET /analytics- Analytics for GMs (province-wise access)
 router.get("/analytics", async (req, res) => {
     try {
         const auth = verifyGMToken(req)
         if (!auth) return res.status(401).json({ error: "GM authentication required" })
 
-        const { startDate, endDate, outletId } = req.query
-        console.log('GM Analytics request:', { startDate, endDate, outletId })
+        const { startDate, endDate, provinceId } = req.query
+        console.log('GM Analytics request:', { startDate, endDate, provinceId })
 
         const where: any = {
             status: "completed",
@@ -425,8 +476,27 @@ router.get("/analytics", async (req, res) => {
             }
         }
 
-        if (outletId) {
-            where.outletId = outletId
+        // If provinceId is provided, filter by outlets in that province
+        if (provinceId) {
+            const outletsInProvince = await prisma.outlet.findMany({
+                where: { provinceId: provinceId as string },
+                select: { id: true }
+            })
+            
+            if (outletsInProvince.length > 0) {
+                where.outletId = { in: outletsInProvince.map(outlet => outlet.id) }
+            } else {
+                // If no outlets found in province, return empty analytics
+                return res.json({
+                    totalTokens: 0,
+                    avgWaitTime: 0,
+                    avgServiceTime: 0,
+                    feedbackStats: [],
+                    officerPerformance: [],
+                    hourlyWaitingTimes: [],
+                    serviceTypes: [],
+                })
+            }
         }
 
         console.log('GM Query where clause:', where)
