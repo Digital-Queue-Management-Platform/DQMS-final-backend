@@ -70,7 +70,7 @@ class WebSocketManager {
       this.managerConnections.set(metadata.managerId, ws)
     }
 
-    console.log(`📡 WebSocket client registered:`, {
+    console.log(`WebSocket client registered:`, {
       deviceId: metadata?.deviceId,
       sessionId: metadata?.sessionId,
       managerId: metadata?.managerId,
@@ -103,7 +103,7 @@ class WebSocketManager {
 
     this.clients.delete(ws)
 
-    console.log(`📡 WebSocket client unregistered:`, {
+    console.log(`WebSocket client unregistered:`, {
       deviceId: client.deviceId,
       sessionId: client.sessionId,
       managerId: client.managerId,
@@ -125,7 +125,7 @@ class WebSocketManager {
     }
     this.rooms.get(roomName)!.add(ws)
 
-    console.log(`📡 Client joined room: ${roomName}`)
+    console.log(`Client joined room: ${roomName}`)
   }
 
   /**
@@ -142,11 +142,11 @@ class WebSocketManager {
       room.delete(ws)
       if (room.size === 0) {
         this.rooms.delete(roomName)
-        console.log(`📡 Room deleted (empty): ${roomName}`)
+        console.log(`Room deleted (empty): ${roomName}`)
       }
     }
 
-    console.log(`📡 Client left room: ${roomName}`)
+    console.log(`Client left room: ${roomName}`)
   }
 
   /**
@@ -226,7 +226,7 @@ class WebSocketManager {
       }
     })
 
-    console.log(`📡 Broadcast to room ${roomName}: ${successCount} sent, ${failCount} failed`)
+    console.log(`Broadcast to room ${roomName}: ${successCount} sent, ${failCount} failed`)
   }
 
   /**
@@ -248,7 +248,7 @@ class WebSocketManager {
       }
     })
 
-    console.log(`📡 Broadcast to all: ${successCount} sent, ${failCount} failed`)
+    console.log(`Broadcast to all: ${successCount} sent, ${failCount} failed`)
   }
 
   /**
@@ -343,7 +343,7 @@ class WebSocketManager {
           if (ws.readyState === 1) { // WebSocket.OPEN
             try {
               ws.ping() // Send WebSocket ping frame
-              console.log(`📡 Ping sent to client (${Math.round(timeSinceHeartbeat / 1000)}s since last heartbeat)`)
+              console.log(`Ping sent to client (${Math.round(timeSinceHeartbeat / 1000)}s since last heartbeat)`)
             } catch (error) {
               console.log(`⚠️  Failed to ping client, marking for closure`)
               ws.close(1000, 'Ping failed')
