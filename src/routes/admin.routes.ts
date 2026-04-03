@@ -9,6 +9,7 @@ import { generateSecurePassword } from "../utils/passwordGenerator"
 import { getFrontendBaseUrl } from "../utils/urlHelper"
 import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
 import { healthTracker } from "../services/healthTracker"
+import { generateAnalyticsReport, generateReportHTML } from "../services/reportGenerator"
 
 const router = Router()
 
@@ -597,6 +598,48 @@ router.get("/analytics", async (req, res) => {
   } catch (error) {
     console.error("Analytics error:", error)
     res.status(500).json({ error: "Failed to fetch analytics" })
+  }
+})
+
+// Export comprehensive analytics report as PDF
+router.get("/analytics/export-pdf", async (req, res) => {
+  try {
+    const { startDate, endDate, scope } = req.query
+    
+    // Default to today if no dates provided
+    const defaultStart = new Date()
+    defaultStart.setHours(0, 0, 0, 0)
+    const defaultEnd = new Date()
+    defaultEnd.setHours(23, 59, 59, 999)
+    
+    const sDate = startDate ? new Date(startDate as string) : defaultStart
+    const eDate = endDate ? new Date(endDate as string) : defaultEnd
+    
+    if (isNaN(sDate.getTime()) || isNaN(eDate.getTime())) {
+      return res.status(400).json({ error: "Invalid date format provided" })
+    }
+    
+    const reportScope = scope as string || "Island-wide (All Outlets)"
+    
+    // Generate comprehensive report data
+    const reportData = await generateAnalyticsReport(sDate, eDate, reportScope)
+    
+    // Generate HTML report
+    const htmlContent = generateReportHTML(reportData)
+    
+    // Set response headers for PDF download
+    const filename = `DQMP-Analytics-Report-${reportData.period.startDate}-${reportData.period.endDate}.pdf`
+    res.setHeader('Content-Type', 'text/html')
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+    res.setHeader('X-Filename', filename)
+    res.setHeader('X-Report-Type', 'analytics')
+    
+    // Return HTML that can be converted to PDF on frontend
+    res.send(htmlContent)
+    
+  } catch (error) {
+    console.error("PDF export error:", error)
+    res.status(500).json({ error: "Failed to generate report" })
   }
 })
 

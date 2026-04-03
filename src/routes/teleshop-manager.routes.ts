@@ -233,7 +233,17 @@ const authenticateTeleshopManager = async (req: any, res: any, next: any) => {
         id: payload.teleshopManagerId,
         isActive: true
       },
-      include: { region: true }
+      include: { 
+        region: true,
+        branch: {
+          select: {
+            id: true,
+            name: true,
+            location: true,
+            isActive: true
+          }
+        }
+      }
     })
 
     if (!teleshopManager) {
@@ -3845,6 +3855,200 @@ router.post("/generate-qr", async (req: any, res) => {
       error: "Failed to generate QR code",
       details: error.message
     })
+  }
+})
+
+// Get officer performance analytics for teleshop manager
+router.get("/officer-analytics", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+    const { timeRange = 'today', startDate: customStartDate, endDate: customEndDate } = req.query
+
+    if (!teleshopManager.branchId) {
+      return res.status(400).json({ error: "You are not assigned to any teleshop" })
+    }
+
+    // Calculate date range
+    const now = new Date()
+    let startDate = new Date()
+    let endDate = new Date()
+
+    if (timeRange === 'custom' && customStartDate && customEndDate) {
+      // Custom date range
+      startDate = new Date(customStartDate)
+      endDate = new Date(customEndDate)
+      startDate.setHours(0, 0, 0, 0)
+      endDate.setHours(23, 59, 59, 999)
+    } else {
+      // Predefined ranges
+      switch (timeRange) {
+        case 'today':
+          startDate.setHours(0, 0, 0, 0)
+          endDate.setHours(23, 59, 59, 999)
+          break
+        case 'week':
+          startDate.setDate(now.getDate() - 7)
+          startDate.setHours(0, 0, 0, 0)
+          endDate.setHours(23, 59, 59, 999)
+          break
+        case 'month':
+          startDate.setDate(now.getDate() - 30)
+          startDate.setHours(0, 0, 0, 0)
+          endDate.setHours(23, 59, 59, 999)
+          break
+        default:
+          startDate.setHours(0, 0, 0, 0)
+          endDate.setHours(23, 59, 59, 999)
+      }
+    }
+
+    // Get all officers in the teleshop
+    const officers = await prisma.officer.findMany({
+      where: {
+        outletId: teleshopManager.branchId
+      },
+      select: {
+        id: true,
+        name: true,
+        mobileNumber: true,
+        status: true,
+        counterNumber: true,
+        isTraining: true,
+        createdAt: true
+      }
+    })
+
+    // Calculate metrics for each officer
+    const officerAnalytics = await Promise.all(
+      officers.map(async (officer) => {
+        // Get tokens handled by this officer in the time range
+        const handledTokens = await prisma.token.findMany({
+          where: {
+            outletId: teleshopManager.branchId,
+            assignedTo: officer.id,
+            createdAt: {
+              gte: startDate,
+              lte: endDate
+            }
+          },
+          select: {
+            id: true,
+            tokenNumber: true,
+            status: true,
+            createdAt: true,
+            calledAt: true,
+            startedAt: true,
+            completedAt: true
+          }
+        })
+
+        // Calculate metrics
+        const servedCustomers = handledTokens.filter(token => token.status === 'completed').length
+        const totalTokens = handledTokens.length
+
+        // Calculate waiting times (from creation to being called)
+        const waitingTimes = handledTokens
+          .filter(token => token.calledAt)
+          .map(token => {
+            const waitTime = new Date(token.calledAt!).getTime() - new Date(token.createdAt).getTime()
+            return waitTime / (1000 * 60) // Convert to minutes
+          })
+
+        // Calculate serving times (from started to completed)
+        const servingTimes = handledTokens
+          .filter(token => token.startedAt && token.completedAt)
+          .map(token => {
+            const servingTime = new Date(token.completedAt!).getTime() - new Date(token.startedAt!).getTime()
+            return servingTime / (1000 * 60) // Convert to minutes
+          })
+
+        // Calculate averages
+        const avgWaitingTime = waitingTimes.length > 0 
+          ? Math.round(waitingTimes.reduce((sum, time) => sum + time, 0) / waitingTimes.length)
+          : 0
+
+        const maxWaitingTime = waitingTimes.length > 0 
+          ? Math.round(Math.max(...waitingTimes))
+          : 0
+
+        const avgServingTime = servingTimes.length > 0
+          ? Math.round((servingTimes.reduce((sum, time) => sum + time, 0) / servingTimes.length) * 10) / 10 // Round to 1 decimal
+          : 0
+
+        const totalServingTime = servingTimes.length > 0
+          ? Math.round(servingTimes.reduce((sum, time) => sum + time, 0))
+          : 0
+
+        // Calculate efficiency metrics
+        const completionRate = totalTokens > 0 ? Math.round((servedCustomers / totalTokens) * 100) : 0
+
+        return {
+          officer: {
+            id: officer.id,
+            name: officer.name,
+            mobileNumber: officer.mobileNumber,
+            status: officer.status,
+            counterNumber: officer.counterNumber,
+            isTraining: officer.isTraining,
+            joinedAt: officer.createdAt
+          },
+          metrics: {
+            servedCustomers,
+            totalTokensHandled: totalTokens,
+            avgWaitingTime, // minutes
+            maxWaitingTime, // minutes  
+            avgServingTime, // minutes
+            totalServingTime, // minutes
+            completionRate, // percentage
+            efficiency: avgServingTime > 0 ? Math.round((servedCustomers / avgServingTime) * 10) / 10 : 0 // customers per minute
+          },
+          periodInfo: {
+            timeRange,
+            startDate: startDate.toISOString(),
+            endDate: endDate.toISOString()
+          }
+        }
+      })
+    )
+
+    // Sort by served customers (most productive first)
+    officerAnalytics.sort((a, b) => b.metrics.servedCustomers - a.metrics.servedCustomers)
+
+    // Calculate branch summary
+    const branchSummary = {
+      totalOfficers: officers.length,
+      activeOfficers: officers.filter(o => o.status === 'available' || o.status === 'online').length,
+      totalServedCustomers: officerAnalytics.reduce((sum, o) => sum + o.metrics.servedCustomers, 0),
+      avgBranchWaitTime: Math.round(
+        officerAnalytics.reduce((sum, o) => sum + o.metrics.avgWaitingTime, 0) / officerAnalytics.length || 0
+      ),
+      avgBranchServingTime: Math.round(
+        (officerAnalytics.reduce((sum, o) => sum + o.metrics.avgServingTime, 0) / officerAnalytics.length || 0) * 10
+      ) / 10
+    }
+
+    res.json({
+      success: true,
+      branchId: teleshopManager.branchId,
+      branchName: teleshopManager.branch?.name || 'Unknown Branch',
+      timeRange,
+      period: {
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString()
+      },
+      summary: branchSummary,
+      officers: officerAnalytics
+    })
+
+    auditLog(teleshopManager.id, "VIEW_OFFICER_ANALYTICS", "officer", "", {
+      branchId: teleshopManager.branchId,
+      timeRange,
+      officerCount: officers.length
+    })
+
+  } catch (error) {
+    console.error("Officer analytics fetch error:", error)
+    res.status(500).json({ error: "Failed to fetch officer analytics" })
   }
 })
 
