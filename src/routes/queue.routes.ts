@@ -572,21 +572,29 @@ router.get("/outlet/:outletId/counters", async (req, res) => {
 
     if (!outlet) return res.status(404).json({ error: "Outlet not found" })
 
-    // Get all officers in this outlet that are not offline and have logged in since the last reset
+    // Get all officers in this outlet (including offline ones with counter assignments)
     const lastReset = getLastDailyReset()
-    const activeOfficers = await prisma.officer.findMany({
+    const allOfficers = await prisma.officer.findMany({
       where: {
-        outletId,
-        status: { not: "offline" },
-        lastLoginAt: { gte: lastReset }
+        outletId
       },
       select: {
+        id: true,
         name: true,
         counterNumber: true,
         status: true,
-        assignedServices: true,
-        id: true
+        lastLoginAt: true,
+        assignedServices: true
       }
+    })
+
+    // Filter officers based on activity and counter assignment
+    const activeOfficers = allOfficers.filter(officer => {
+      // Include officers if they have a counter assignment OR are active
+      return officer.counterNumber !== null || 
+             (officer.status !== "offline" && 
+              officer.lastLoginAt && 
+              officer.lastLoginAt >= lastReset)
     })
 
     const counters = []

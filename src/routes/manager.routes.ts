@@ -32,7 +32,14 @@ router.post("/request-otp", async (req, res) => {
     // Check if RTOM exists in the RTOM table
     const rtom = await prisma.rTOM.findFirst({
       where: { mobileNumber },
-      select: { id: true, name: true, email: true }
+      select: { 
+        id: true, 
+        name: true, 
+        email: true,
+        region: {
+          select: { name: true }
+        }
+      }
     })
 
     if (!rtom) {

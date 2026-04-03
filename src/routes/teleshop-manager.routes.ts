@@ -3635,6 +3635,126 @@ router.get("/linked-devices", async (req: any, res) => {
   }
 })
 
+/**
+ * GET /api/teleshop-manager/qr-code
+ * Get existing customer registration QR code for teleshop manager's outlet
+ */
+router.get("/qr-code", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+
+    if (!teleshopManager.branchId) {
+      return res.status(400).json({
+        error: "No branch assigned. Please contact your RTOM to assign you to a branch."
+      })
+    }
+
+    // Get the latest QR token for the outlet
+    const qrToken = await prisma.managerQRToken.findFirst({
+      where: { outletId: teleshopManager.branchId },
+      orderBy: { createdAt: 'desc' }
+    })
+
+    if (!qrToken) {
+      return res.json({
+        qrCode: null,
+        message: "No QR code found. Generate a new one to allow customer registration."
+      })
+    }
+
+    res.json({
+      qrCode: {
+        outletId: qrToken.outletId,
+        token: qrToken.token,
+        generatedAt: qrToken.generatedAt.toISOString()
+      }
+    })
+
+  } catch (error: any) {
+    console.error("❌ Get QR code error:", error)
+    res.status(500).json({
+      error: "Failed to get QR code",
+      details: error.message
+    })
+  }
+})
+
+/**
+ * POST /api/teleshop-manager/generate-qr
+ * Generate new customer registration QR code for teleshop manager's outlet
+ */
+router.post("/generate-qr", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+
+    if (!teleshopManager.branchId) {
+      return res.status(400).json({
+        error: "No branch assigned. Please contact your RTOM to assign you to a branch."
+      })
+    }
+
+    // Generate random token for QR code
+    const generateRandomToken = (): string => {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+      let result = ''
+      for (let i = 0; i < 32; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length))
+      }
+      return result
+    }
+
+    const token = generateRandomToken()
+    const generatedAt = new Date()
+
+    // Delete any existing QR token for this outlet, then create new one
+    await prisma.managerQRToken.deleteMany({
+      where: { outletId: teleshopManager.branchId }
+    })
+
+    await prisma.managerQRToken.create({
+      data: {
+        token,
+        outletId: teleshopManager.branchId,
+        generatedAt,
+        createdAt: generatedAt
+      }
+    })
+
+    const qrCode = {
+      outletId: teleshopManager.branchId,
+      token,
+      generatedAt: generatedAt.toISOString()
+    }
+
+    console.log(`Generated QR code for teleshop manager ${teleshopManager.name} at outlet ${teleshopManager.branchId}`)
+
+    // Audit log
+    auditLog(
+      teleshopManager.id,
+      "QR_CODE_GENERATED",
+      "qr_token",
+      token,
+      {
+        outletId: teleshopManager.branchId,
+        generatedAt: generatedAt.toISOString()
+      }
+    )
+
+    res.json({
+      success: true,
+      qrCode,
+      message: "QR code generated successfully. Customers can now scan this code to register for the queue."
+    })
+
+  } catch (error: any) {
+    console.error("❌ Generate QR code error:", error)
+    res.status(500).json({
+      error: "Failed to generate QR code",
+      details: error.message
+    })
+  }
+})
+
 
 
 export default router
