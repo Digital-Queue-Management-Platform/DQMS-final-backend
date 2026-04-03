@@ -89,18 +89,26 @@ class HealthTracker {
       process.env.SLT_SMS_ALIAS
     )
     if (!configured) {
+      console.log('SMS health check failed: SMS not configured')
       this.record('sms', false, 0)
       return
     }
     const start = Date.now()
     try {
-      // Parse host + port from the URL for a lightweight TCP reachability check
-      const url = new URL(apiUrl)
-      const host = url.hostname
-      const port = parseInt(url.port || (url.protocol === 'https:' ? '443' : '80'), 10)
-      await tcpPing(host, port, 5000)
+      // Instead of TCP ping, try an actual HTTP request to test SSL connectivity
+      // This matches how the SMS service actually works with SSL disabled
+      const testUrl = new URL('/api/status', apiUrl).toString()
+      await axios.get(testUrl, {
+        timeout: 5000,
+        httpsAgent: new (await import('https')).Agent({
+          rejectUnauthorized: false // Match SMS service SSL settings
+        }),
+        validateStatus: () => true // Accept any HTTP status code
+      })
+      console.log('SMS health check: SUCCESS')
       this.record('sms', true, Date.now() - start)
-    } catch {
+    } catch (error: any) {
+      console.log('SMS health check failed:', error.message)
       this.record('sms', false, Date.now() - start)
     }
   }
