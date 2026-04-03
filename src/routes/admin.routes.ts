@@ -3165,14 +3165,14 @@ router.get("/teleshop-managers", async (req, res) => {
     console.log("Fetching teleshop managers...")
     const teleshopManagers = await prisma.teleshopManager.findMany({
       include: {
-        rtom: true,
+        rtom: {
+          include: {
+            region: true
+          }
+        },
         branch: {
           include: {
-            province: {
-              include: {
-                dgm: true
-              }
-            }
+            officers: true // Include officers for count calculation
           }
         },
         region: true
@@ -3184,17 +3184,27 @@ router.get("/teleshop-managers", async (req, res) => {
 
     console.log("Found teleshop managers:", teleshopManagers.length)
     if (teleshopManagers.length > 0) {
-      console.log("First manager branch structure:", JSON.stringify(teleshopManagers[0].branch, null, 2))
+      console.log("First manager branch structure:", JSON.stringify((teleshopManagers[0] as any).branch, null, 2))
     }
 
     res.json({ 
       success: true, 
-      teleshopManagers: teleshopManagers.map(manager => ({
-        ...manager,
-        officers: [],
-        officerCount: 0,
-        activeOfficerCount: 0
-      }))
+      teleshopManagers: teleshopManagers.map((manager: any) => {
+        // Get officers from the manager's branch
+        const officers = manager.branch?.officers || []
+        const activeOfficers = officers.filter((officer: any) => officer.status === 'online' || officer.status === 'available')
+        
+        return {
+          ...manager,
+          officers: officers.map((officer: any) => ({
+            id: officer.id,
+            name: officer.name,
+            isActive: officer.status === 'online' || officer.status === 'available'
+          })),
+          officerCount: officers.length,
+          activeOfficerCount: activeOfficers.length
+        }
+      })
     })
   } catch (error) {
     console.error("Get teleshop managers error:", error)
