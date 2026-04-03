@@ -575,12 +575,105 @@ router.get("/me", async (req: any, res) => {
             id: true,
             name: true,
             location: true,
+            isActive: true,
           },
         },
       }
     })
 
-    res.json({ teleshopManager: profile })
+    if (!profile) {
+      return res.status(404).json({ error: "Profile not found" })
+    }
+
+    let branchWithMetrics = null
+
+    if (profile.branch) {
+      // Calculate real metrics for the branch
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      const tomorrow = new Date(today)
+      tomorrow.setDate(tomorrow.getDate() + 1)
+
+      // Get active officers count
+      const activeOfficersCount = await prisma.officer.count({
+        where: {
+          outletId: profile.branch.id,
+          status: { in: ['available', 'online'] }
+        }
+      })
+
+      // Get tokens served today
+      const customersServedToday = await prisma.token.count({
+        where: {
+          outletId: profile.branch.id,
+          status: 'completed',
+          createdAt: {
+            gte: today,
+            lt: tomorrow
+          }
+        }
+      })
+
+      // Get current waiting queue
+      const currentWaitingCount = await prisma.token.count({
+        where: {
+          outletId: profile.branch.id,
+          status: { in: ['waiting', 'called'] }
+        }
+      })
+
+      // Calculate average wait time from completed tokens today
+      const completedTokensToday = await prisma.token.findMany({
+        where: {
+          outletId: profile.branch.id,
+          status: 'completed',
+          createdAt: {
+            gte: today,
+            lt: tomorrow
+          },
+          completedAt: { not: null }
+        },
+        select: {
+          createdAt: true,
+          completedAt: true
+        }
+      })
+
+      let avgWaitingTime = 0
+      if (completedTokensToday.length > 0) {
+        const totalWaitTime = completedTokensToday.reduce((sum, token) => {
+          if (token.completedAt) {
+            const waitTime = new Date(token.completedAt).getTime() - new Date(token.createdAt).getTime()
+            return sum + waitTime
+          }
+          return sum
+        }, 0)
+        avgWaitingTime = Math.round(totalWaitTime / (completedTokensToday.length * 60000)) // Convert to minutes
+      }
+
+      // Get counter count from outlet
+      const outlet = await prisma.outlet.findUnique({
+        where: { id: profile.branch.id },
+        select: { counterCount: true }
+      })
+
+      branchWithMetrics = {
+        ...profile.branch,
+        counterCount: outlet?.counterCount || 0,
+        activeOfficers: activeOfficersCount,
+        customersServed: customersServedToday,
+        totalWaiting: currentWaitingCount,
+        avgWaitingTime: avgWaitingTime,
+        rating: 0 // TODO: Calculate from feedback if needed
+      }
+    }
+
+    const responseProfile = {
+      ...profile,
+      branch: branchWithMetrics
+    }
+
+    res.json({ teleshopManager: responseProfile })
   } catch (error) {
     console.error("Teleshop Manager profile fetch error:", error)
     res.status(500).json({ error: "Failed to fetch profile" })
