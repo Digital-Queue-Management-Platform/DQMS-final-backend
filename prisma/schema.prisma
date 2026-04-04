@@ -26,35 +26,33 @@ model Customer {
 }
 
 model Token {
-  id                       String             @id @default(uuid())
-  tokenNumber              Int
-  customerId               String
-  preferredLanguages       Json?
-  accountRef               String?
-  status                   String             @default("waiting")
-  outletId                 String
-  assignedTo               String?
-  counterNumber            Int?
-  createdAt                DateTime           @default(now())
-  calledAt                 DateTime?
-  startedAt                DateTime?
-  completedAt              DateTime?
-  serviceTypes             String[]           @default([]) @map("serviceType")
-  isPriority               Boolean            @default(false)
-  billPaymentAmount        Float?
-  billPaymentIntent        String?
-  billPaymentMethod        String?
-  isTransferred            Boolean            @default(false)
-  sltTelephoneNumber       String?
-  billPaymentCustomAmounts Json?
-  completedServices        CompletedService[]
-  feedback                 Feedback?
-  serviceCases             ServiceCase[]
-  officer                  Officer?           @relation(fields: [assignedTo], references: [id])
-  customer                 Customer           @relation(fields: [customerId], references: [id])
-  outlet                   Outlet             @relation(fields: [outletId], references: [id])
-  tokenBills               TokenBill[]
-  transferLogs             TransferLog[]
+  id                 String             @id @default(uuid())
+  tokenNumber        Int
+  customerId         String
+  preferredLanguages Json?
+  accountRef         String?
+  status             String             @default("waiting")
+  outletId           String
+  assignedTo         String?
+  counterNumber      Int?
+  createdAt          DateTime           @default(now())
+  calledAt           DateTime?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  serviceTypes       String[]           @default([]) @map("serviceType")
+  isPriority         Boolean            @default(false)
+  billPaymentAmount  Float?
+  billPaymentIntent  String?
+  billPaymentMethod  String?
+  isTransferred      Boolean            @default(false)
+  sltTelephoneNumber String?
+  completedServices  CompletedService[]
+  feedback           Feedback?
+  serviceCases       ServiceCase[]
+  officer            Officer?           @relation(fields: [assignedTo], references: [id])
+  customer           Customer           @relation(fields: [customerId], references: [id])
+  outlet             Outlet             @relation(fields: [outletId], references: [id])
+  transferLogs       TransferLog[]
 
   @@index([outletId, status])
   @@index([assignedTo])
@@ -71,17 +69,14 @@ model TeleshopManager {
   lastLoginAt       DateTime?
   email             String?
   branchId          String?
-  rtomId            String?
   completedServices CompletedService[]
   branch            Outlet?                   @relation(fields: [branchId], references: [id])
   region            Region                    @relation(fields: [regionId], references: [id])
-  rtom              RTOM?                     @relation(fields: [rtomId], references: [id])
   auditLogs         TeleshopManagerAuditLog[]
 
   @@index([regionId])
   @@index([mobileNumber])
   @@index([branchId])
-  @@index([rtomId])
 }
 
 model Officer {
@@ -96,7 +91,6 @@ model Officer {
   lastLoginAt       DateTime?
   assignedServices  Json?
   languages         Json?
-  email             String?
   BreakLog          BreakLog[]
   completedServices CompletedService[]
   outlet            Outlet             @relation(fields: [outletId], references: [id])
@@ -117,20 +111,13 @@ model Outlet {
   counterCount      Int?               @default(0)
   kioskPassword     String?
   displaySettings   Json?
-  provinceId        String?
   appointments      Appointment[]
-  auditLogs         AuditLog[]
   closureNotices    ClosureNotice[]
   completedServices CompletedService[]
-  deviceHeartbeats  DeviceHeartbeat[]
-  deviceLinks       DeviceLink[]
   managerQRTokens   ManagerQRToken[]
   officers          Officer[]
-  province          Province?          @relation(fields: [provinceId], references: [id])
   region            Region             @relation(fields: [regionId], references: [id])
-  qrSessions        QRSession[]
   serviceCases      ServiceCase[]
-  systemLogs        SystemLog[]
   teleshopManagers  TeleshopManager[]
   tokens            Token[]
 }
@@ -144,26 +131,8 @@ model Region {
   createdAt          DateTime          @default(now())
   managerPassword    String?
   managerLastLoginAt DateTime?
-  gmId               String?           @unique
-  auditLogs          AuditLog[]
-  gm                 GM?
   outlets            Outlet[]
-  provinces          Province[]
-  rtoms              RTOM[]
-  systemLogs         SystemLog[]
   teleshopManagers   TeleshopManager[]
-}
-
-model Province {
-  id        String   @id @default(uuid())
-  name      String
-  regionId  String
-  createdAt DateTime @default(now())
-  dgm       DGM?
-  outlets   Outlet[]
-  region    Region   @relation(fields: [regionId], references: [id])
-
-  @@index([regionId])
 }
 
 model Feedback {
@@ -208,10 +177,8 @@ model Alert {
   relatedEntity String?
   isRead        Boolean  @default(false)
   createdAt     DateTime @default(now())
-  outletId      String?
 
   @@index([isRead, createdAt])
-  @@index([outletId])
 }
 
 model BackupRestoreHistory {
@@ -327,27 +294,24 @@ model ManagerQRToken {
 }
 
 model Appointment {
-  id                 String            @id @default(uuid())
+  id                 String    @id @default(uuid())
   name               String
   mobileNumber       String
   outletId           String
   serviceTypes       String[]
   preferredLanguage  String?
   appointmentAt      DateTime
-  status             String            @default("booked")
+  status             String    @default("booked")
   tokenId            String?
   notes              String?
-  createdAt          DateTime          @default(now())
+  createdAt          DateTime  @default(now())
   queuedAt           DateTime?
   completedAt        DateTime?
   sltTelephoneNumber String?
   billPaymentAmount  Float?
   billPaymentIntent  String?
   billPaymentMethod  String?
-  reminder1hSentAt   DateTime?
-  reminder30mSentAt  DateTime?
-  outlet             Outlet            @relation(fields: [outletId], references: [id])
-  appointmentBills   AppointmentBill[]
+  outlet             Outlet    @relation(fields: [outletId], references: [id])
 
   @@index([outletId, appointmentAt])
   @@index([mobileNumber, appointmentAt])
@@ -391,52 +355,20 @@ model ServiceCaseUpdate {
 }
 
 model SltBill {
-  id               String            @id @default(uuid())
-  telephoneNumber  String            @unique
-  accountName      String
-  accountAddress   String?
-  currentBill      Float
-  dueDate          DateTime
-  status           String            @default("unpaid")
-  lastPaymentDate  DateTime?
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  mobileNumber     String?
-  appointmentBills AppointmentBill[]
-  tokenBills       TokenBill[]
+  id              String    @id @default(uuid())
+  telephoneNumber String    @unique
+  accountName     String
+  accountAddress  String?
+  currentBill     Float
+  dueDate         DateTime
+  status          String    @default("unpaid")
+  lastPaymentDate DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  mobileNumber    String?
 
   @@index([telephoneNumber])
   @@index([status, dueDate])
-}
-
-model TokenBill {
-  id                String   @id @default(uuid())
-  tokenId           String
-  telephoneNumber   String
-  billPaymentIntent String?
-  billPaymentAmount Float?
-  createdAt         DateTime @default(now())
-  sltBill           SltBill  @relation(fields: [telephoneNumber], references: [telephoneNumber])
-  token             Token    @relation(fields: [tokenId], references: [id])
-
-  @@unique([tokenId, telephoneNumber])
-  @@index([tokenId])
-  @@index([telephoneNumber])
-}
-
-model AppointmentBill {
-  id                String      @id @default(uuid())
-  appointmentId     String
-  telephoneNumber   String
-  billPaymentIntent String?
-  billPaymentAmount Float?
-  createdAt         DateTime    @default(now())
-  appointment       Appointment @relation(fields: [appointmentId], references: [id])
-  sltBill           SltBill     @relation(fields: [telephoneNumber], references: [telephoneNumber])
-
-  @@unique([appointmentId, telephoneNumber])
-  @@index([appointmentId])
-  @@index([telephoneNumber])
 }
 
 model GM {
@@ -447,10 +379,7 @@ model GM {
   isActive     Boolean   @default(true)
   createdAt    DateTime  @default(now())
   lastLoginAt  DateTime?
-  password     String
-  regionId     String?   @unique
   dgms         DGM[]
-  region       Region?   @relation(fields: [regionId], references: [id])
 
   @@index([mobileNumber])
 }
@@ -465,32 +394,10 @@ model DGM {
   createdAt    DateTime  @default(now())
   lastLoginAt  DateTime?
   regionIds    String[]
-  provinceId   String?   @unique
   gm           GM        @relation(fields: [gmId], references: [id])
-  province     Province? @relation(fields: [provinceId], references: [id])
-  rtoms        RTOM[]
 
   @@index([mobileNumber])
   @@index([gmId])
-}
-
-model RTOM {
-  id               String            @id @default(uuid())
-  name             String
-  mobileNumber     String            @unique
-  email            String?
-  dgmId            String
-  regionId         String
-  isActive         Boolean           @default(true)
-  createdAt        DateTime          @default(now())
-  lastLoginAt      DateTime?
-  dgm              DGM               @relation(fields: [dgmId], references: [id])
-  region           Region            @relation(fields: [regionId], references: [id])
-  teleshopManagers TeleshopManager[]
-
-  @@index([mobileNumber])
-  @@index([dgmId])
-  @@index([regionId])
 }
 
 model ClosureNotice {
@@ -538,155 +445,4 @@ model OTP {
 
   @@index([mobileNumber, userType, verified])
   @@index([expiresAt])
-}
-
-model SystemLog {
-  id         String   @id @default(uuid())
-  timestamp  DateTime @default(now())
-  level      String
-  service    String
-  module     String?
-  event      String?
-  message    String
-  stackTrace String?
-  metadata   Json?
-  userId     String?
-  userRole   String?
-  outletId   String?
-  regionId   String?
-  deviceId   String?
-  sessionId  String?
-  requestId  String?
-  appVersion String?
-  ipAddress  String?
-  userAgent  String?
-  outlet     Outlet?  @relation(fields: [outletId], references: [id])
-  region     Region?  @relation(fields: [regionId], references: [id])
-
-  @@index([timestamp])
-  @@index([level, timestamp])
-  @@index([service, timestamp])
-  @@index([outletId, timestamp])
-  @@index([userId, timestamp])
-  @@index([event, timestamp])
-  @@index([level, service, timestamp])
-}
-
-model DeviceHeartbeat {
-  id                 String    @id @default(uuid())
-  deviceId           String    @unique
-  deviceType         String
-  outletId           String
-  status             String    @default("online")
-  appVersion         String?
-  websocketConnected Boolean   @default(false)
-  pollingMode        Boolean   @default(false)
-  ipAddress          String?
-  lastSeenAt         DateTime  @default(now())
-  lastError          String?
-  lastErrorAt        DateTime?
-  metadata           Json?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
-  outlet             Outlet    @relation(fields: [outletId], references: [id])
-
-  @@index([outletId, status])
-  @@index([deviceType, status])
-  @@index([lastSeenAt])
-  @@index([status, lastSeenAt])
-}
-
-model DeploymentLog {
-  id           String   @id @default(uuid())
-  timestamp    DateTime @default(now())
-  service      String
-  environment  String   @default("production")
-  branch       String?
-  commitHash   String?
-  status       String
-  triggeredBy  String?
-  duration     Int?
-  output       String?
-  errorMessage String?
-  notes        String?
-
-  @@index([timestamp])
-  @@index([service, timestamp])
-  @@index([status, timestamp])
-}
-
-model AuditLog {
-  id         String   @id @default(uuid())
-  timestamp  DateTime @default(now())
-  userId     String
-  userRole   String
-  action     String
-  targetType String?
-  targetId   String?
-  outletId   String?
-  regionId   String?
-  changes    Json?
-  metadata   Json?
-  message    String
-  ipAddress  String?
-  outlet     Outlet?  @relation(fields: [outletId], references: [id])
-  region     Region?  @relation(fields: [regionId], references: [id])
-
-  @@index([timestamp])
-  @@index([userId, timestamp])
-  @@index([action, timestamp])
-  @@index([outletId, timestamp])
-  @@index([userRole, timestamp])
-}
-
-model QRSession {
-  id                 String    @id @default(uuid())
-  sessionId          String    @unique
-  qrToken            String    @unique
-  outletId           String
-  deviceId           String?
-  deviceName         String?
-  status             String    @default("pending")
-  generatedAt        DateTime  @default(now())
-  expiresAt          DateTime
-  scannedAt          DateTime?
-  scannedByManagerId String?
-  linkedAt           DateTime?
-  linkedManagerId    String?
-  linkedDeviceId     String?
-  unlinkedAt         DateTime?
-  unlinkedBy         String?
-  unlinkedReason     String?
-  metadata           Json?
-  outlet             Outlet    @relation(fields: [outletId], references: [id])
-
-  @@index([sessionId])
-  @@index([qrToken])
-  @@index([outletId, status])
-  @@index([status, expiresAt])
-  @@index([generatedAt])
-  @@index([linkedManagerId])
-}
-
-model DeviceLink {
-  id              String    @id @default(uuid())
-  deviceId        String    @unique
-  deviceName      String
-  macAddress      String?
-  outletId        String
-  managerId       String
-  status          String    @default("active")
-  linkedAt        DateTime  @default(now())
-  lastSeenAt      DateTime  @default(now())
-  lastHeartbeatAt DateTime?
-  unlinkedAt      DateTime?
-  configData      Json?
-  metadata        Json?
-  outlet          Outlet    @relation(fields: [outletId], references: [id])
-
-  @@index([deviceId])
-  @@index([outletId, status])
-  @@index([managerId])
-  @@index([status, lastSeenAt])
-  @@index([lastSeenAt])
 }
