@@ -669,6 +669,56 @@ server.listen(PORT, "0.0.0.0", () => {
     logger.error({ err }, "HEALTH_TRACKER_INIT_FAILED");
   }
 
+  // Initialize optimized audio event manager
+  if (!global.recentAudioEvents) {
+    global.recentAudioEvents = []
+  }
+
+  // Audio event cleanup and optimization service
+  setInterval(() => {
+    if (!global.recentAudioEvents) return
+    
+    const now = new Date().getTime()
+    const beforeCount = global.recentAudioEvents.length
+    
+    // Remove events older than 2 minutes (performance optimization)
+    global.recentAudioEvents = global.recentAudioEvents.filter((event: any) => {
+      const eventTime = new Date(event.timestamp).getTime()
+      return (now - eventTime) < 120000 // 2 minutes
+    })
+    
+    // Limit total events to prevent memory issues
+    if (global.recentAudioEvents.length > 50) {
+      global.recentAudioEvents = global.recentAudioEvents.slice(-50)
+    }
+    
+    const afterCount = global.recentAudioEvents.length
+    const removedCount = beforeCount - afterCount
+    
+    if (removedCount > 0) {
+      console.log(`🧹 Audio Event Cleanup: Removed ${removedCount} old/excess events, ${afterCount} remaining`)
+      
+      // Log performance warnings
+      if (afterCount > 30) {
+        console.log(`⚠️  HIGH AUDIO EVENT QUEUE: ${afterCount} events - APK may need acknowledgment optimization`)
+      }
+      
+      // Group events by outlet for performance monitoring
+      const eventsByOutlet = global.recentAudioEvents.reduce((acc: any, event: any) => {
+        acc[event.outletId] = (acc[event.outletId] || 0) + 1
+        return acc
+      }, {})
+      
+      for (const [outletId, count] of Object.entries(eventsByOutlet)) {
+        if ((count as number) > 10) {
+          console.log(`⚠️  Outlet ${outletId} has ${count} unacknowledged events - check APK performance`)
+        }
+      }
+    }
+  }, 60000) // Run cleanup every minute
+
+  console.log("🎵 Audio Event Manager initialized with automatic cleanup and performance monitoring")
+
   // NOTE: QR Session cleanup jobs disabled - using ManagerQRToken table instead of QRSession
   // The QRSession and DeviceLink tables have Prisma client issues - keeping disabled until resolved
   console.log("QR session cleanup jobs disabled - using existing ManagerQRToken flow")
