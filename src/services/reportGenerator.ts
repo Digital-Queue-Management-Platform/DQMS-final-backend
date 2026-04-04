@@ -525,14 +525,14 @@ export const generateReportHTML = (data: ReportData): string => {
     <div class="section" style="page-break-before: always;">
         <div class="section-title">IV. Regional Performance Audit</div>
         <table>
-            <thead>
-                <tr>
-                    <th>Outlet Name</th>
-                    <th class="number">Tokens</th>
-                    <th class="number">Avg Wait</th>
-                    <th class="number">Avg Svc</th>
-                    <th class="number">Rating</th>
-                    <th class="number">Feedbacks</th>
+            <thead style="display: table-header-group; background-color: #f3f4f6;">
+                <tr style="background-color: #f3f4f6;">
+                    <th style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Outlet Name</th>
+                    <th class="number" style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Tokens</th>
+                    <th class="number" style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Avg Wait</th>
+                    <th class="number" style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Avg Svc</th>
+                    <th class="number" style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Rating</th>
+                    <th class="number" style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Feedbacks</th>
                 </tr>
             </thead>
             <tbody>
@@ -553,14 +553,14 @@ export const generateReportHTML = (data: ReportData): string => {
     <div class="section">
         <div class="section-title">V. Officer Efficiency Insights</div>
         <table>
-            <thead>
-                <tr>
-                    <th>Officer Name</th>
-                    <th>Outlet</th>
-                    <th>Status</th>
-                    <th class="number">Tokens</th>
-                    <th class="number">Rating</th>
-                    <th class="number">Feedbacks</th>
+            <thead style="display: table-header-group; background-color: #f3f4f6;">
+                <tr style="background-color: #f3f4f6;">
+                    <th style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Officer Name</th>
+                    <th style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Outlet</th>
+                    <th style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Status</th>
+                    <th class="number" style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Tokens</th>
+                    <th class="number" style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Rating</th>
+                    <th class="number" style="background-color: #f3f4f6; font-weight: bold; color: #111827; padding: 10px 8px; border: 2px solid #9ca3af;">Feedbacks</th>
                 </tr>
             </thead>
             <tbody>
