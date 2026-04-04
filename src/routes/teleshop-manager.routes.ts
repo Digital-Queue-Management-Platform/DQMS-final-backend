@@ -22,7 +22,13 @@ const auditLog = (
   entityId?: string,
   details?: object
 ) => {
-  (prisma as any).teleshopManagerAuditLog
+  // Validate input - prevent foreign key constraint violations
+  if (!teleshopManagerId || typeof teleshopManagerId !== 'string') {
+    console.error("Cannot create audit log: teleshopManagerId is required and must be a valid string");
+    return Promise.resolve(); // Return resolved promise for Promise.all compatibility
+  }
+
+  return (prisma as any).teleshopManagerAuditLog
     .create({
       data: {
         teleshopManagerId,
@@ -32,7 +38,11 @@ const auditLog = (
         details: details ?? null,
       },
     })
-    .catch((err: any) => console.error("Audit log error:", err))
+    .catch((err: any) => {
+      console.error("Audit log creation failed for manager:", teleshopManagerId, "Error:", err.message);
+      // Log additional context for debugging
+      console.error("Audit log details:", { action, entityType, entityId, details });
+    })
 }
 const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
 
@@ -2810,6 +2820,14 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
     const teleshopManager = req.teleshopManager
     const { deviceId, deviceName, macAddress, setupCode, timestamp } = req.body
 
+    // Validate teleshop manager session first
+    if (!teleshopManager || !teleshopManager.id) {
+      console.error("Invalid teleshop manager session - missing manager or ID");
+      return res.status(401).json({ 
+        error: "Invalid teleshop manager session. Please login again." 
+      })
+    }
+
     // Validate required fields
     if (!deviceId || !deviceName || !setupCode) {
       return res.status(400).json({ 
@@ -2967,27 +2985,28 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
       linkedDevices: [...filteredDevices, deviceRecord]
     }
 
-    // Update outlet and send notifications in parallel for faster response
-    const [updateResult] = await Promise.all([
-      prisma.outlet.update({
-        where: { id: teleshopManager.branchId },
-        data: { displaySettings: updatedDisplaySettings }
-      }),
-      // Fire audit log async (don't wait)
-      auditLog(
-        teleshopManager.id, 
-        "OUTLET_DEVICE_CONFIGURED", 
-        "outlet", 
-        outlet.id, 
-        {
-          deviceId: deviceId,
-          deviceName: deviceName,
-          setupCode: setupCode,
-          outletName: outlet.name,
-          method: 'QR_CODE'
-        }
-      )
-    ])
+    // Update outlet and log audit trail separately for better error handling
+    const updateResult = await prisma.outlet.update({
+      where: { id: teleshopManager.branchId },
+      data: { displaySettings: updatedDisplaySettings }
+    })
+
+    // Fire audit log async (don't wait, but handle errors)
+    auditLog(
+      teleshopManager.id, 
+      "OUTLET_DEVICE_CONFIGURED", 
+      "outlet", 
+      outlet.id, 
+      {
+        deviceId: deviceId,
+        deviceName: deviceName,
+        setupCode: setupCode,
+        outletName: outlet.name,
+        method: 'QR_CODE'
+      }
+    ).catch((err: any) => {
+      console.error("Failed to create audit log for outlet device configuration:", err);
+    })
 
     console.log(`✅ Device configured successfully:`, {
       deviceId: deviceId,
