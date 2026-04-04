@@ -3148,6 +3148,114 @@ router.get("/check-device-config/:deviceId", async (req: any, res) => {
   }
 })
 
+// Test endpoint for APK audio debugging
+router.post("/test-audio-for-device/:deviceId", async (req: any, res) => {
+  try {
+    const { deviceId } = req.params
+    const { type = "voice", customText = "Test audio from backend" } = req.body
+    
+    console.log(`🧪 Testing audio for device: ${deviceId}`)
+
+    // Find device's outlet
+    const outlets = await prisma.outlet.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        name: true,
+        displaySettings: true
+      }
+    })
+
+    let targetOutlet = null
+    for (const outlet of outlets) {
+      const settings = outlet.displaySettings as any
+      const linkedDevices = settings?.linkedDevices || []
+      const device = linkedDevices.find((d: any) => d.deviceId === deviceId && d.isActive)
+      
+      if (device) {
+        targetOutlet = outlet
+        break
+      }
+    }
+
+    if (!targetOutlet) {
+      return res.status(404).json({ 
+        success: false, 
+        error: `Device ${deviceId} not found or not configured` 
+      })
+    }
+
+    console.log(`📡 Triggering test audio for device ${deviceId} in outlet: ${targetOutlet.name}`)
+
+    // Create audio event for both WebSocket and HTTP polling
+    const audioEvent = {
+      id: Date.now().toString(),
+      outletId: targetOutlet.id,
+      type: "TEST_SOUND",
+      testType: "apk-debug",
+      lang: 'en',
+      customText: customText,
+      chimeVolume: 100,
+      voiceVolume: 300,
+      timestamp: new Date().toISOString(),
+      tokenData: undefined
+    }
+
+    // Store for HTTP polling
+    if (!global.recentAudioEvents) {
+      global.recentAudioEvents = []
+    }
+    
+    global.recentAudioEvents.push(audioEvent)
+    
+    // Keep only recent events (last 20 per outlet)
+    global.recentAudioEvents = global.recentAudioEvents
+      .filter((event: any) => event.outletId === targetOutlet.id)
+      .slice(-20)
+      .concat(
+        global.recentAudioEvents.filter((event: any) => event.outletId !== targetOutlet.id)
+      )
+
+    // Try WebSocket broadcast
+    const { broadcast } = require('../server')
+    broadcast({
+      type: "TEST_SOUND",
+      data: {
+        outletId: targetOutlet.id,
+        deviceId: deviceId,
+        customText: customText,
+        lang: 'en',
+        testType: 'apk-debug'
+      },
+      targetDeviceId: deviceId
+    })
+
+    console.log(`✅ Test audio event sent for device ${deviceId}`)
+    console.log(`   WebSocket broadcast attempted`)
+    console.log(`   HTTP polling event stored (ID: ${audioEvent.id})`)
+    console.log(`   Event: "${customText}"`)
+
+    res.json({
+      success: true,
+      message: `Test audio sent to device ${deviceId}`,
+      outletName: targetOutlet.name,
+      eventId: audioEvent.id,
+      instructions: {
+        websocket: `Device should connect to: ws://backend:3001/?deviceId=${deviceId}&outletId=${targetOutlet.id}`,
+        polling: `Or poll: GET /api/teleshop-manager/audio-events/${targetOutlet.id}`,
+        acknowledge: `Then ack: POST /api/teleshop-manager/audio-events/${targetOutlet.id}/ack`
+      }
+    })
+
+  } catch (error: any) {
+    console.error("Test audio error:", error)
+    res.status(500).json({ 
+      success: false,
+      error: "Failed to send test audio"
+    })
+  }
+})
+
 // Get linked outlet devices
 router.get("/outlet-devices", async (req: any, res) => {
   try {
