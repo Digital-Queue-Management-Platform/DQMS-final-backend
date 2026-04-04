@@ -3256,6 +3256,184 @@ router.post("/test-audio-for-device/:deviceId", async (req: any, res) => {
   }
 })
 
+// Acknowledge processed audio events (CRITICAL for APK performance)
+router.post("/audio-events/:outletId/ack", async (req: any, res) => {
+  try {
+    const { outletId } = req.params
+    const { eventIds = [], deviceId } = req.body
+
+    console.log(`📋 ACK received from ${deviceId || 'unknown'} for outlet ${outletId}`)
+    console.log(`   Acknowledging ${eventIds.length} events: ${eventIds.join(', ')}`)
+
+    if (!global.recentAudioEvents) {
+      global.recentAudioEvents = []
+    }
+
+    // Remove acknowledged events
+    const beforeCount = global.recentAudioEvents.length
+    global.recentAudioEvents = global.recentAudioEvents.filter(
+      (event: any) => !eventIds.includes(event.id)
+    )
+    const afterCount = global.recentAudioEvents.length
+    const removedCount = beforeCount - afterCount
+
+    console.log(`✅ Removed ${removedCount} acknowledged events from queue`)
+    console.log(`   Queue size: ${beforeCount} → ${afterCount}`)
+
+    res.json({
+      success: true,
+      acknowledged: eventIds.length,
+      removed: removedCount,
+      remainingEvents: afterCount
+    })
+
+  } catch (error: any) {
+    console.error("Event acknowledgment error:", error)
+    res.status(500).json({ 
+      success: false,
+      error: "Failed to acknowledge events"
+    })
+  }
+})
+
+// Get audio events with performance optimizations
+router.get("/audio-events/:outletId/optimized", async (req: any, res) => {
+  try {
+    const { outletId } = req.params
+    const { since, deviceId, limit = 10 } = req.query
+
+    if (!global.recentAudioEvents) {
+      global.recentAudioEvents = []
+    }
+
+    let events = global.recentAudioEvents.filter(
+      (event: any) => event.outletId === outletId
+    )
+
+    // Filter by timestamp if provided (for incremental updates)
+    if (since) {
+      const sinceDate = new Date(since as string)
+      events = events.filter((event: any) => 
+        new Date(event.timestamp) > sinceDate
+      )
+    }
+
+    // Limit results for performance
+    events = events.slice(0, parseInt(limit as string))
+
+    // Sort by timestamp (newest first)
+    events.sort((a: any, b: any) => 
+      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    )
+
+    const response = {
+      success: true,
+      events: events,
+      serverTime: new Date().toISOString(),
+      count: events.length,
+      performance: {
+        polling: {
+          recommended: "Use WebSocket for real-time updates",
+          fallback: "Poll this endpoint max every 2 seconds",
+          url: `ws://backend:3001/?deviceId=${deviceId}&outletId=${outletId}`
+        },
+        acknowledgment: {
+          critical: "MUST acknowledge processed events",
+          endpoint: `/api/teleshop-manager/audio-events/${outletId}/ack`,
+          payload: { eventIds: ["event1", "event2"], deviceId: deviceId }
+        }
+      }
+    }
+
+    console.log(`[APK_POLLING_OPTIMIZED] Device ${deviceId} polled for events since ${since || 'beginning'}, found ${events.length} events`)
+
+    res.json(response)
+
+  } catch (error: any) {
+    console.error("Optimized events error:", error)
+    res.status(500).json({ 
+      success: false,
+      error: "Failed to fetch optimized events"
+    })
+  }
+})
+
+// Audio system performance monitor
+router.get("/audio-performance/:outletId", async (req: any, res) => {
+  try {
+    const { outletId } = req.params
+
+    if (!global.recentAudioEvents) {
+      global.recentAudioEvents = []
+    }
+
+    const outletEvents = global.recentAudioEvents.filter(
+      (event: any) => event.outletId === outletId
+    )
+
+    // Group events by type
+    const eventsByType = outletEvents.reduce((acc: any, event: any) => {
+      acc[event.type] = (acc[event.type] || 0) + 1
+      return acc
+    }, {})
+
+    // Check for old unacknowledged events (performance issue indicator)
+    const now = new Date().getTime()
+    const oldEvents = outletEvents.filter((event: any) => {
+      const eventTime = new Date(event.timestamp).getTime()
+      return (now - eventTime) > 10000 // Older than 10 seconds
+    })
+
+    const performance = {
+      totalEvents: outletEvents.length,
+      eventsByType,
+      oldUnacknowledgedEvents: oldEvents.length,
+      performanceIssue: oldEvents.length > 0,
+      recommendations: [] as string[]
+    }
+
+    if (oldEvents.length > 0) {
+      performance.recommendations.push(
+        "⚠️  Old unacknowledged events detected - APK is not acknowledging processed events",
+        "Fix: Implement event acknowledgment in APK immediately after audio playback",
+        `Endpoint: POST /api/teleshop-manager/audio-events/${outletId}/ack`
+      )
+    }
+
+    if (outletEvents.length > 15) {
+      performance.recommendations.push(
+        "⚠️  High event queue - APK may be processing too slowly",
+        "Fix: Optimize APK audio processing (pre-load TTS, async processing)",
+        "Fix: Use WebSocket instead of HTTP polling for faster delivery"
+      )
+    }
+
+    console.log(`📊 Performance check for outlet ${outletId}:`)
+    console.log(`   Total events: ${performance.totalEvents}`)
+    console.log(`   Old events: ${performance.oldUnacknowledgedEvents}`)
+    console.log(`   Performance issue: ${performance.performanceIssue}`)
+
+    res.json({
+      success: true,
+      outletId,
+      performance,
+      events: outletEvents.map((event: any) => ({
+        id: event.id,
+        type: event.type,
+        timestamp: event.timestamp,
+        age: `${Math.round((now - new Date(event.timestamp).getTime()) / 1000)}s`
+      }))
+    })
+
+  } catch (error: any) {
+    console.error("Performance monitor error:", error)
+    res.status(500).json({ 
+      success: false,
+      error: "Failed to check performance"
+    })
+  }
+})
+
 // Get linked outlet devices
 router.get("/outlet-devices", async (req: any, res) => {
   try {
