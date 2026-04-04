@@ -4359,4 +4359,196 @@ router.get("/officer-analytics", async (req: any, res) => {
 
 
 
+// Device Health Monitoring Endpoint for 24/7 Connectivity
+router.get('/device-health/:outletId', authenticateTeleshopManager, async (req: any, res) => {
+  try {
+    const { outletId } = req.params;
+    console.log(`[DEVICE_HEALTH] Checking health for outlet: ${outletId}`);
+    
+    // Get all devices for outlet
+    const devices = await prisma.deviceLink.findMany({
+      where: { 
+        outletId: outletId,
+        status: 'active'
+      },
+      include: {
+        outlet: {
+          select: { name: true, location: true }
+        }
+      }
+    });
+    
+    if (!devices || devices.length === 0) {
+      return res.json({
+        success: true,
+        outlet: null,
+        summary: {
+          totalDevices: 0,
+          connectedDevices: 0,
+          offlineDevices: 0,
+          healthPercent: 0
+        },
+        devices: {
+          connected: [],
+          offline: []
+        }
+      });
+    }
+    
+    // Check WebSocket connections and heartbeats
+    const connectedDevices: any[] = [];
+    const offlineDevices: any[] = [];
+    const wsManager = (global as any).wsManager;
+    
+    devices.forEach((device: any) => {
+      // Check if device has active WebSocket connection
+      let wsConnection = false;
+      let lastHeartbeat = null;
+      let timeSinceHeartbeat = Infinity;
+      
+      if (wsManager && wsManager.clients) {
+        // Find WebSocket connection for this device
+        for (const [ws, client] of wsManager.clients.entries()) {
+          if (client.deviceId === device.deviceId) {
+            wsConnection = true;
+            lastHeartbeat = client.lastHeartbeat || null;
+            if (lastHeartbeat) {
+              timeSinceHeartbeat = Date.now() - new Date(lastHeartbeat).getTime();
+            }
+            break;
+          }
+        }
+      }
+      
+      const deviceStatus = {
+        deviceId: device.deviceId,
+        deviceName: device.deviceName || device.deviceId,
+        macAddress: device.macAddress,
+        isWebSocketConnected: wsConnection,
+        lastHeartbeat: lastHeartbeat,
+        timeSinceHeartbeat: timeSinceHeartbeat,
+        connectionStatus: timeSinceHeartbeat < 90000 ? 'online' : 'offline', // 90 seconds threshold
+        lastSeenAt: device.lastSeenAt,
+        linkedAt: device.linkedAt
+      };
+      
+      if (deviceStatus.connectionStatus === 'online') {
+        connectedDevices.push(deviceStatus);
+      } else {
+        offlineDevices.push(deviceStatus);
+      }
+    });
+    
+    const healthPercent = devices.length > 0 ? 
+      Math.round((connectedDevices.length / devices.length) * 100) : 0;
+    
+    console.log(`[DEVICE_HEALTH] Outlet ${outletId}: ${connectedDevices.length}/${devices.length} online (${healthPercent}%)`);
+    
+    res.json({
+      success: true,
+      outlet: devices[0]?.outlet || null,
+      summary: {
+        totalDevices: devices.length,
+        connectedDevices: connectedDevices.length,
+        offlineDevices: offlineDevices.length,
+        healthPercent: healthPercent
+      },
+      devices: {
+        connected: connectedDevices,
+        offline: offlineDevices
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Device health check failed:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check device health'
+    });
+  }
+});
+
+// Global Device Health Overview (All Outlets)
+router.get('/device-health-overview', authenticateTeleshopManager, async (req: any, res) => {
+  try {
+    console.log(`[DEVICE_HEALTH] Checking global device health overview`);
+    
+    // Get all outlets with devices
+    const outlets = await prisma.outlet.findMany({
+      include: {
+        deviceLinks: {
+          where: {
+            status: 'active'
+          }
+        }
+      }
+    });
+    
+    const wsManager = (global as any).wsManager;
+    let totalDevices = 0;
+    let totalOnline = 0;
+    const outletSummaries: any[] = [];
+    
+    outlets.forEach((outlet: any) => {
+      if (outlet.deviceLinks.length === 0) return;
+      
+      let onlineDevices = 0;
+      outlet.deviceLinks.forEach((device: any) => {
+        totalDevices++;
+        
+        // Check WebSocket connection
+        let isOnline = false;
+        if (wsManager && wsManager.clients) {
+          for (const [ws, client] of wsManager.clients.entries()) {
+            if (client.deviceId === device.deviceId) {
+              const lastHeartbeat = client.lastHeartbeat;
+              if (lastHeartbeat) {
+                const timeSinceHeartbeat = Date.now() - new Date(lastHeartbeat).getTime();
+                if (timeSinceHeartbeat < 90000) {
+                  isOnline = true;
+                  totalOnline++;
+                  onlineDevices++;
+                }
+              }
+              break;
+            }
+          }
+        }
+      });
+      
+      outletSummaries.push({
+        outletId: outlet.id,
+        outletName: outlet.name,
+        location: outlet.location,
+        totalDevices: outlet.deviceLinks.length,
+        onlineDevices: onlineDevices,
+        healthPercent: Math.round((onlineDevices / outlet.deviceLinks.length) * 100)
+      });
+    });
+    
+    const overallHealthPercent = totalDevices > 0 ? 
+      Math.round((totalOnline / totalDevices) * 100) : 100;
+    
+    console.log(`[DEVICE_HEALTH] Global overview: ${totalOnline}/${totalDevices} online (${overallHealthPercent}%)`);
+    
+    res.json({
+      success: true,
+      summary: {
+        totalOutlets: outlets.length,
+        totalDevices: totalDevices,
+        onlineDevices: totalOnline,
+        overallHealthPercent: overallHealthPercent
+      },
+      outlets: outletSummaries
+    });
+    
+  } catch (error) {
+    console.error('❌ Global device health check failed:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check global device health'
+    });
+  }
+});
+
 export default router
