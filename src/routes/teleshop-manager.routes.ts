@@ -535,7 +535,7 @@ router.get('/audio-events/:outletId', async (req: Request, res: Response) => {
     const since = req.query.since ? new Date(req.query.since as string) : new Date(Date.now() - 30000) // Last 30 seconds
     
     // Get recent audio events for this outlet from global memory
-    const recentEvents = (global.recentAudioEvents || [])
+    const recentEvents = ((global as any).recentAudioEvents || [])
       .filter((event: any) => 
         event.outletId === outletId && 
         new Date(event.timestamp) > since
@@ -562,12 +562,12 @@ router.post('/audio-events/:outletId/ack', async (req: Request, res: Response) =
     const { eventIds } = req.body
     
     if (eventIds && Array.isArray(eventIds)) {
-      const initialCount = (global.recentAudioEvents || []).length
-      global.recentAudioEvents = (global.recentAudioEvents || [])
+      const initialCount = ((global as any).recentAudioEvents || []).length
+      (global as any).recentAudioEvents = ((global as any).recentAudioEvents || [])
         .filter((event: any) => !eventIds.includes(event.id))
       
-      const removedCount = initialCount - global.recentAudioEvents.length
-      console.log(`[APK_POLLING] Acknowledged ${removedCount} events, ${global.recentAudioEvents.length} remaining`)
+      const removedCount = initialCount - (global as any).recentAudioEvents.length
+      console.log(`[APK_POLLING] Acknowledged ${removedCount} events, ${(global as any).recentAudioEvents.length} remaining`)
     }
     
     res.json({ success: true })
@@ -747,14 +747,14 @@ router.post("/test-sound", async (req: any, res) => {
     }
     
     // Store in global memory for APK polling (simple reliable fallback)
-    if (!global.recentAudioEvents) {
-      global.recentAudioEvents = []
+    if (!(global as any).recentAudioEvents) {
+      (global as any).recentAudioEvents = []
     }
-    global.recentAudioEvents.push(audioEvent)
+    (global as any).recentAudioEvents.push(audioEvent)
     
     // Keep only last 20 events (prevent memory bloat)
-    if (global.recentAudioEvents.length > 20) {
-      global.recentAudioEvents = global.recentAudioEvents.slice(-20)
+    if ((global as any).recentAudioEvents.length > 20) {
+      (global as any).recentAudioEvents = (global as any).recentAudioEvents.slice(-20)
     }
     
     console.log(`[HTTP_FALLBACK] Audio event stored for APK polling: ${audioEvent.id} (outlet: ${audioEvent.outletId})`)
@@ -3202,18 +3202,18 @@ router.post("/test-audio-for-device/:deviceId", async (req: any, res) => {
     }
 
     // Store for HTTP polling
-    if (!global.recentAudioEvents) {
-      global.recentAudioEvents = []
+    if (!(global as any).recentAudioEvents) {
+      (global as any).recentAudioEvents = []
     }
     
-    global.recentAudioEvents.push(audioEvent)
+    (global as any).recentAudioEvents.push(audioEvent)
     
     // Keep only recent events (last 20 per outlet)
-    global.recentAudioEvents = global.recentAudioEvents
+    (global as any).recentAudioEvents = (global as any).recentAudioEvents
       .filter((event: any) => event.outletId === targetOutlet.id)
       .slice(-20)
       .concat(
-        global.recentAudioEvents.filter((event: any) => event.outletId !== targetOutlet.id)
+        (global as any).recentAudioEvents.filter((event: any) => event.outletId !== targetOutlet.id)
       )
 
     // Try WebSocket broadcast
@@ -3265,16 +3265,16 @@ router.post("/audio-events/:outletId/ack", async (req: any, res) => {
     console.log(`📋 ACK received from ${deviceId || 'unknown'} for outlet ${outletId}`)
     console.log(`   Acknowledging ${eventIds.length} events: ${eventIds.join(', ')}`)
 
-    if (!global.recentAudioEvents) {
-      global.recentAudioEvents = []
+    if (!(global as any).recentAudioEvents) {
+      (global as any).recentAudioEvents = []
     }
 
     // Remove acknowledged events
-    const beforeCount = global.recentAudioEvents.length
-    global.recentAudioEvents = global.recentAudioEvents.filter(
+    const beforeCount = (global as any).recentAudioEvents.length
+    (global as any).recentAudioEvents = (global as any).recentAudioEvents.filter(
       (event: any) => !eventIds.includes(event.id)
     )
-    const afterCount = global.recentAudioEvents.length
+    const afterCount = (global as any).recentAudioEvents.length
     const removedCount = beforeCount - afterCount
 
     console.log(`✅ Removed ${removedCount} acknowledged events from queue`)
@@ -3302,11 +3302,11 @@ router.get("/audio-events/:outletId/optimized", async (req: any, res) => {
     const { outletId } = req.params
     const { since, deviceId, limit = 10 } = req.query
 
-    if (!global.recentAudioEvents) {
-      global.recentAudioEvents = []
+    if (!(global as any).recentAudioEvents) {
+      (global as any).recentAudioEvents = []
     }
 
-    let events = global.recentAudioEvents.filter(
+    let events = (global as any).recentAudioEvents.filter(
       (event: any) => event.outletId === outletId
     )
 
@@ -3363,11 +3363,11 @@ router.get("/audio-performance/:outletId", async (req: any, res) => {
   try {
     const { outletId } = req.params
 
-    if (!global.recentAudioEvents) {
-      global.recentAudioEvents = []
+    if (!(global as any).recentAudioEvents) {
+      (global as any).recentAudioEvents = []
     }
 
-    const outletEvents = global.recentAudioEvents.filter(
+    const outletEvents = (global as any).recentAudioEvents.filter(
       (event: any) => event.outletId === outletId
     )
 

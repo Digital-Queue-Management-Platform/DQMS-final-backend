@@ -670,29 +670,29 @@ server.listen(PORT, "0.0.0.0", () => {
   }
 
   // Initialize optimized audio event manager
-  if (!global.recentAudioEvents) {
-    global.recentAudioEvents = []
+  if (!(global as any).recentAudioEvents) {
+    (global as any).recentAudioEvents = []
   }
 
   // Audio event cleanup and optimization service
   setInterval(() => {
-    if (!global.recentAudioEvents) return
+    if (!(global as any).recentAudioEvents) return
     
     const now = new Date().getTime()
-    const beforeCount = global.recentAudioEvents.length
+    const beforeCount = (global as any).recentAudioEvents.length
     
     // Remove events older than 2 minutes (performance optimization)
-    global.recentAudioEvents = global.recentAudioEvents.filter((event: any) => {
+    (global as any).recentAudioEvents = (global as any).recentAudioEvents.filter((event: any) => {
       const eventTime = new Date(event.timestamp).getTime()
       return (now - eventTime) < 120000 // 2 minutes
     })
     
     // Limit total events to prevent memory issues
-    if (global.recentAudioEvents.length > 50) {
-      global.recentAudioEvents = global.recentAudioEvents.slice(-50)
+    if ((global as any).recentAudioEvents.length > 50) {
+      (global as any).recentAudioEvents = (global as any).recentAudioEvents.slice(-50)
     }
     
-    const afterCount = global.recentAudioEvents.length
+    const afterCount = (global as any).recentAudioEvents.length
     const removedCount = beforeCount - afterCount
     
     if (removedCount > 0) {
@@ -704,7 +704,7 @@ server.listen(PORT, "0.0.0.0", () => {
       }
       
       // Group events by outlet for performance monitoring
-      const eventsByOutlet = global.recentAudioEvents.reduce((acc: any, event: any) => {
+      const eventsByOutlet = (global as any).recentAudioEvents.reduce((acc: any, event: any) => {
         acc[event.outletId] = (acc[event.outletId] || 0) + 1
         return acc
       }, {})
