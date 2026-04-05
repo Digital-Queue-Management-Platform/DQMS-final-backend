@@ -276,7 +276,7 @@ router.get("/me", async (req, res) => {
         teleshopManagerId: tm.id,
         teleshopManagerName: tm.name
       }))
-      .sort((a, b) => a.name.localeCompare(b.name))
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
 
     const manager = {
       id: rtom.id,
@@ -883,7 +883,7 @@ router.get("/analytics", async (req, res) => {
     })
 
     const outletData = rtom.teleshopManagers.filter(tm => tm.branch).map(tm => tm.branch)
-    console.log(`RTOM Analytics Response: RTOM ${rtom.name} has ${outletData.length} outlets:`, outletData.map(o => `${o.name} (${o.id})`))
+    console.log(`RTOM Analytics Response: RTOM ${rtom.name} has ${outletData.length} outlets:`, outletData.filter(o => o).map(o => `${o!.name} (${o!.id})`))
     
     res.json({
       rtomName: rtom.name,
