@@ -809,20 +809,26 @@ async function processAppointments() {
     const reminder1hTime = new Date(now.getTime() + REMINDER_1H_MIN * 60 * 1000)
     const reminder30mTime = new Date(now.getTime() + REMINDER_30M_MIN * 60 * 1000)
 
+    logger.info(`[AUTO-QUEUE] Processing appointments - Window: ${APPOINTMENT_ENQUEUE_AHEAD_MIN} minutes, Until: ${ahead.toISOString()}`)
+
     // Fetch due appointments (booked, today, appointmentAt <= ahead)
     const startOfDay = new Date()
     startOfDay.setHours(0, 0, 0, 0)
     const endOfDay = new Date()
     endOfDay.setHours(23, 59, 59, 999)
 
-    // Get appointments for queueing
+    // Get appointments for queueing - Remove the "today only" restriction
     const dueAppointments: any = await prisma.$queryRaw`
       SELECT * FROM "Appointment"
       WHERE "status" = 'booked'
-        AND "appointmentAt" >= ${startOfDay}
         AND "appointmentAt" <= ${ahead}
       ORDER BY "appointmentAt" ASC
     `
+
+    logger.info(`[AUTO-QUEUE] Found ${dueAppointments.length} appointments to queue`)
+    if (dueAppointments.length > 0) {
+      logger.info(`[AUTO-QUEUE] Appointments: ${dueAppointments.map((a: any) => `${a.name} (${a.appointmentAt})`).join(', ')}`)
+    }
 
     // Get appointments for 1-hour reminders
     const reminder1hAppointments: any = await prisma.$queryRaw`
@@ -1031,7 +1037,11 @@ async function processAppointments() {
 }
 
 if (process.env.DISABLE_APPOINTMENT_JOB !== 'true') {
+  logger.info(`[AUTO-QUEUE] Starting appointment processor - runs every ${APPOINTMENT_POLL_MS / 1000} seconds, queue window: ${APPOINTMENT_ENQUEUE_AHEAD_MIN} minutes`)
   setInterval(processAppointments, APPOINTMENT_POLL_MS)
+  
+  // Run once immediately to catch any pending appointments
+  setTimeout(processAppointments, 5000) // Wait 5 seconds after server start
 }
 
 // Daily reset signal: broadcast an event exactly at the configured reset time
