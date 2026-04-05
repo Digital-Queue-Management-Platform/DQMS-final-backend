@@ -830,25 +830,6 @@ router.post("/register-region", async (req, res) => {
   }
 })
 
-// Get all regions
-router.get("/regions", async (req, res) => {
-  try {
-    const regions = await prisma.region.findMany({
-      include: {
-        gm: {
-          select: { id: true, name: true, mobileNumber: true, email: true }
-        },
-        outlets: { select: { id: true, name: true } }
-      },
-      orderBy: { name: "asc" }
-    })
-    res.json({ regions })
-  } catch (error: any) {
-    console.error("Get regions error:", error)
-    res.status(500).json({ error: "Failed to fetch regions" })
-  }
-})
-
 // Delete a region
 router.delete("/regions/:id", async (req, res) => {
   try {
@@ -1240,6 +1221,7 @@ router.get('/outlets', async (req, res) => {
       include: {
         region: {
           select: {
+            id: true,
             name: true,
             rtoms: {
               select: {
@@ -1277,6 +1259,10 @@ router.get('/outlets', async (req, res) => {
       id: outlet.id,
       name: outlet.name,
       location: outlet.location,
+      region: {
+        id: outlet.region.id,
+        name: outlet.region.name
+      },
       regionName: outlet.region.name,
       regionId: outlet.regionId,
       provinceName: outlet.province?.name || null,

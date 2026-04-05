@@ -8,7 +8,7 @@ import sltSmsService from "../services/sltSmsService"
 const router = Router()
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 
-function verifyGMToken(req: any): { gmId: string } | null {
+function verifyGMToken(req: any): { gmId: string; regionId?: string } | null {
     let token = req.cookies?.dq_gm_jwt
     if (!token) {
         const authHeader = req.headers.authorization
@@ -18,7 +18,7 @@ function verifyGMToken(req: any): { gmId: string } | null {
     try {
         const payload: any = (jwt as any).verify(token, JWT_SECRET)
         if (!payload.gmId) return null
-        return { gmId: payload.gmId }
+        return { gmId: payload.gmId, regionId: payload.regionId }
     } catch { return null }
 }
 
@@ -56,7 +56,11 @@ router.post("/login", async (req, res) => {
         const gm = await (prisma as any).gM.findFirst({ where: { mobileNumber, isActive: true } })
         if (!gm) return res.status(401).json({ error: "GM not found with this mobile number" })
 
-        const token = (jwt as any).sign({ gmId: gm.id, mobileNumber: gm.mobileNumber }, JWT_SECRET)
+        const token = (jwt as any).sign({ 
+            gmId: gm.id, 
+            mobileNumber: gm.mobileNumber,
+            regionId: gm.regionId  // Add regionId to JWT token
+        }, JWT_SECRET)
         res.cookie("dq_gm_jwt", token, { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", path: "/" })
         await (prisma as any).gM.update({ where: { id: gm.id }, data: { lastLoginAt: new Date() } })
 
@@ -73,34 +77,62 @@ router.post("/logout", (req, res) => {
     res.json({ success: true })
 })
 
-// GET /me - GM profile (island-wide, no region filter)
+// GET /me - GM profile (region-specific)
 router.get("/me", async (req, res) => {
     try {
         const auth = verifyGMToken(req)
         if (!auth) return res.status(401).json({ error: "GM authentication required" })
 
-        const gm = await (prisma as any).gM.findUnique({ where: { id: auth.gmId } })
+        const gm = await (prisma as any).gM.findUnique({ 
+            where: { id: auth.gmId },
+            include: { region: true }
+        })
         if (!gm) return res.status(404).json({ error: "GM not found" })
 
         // Count DGMs under this GM
         const dgmCount = await (prisma as any).dGM.count({ where: { gmId: gm.id } })
-        const regionCount = await prisma.region.count()
-        const outletCount = await prisma.outlet.count()
+        
+        // For GM, show only their region's stats
+        const regionCount = gm.region ? 1 : 0
+        const outletCount = gm.regionId ? await prisma.outlet.count({ where: { regionId: gm.regionId } }) : 0
 
-        res.json({ gm: { id: gm.id, name: gm.name, email: gm.email, mobileNumber: gm.mobileNumber, isActive: gm.isActive, dgmCount, regionCount, outletCount } })
+        res.json({ 
+            gm: { 
+                id: gm.id, 
+                name: gm.name, 
+                email: gm.email, 
+                mobileNumber: gm.mobileNumber, 
+                isActive: gm.isActive, 
+                dgmCount, 
+                regionCount, 
+                outletCount,
+                regionId: gm.regionId,
+                regionName: gm.region?.name || "No Region Assigned"
+            } 
+        })
     } catch (err) {
         console.error("GM /me error:", err)
         res.status(500).json({ error: "Failed to fetch GM profile" })
     }
 })
 
-// GET /feedback - ALL feedbacks island-wide (GMs see everything)
+// GET /feedback - Region-specific feedbacks (GMs see only their region)
 router.get("/feedback", async (req, res) => {
     try {
         const auth = verifyGMToken(req)
         if (!auth) return res.status(401).json({ error: "GM authentication required" })
 
-        const { page = "1", limit = "15", rating, startDate, endDate, outletId, regionId } = req.query
+        // Get GM with region information to enforce region-based access
+        const gm = await (prisma as any).gM.findUnique({
+            where: { id: auth.gmId },
+            include: { region: true }
+        })
+
+        if (!gm || !gm.regionId) {
+            return res.status(404).json({ error: "GM region not found" })
+        }
+
+        const { page = "1", limit = "15", rating, startDate, endDate, outletId } = req.query
         const pageNum = Math.max(1, parseInt(page as string))
         const limitNum = Math.min(100, Math.max(1, parseInt(limit as string)))
         const skip = (pageNum - 1) * limitNum
@@ -108,11 +140,32 @@ router.get("/feedback", async (req, res) => {
         const where: any = {}
         if (rating && rating !== "") where.rating = parseInt(rating as string)
         if (startDate && endDate) where.createdAt = { gte: new Date(startDate as string), lte: new Date(endDate as string) }
-        if (outletId) where.token = { outletId: outletId as string }
-        else if (regionId) {
-            const outlets = await prisma.outlet.findMany({ where: { regionId: regionId as string }, select: { id: true } })
-            where.token = { outletId: { in: outlets.map((o: any) => o.id) } }
+        
+        // Always restrict to GM's region - get all outlets in the region
+        const outletsInRegion = await prisma.outlet.findMany({ 
+            where: { regionId: gm.regionId }, 
+            select: { id: true } 
+        })
+        
+        if (outletId) {
+            // If specific outletId requested, validate it belongs to GM's region
+            const outlet = await prisma.outlet.findUnique({
+                where: { id: outletId as string }
+            })
+            if (!outlet || outlet.regionId !== gm.regionId) {
+                return res.status(403).json({ error: "Access denied: Outlet not in your region" })
+            }
+            where.token = { outletId: outletId as string }
+        } else {
+            // No specific outlet - restrict to all outlets in GM's region
+            where.token = { outletId: { in: outletsInRegion.map((o: any) => o.id) } }
         }
+
+        console.log('GM Feedback Query:', { 
+            gmRegion: gm.region.name, 
+            outletsCount: outletsInRegion.length,
+            where: JSON.stringify(where)
+        })
 
         const [feedbacks, total] = await Promise.all([
             prisma.feedback.findMany({
@@ -133,15 +186,36 @@ router.get("/feedback", async (req, res) => {
     }
 })
 
-// GET /closure-notices - ALL closure notices island-wide
+// GET /closure-notices - Region-specific closure notices
 router.get("/closure-notices", async (req, res) => {
     try {
         const auth = verifyGMToken(req)
         if (!auth) return res.status(401).json({ error: "GM authentication required" })
 
+        // Get GM with region information to enforce region-based access
+        const gm = await (prisma as any).gM.findUnique({
+            where: { id: auth.gmId },
+            include: { region: true }
+        })
+
+        if (!gm || !gm.regionId) {
+            return res.status(404).json({ error: "GM region not found" })
+        }
+
+        // Get closure notices only for outlets in GM's region
         const notices = await (prisma as any).closureNotice.findMany({
+            where: {
+                outlet: {
+                    regionId: gm.regionId
+                }
+            },
             include: { outlet: { select: { name: true, region: { select: { name: true } } } } },
             orderBy: { createdAt: "desc" }
+        })
+
+        console.log('GM Closure Notices:', { 
+            gmRegion: gm.region.name, 
+            noticesCount: notices.length 
         })
 
         res.json({ notices })
@@ -151,11 +225,21 @@ router.get("/closure-notices", async (req, res) => {
     }
 })
 
-// POST /closure-notices - create a closure notice for any outlet
+// POST /closure-notices - create a closure notice for outlets in GM's region
 router.post("/closure-notices", async (req, res) => {
     try {
         const auth = verifyGMToken(req)
         if (!auth) return res.status(401).json({ error: "GM authentication required" })
+
+        // Get GM with region information to enforce region-based access
+        const gm = await (prisma as any).gM.findUnique({
+            where: { id: auth.gmId },
+            include: { region: true }
+        })
+
+        if (!gm || !gm.regionId) {
+            return res.status(404).json({ error: "GM region not found" })
+        }
 
         const { outletId, title, message, startsAt, endsAt, noticeType, isRecurring, recurringType, recurringDays, recurringEndDate } = req.body
         if (!outletId || !title || !message || !startsAt || !endsAt)
@@ -163,6 +247,11 @@ router.post("/closure-notices", async (req, res) => {
 
         const outlet = await prisma.outlet.findUnique({ where: { id: outletId } })
         if (!outlet) return res.status(404).json({ error: "Outlet not found" })
+        
+        // Validate outlet belongs to GM's region
+        if (outlet.regionId !== gm.regionId) {
+            return res.status(403).json({ error: "Access denied: Outlet not in your region" })
+        }
 
         if (!isRecurring && new Date(startsAt) >= new Date(endsAt))
             return res.status(400).json({ error: "endsAt must be after startsAt" })
@@ -449,7 +538,9 @@ router.get("/outlets", async (req, res) => {
         const formattedOutlets = outlets.map(outlet => ({
             id: outlet.id,
             name: outlet.name,
-            regionName: outlet.region.name
+            location: outlet.location,
+            isActive: outlet.isActive,
+            region: outlet.region  // Keep the full region object for frontend
         }))
 
         res.json({ success: true, outlets: formattedOutlets })
@@ -462,8 +553,25 @@ router.get("/outlets", async (req, res) => {
 // GET /analytics- Analytics for GMs (province-wise access)
 router.get("/analytics", async (req, res) => {
     try {
+        console.log('=== GM ANALYTICS START ===')
         const auth = verifyGMToken(req)
-        if (!auth) return res.status(401).json({ error: "GM authentication required" })
+        if (!auth) {
+            console.log('GM Analytics: Auth failed')
+            return res.status(401).json({ error: "GM authentication required" })
+        }
+        console.log('GM Analytics: Auth successful, regionId:', auth.regionId)
+        
+        // DEBUG: Check the actual GM record in database
+        const gmRecord = await (prisma as any).gM.findUnique({
+            where: { id: auth.gmId },
+            include: { region: true }
+        })
+        console.log('GM Database Record:', {
+            id: gmRecord?.id,
+            name: gmRecord?.name,
+            regionId: gmRecord?.regionId,
+            region: gmRecord?.region?.name
+        })
 
         const { startDate, endDate, provinceId } = req.query
         console.log('GM Analytics request:', { startDate, endDate, provinceId })
@@ -477,9 +585,31 @@ router.get("/analytics", async (req, res) => {
         }
 
         // If provinceId is provided, filter by outlets in that province
+        // Restrict to GM's region only
+        if (!auth.regionId && !gmRecord?.regionId) {
+            console.log('GM Analytics: No regionId found in token or database')
+            return res.status(404).json({ error: "GM region not found" })
+        }
+        
+        // Use regionId from database if not in token
+        const effectiveRegionId = auth.regionId || gmRecord?.regionId
+        console.log('GM Analytics: Using regionId:', effectiveRegionId)
+
         if (provinceId) {
+            // Validate province belongs to GM's region
+            const province = await prisma.province.findUnique({
+                where: { id: provinceId as string }
+            })
+            
+            if (!province || province.regionId !== effectiveRegionId) {
+                return res.status(403).json({ error: "Access denied: Province not in your region" })
+            }
+            
             const outletsInProvince = await prisma.outlet.findMany({
-                where: { provinceId: provinceId as string },
+                where: { 
+                    provinceId: provinceId as string,
+                    regionId: effectiveRegionId  // Extra validation
+                },
                 select: { id: true }
             })
             
@@ -487,6 +617,26 @@ router.get("/analytics", async (req, res) => {
                 where.outletId = { in: outletsInProvince.map(outlet => outlet.id) }
             } else {
                 // If no outlets found in province, return empty analytics
+                return res.json({
+                    totalTokens: 0,
+                    avgWaitTime: 0,
+                    avgServiceTime: 0,
+                    feedbackStats: [],
+                    officerPerformance: [],
+                    hourlyWaitingTimes: [],
+                    serviceTypes: [],
+                })
+            }
+        } else {
+            // No province filter - restrict to all outlets in GM's region
+            const outletsInRegion = await prisma.outlet.findMany({
+                where: { regionId: effectiveRegionId },
+                select: { id: true }
+            })
+            
+            if (outletsInRegion.length > 0) {
+                where.outletId = { in: outletsInRegion.map(outlet => outlet.id) }
+            } else {
                 return res.json({
                     totalTokens: 0,
                     avgWaitTime: 0,
@@ -652,6 +802,7 @@ router.get("/analytics", async (req, res) => {
             hourlyWaitingTimes,
             serviceTypes: serviceTypesFormatted,
         })
+        console.log('=== GM ANALYTICS SUCCESS ===')
     } catch (error) {
         console.error("GM Analytics error:", error)
         res.status(500).json({ error: "Failed to fetch analytics" })

@@ -88,6 +88,9 @@ router.post("/login", async (req, res) => {
       },
       include: {
         region: true,
+        dgm: {  // Include DGM to get provinceId
+          select: { provinceId: true }
+        },
         teleshopManagers: {
           include: {
             branch: {
@@ -132,7 +135,8 @@ router.post("/login", async (req, res) => {
       managerName: rtom.name, 
       mobileNumber: rtom.mobileNumber,
       email: rtom.email,
-      regionId: rtom.regionId
+      regionId: rtom.regionId,
+      provinceId: rtom.dgm?.provinceId  // Add provinceId from DGM
     }
 
     const signOptions: any = {}
@@ -247,20 +251,32 @@ router.get("/me", async (req, res) => {
       return res.status(404).json({ error: "RTOM not found" })
     }
 
-    // Get all outlets in RTOM's region (not just assigned ones)
-    const outlets = await prisma.outlet.findMany({
+    // Get outlets assigned to this RTOM through TeleshopManagers (hierarchical access control)
+    const teleshopManagers = await prisma.teleshopManager.findMany({
       where: {
-        regionId: rtom.regionId,
-        isActive: true
+        rtomId: rtom.id,
+        isActive: true,
+        branchId: { not: null }  // Only TeleshopManagers assigned to outlets
       },
       include: {
-        officers: true,
-        teleshopManagers: true
-      },
-      orderBy: {
-        name: 'asc'
+        branch: {
+          include: {
+            officers: true,
+            teleshopManagers: true
+          }
+        }
       }
     })
+
+    // Extract outlets from TeleshopManagers
+    const outlets = teleshopManagers
+      .filter(tm => tm.branch)
+      .map(tm => ({
+        ...tm.branch,
+        teleshopManagerId: tm.id,
+        teleshopManagerName: tm.name
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name))
 
     const manager = {
       id: rtom.id,
@@ -293,11 +309,118 @@ router.get("/alerts", async (req, res) => {
 // Get RTOM feedback
 router.get("/feedback", async (req, res) => {
   try {
-    // Return expected object structure for feedback
+    // Check for JWT token from cookie or header
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+
+    if (!token) {
+      return res.status(401).json({ error: "RTOM authentication required" })
+    }
+
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch (e) {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    // Find RTOM and their assigned outlets through TeleshopManagers
+    const rtom = await prisma.rTOM.findFirst({
+      where: { mobileNumber: payload.mobileNumber },
+      include: { 
+        teleshopManagers: {
+          where: { isActive: true },
+          include: { branch: true }
+        }
+      }
+    })
+
+    if (!rtom) {
+      return res.status(404).json({ error: "RTOM not found" })
+    }
+
+    // Get outlet IDs from assigned TeleshopManagers
+    const outletIds = rtom.teleshopManagers
+      .filter(tm => tm.branch && tm.branchId)
+      .map(tm => tm.branchId!)
+
+    if (outletIds.length === 0) {
+      return res.json({ 
+        feedback: [], 
+        stats: null, 
+        pagination: { totalPages: 0, currentPage: 1, totalItems: 0 }
+      })
+    }
+
+    const { page = "1", limit = "15", rating, startDate, endDate, outletId } = req.query
+    const pageNum = Math.max(1, parseInt(page as string))
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string)))
+    const skip = (pageNum - 1) * limitNum
+
+    const where: any = {
+      token: {
+        outletId: { in: outletIds }  // Access outletId through token relationship
+      }
+    }
+
+    if (rating) where.rating = parseInt(rating as string)
+    if (startDate && endDate) {
+      where.createdAt = {
+        gte: new Date(startDate as string),
+        lte: new Date(endDate as string)
+      }
+    }
+    if (outletId && outletIds.includes(outletId as string)) {
+      where.token.outletId = outletId as string  // Only if this outlet is assigned to RTOM
+    }
+
+    const [feedback, totalItems] = await Promise.all([
+      prisma.feedback.findMany({
+        where,
+        skip,
+        take: limitNum,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          customer: { select: { id: true, name: true, mobileNumber: true } },
+          token: {
+            include: {
+              outlet: { select: { id: true, name: true } },
+              officer: { select: { id: true, name: true } }
+            }
+          }
+        }
+      }),
+      prisma.feedback.count({ where })
+    ])
+
+    // Get rating distribution stats
+    const stats = await prisma.feedback.groupBy({
+      by: ['rating'],
+      where: {
+        token: {
+          outletId: { in: outletIds }
+        }
+      },
+      _count: { rating: true },
+      orderBy: { rating: 'asc' }
+    })
+
     res.json({ 
-      feedback: [], 
-      stats: null, 
-      pagination: { totalPages: 0, currentPage: 1, totalItems: 0 }
+      feedback,
+      stats: stats.map(stat => ({
+        rating: stat.rating,
+        count: stat._count.rating || 0
+      })),
+      pagination: { 
+        totalPages: Math.ceil(totalItems / limitNum),
+        currentPage: pageNum,
+        totalItems
+      }
     })
   } catch (error) {
     console.error("RTOM feedback error:", error)
@@ -307,6 +430,7 @@ router.get("/feedback", async (req, res) => {
 
 // Get teleshop managers under this RTOM
 router.get("/teleshop-managers", async (req, res) => {
+  console.log("=== RTOM TELESHOP MANAGERS ENDPOINT CALLED ===")
   try {
     let token = req.cookies?.dq_manager_jwt
     if (!token) {
@@ -336,6 +460,11 @@ router.get("/teleshop-managers", async (req, res) => {
       return res.status(404).json({ error: "RTOM not found" })
     }
     
+    console.log(`RTOM ${rtom.name} has ${rtom.teleshopManagers?.length || 0} teleshop managers:`)
+    rtom.teleshopManagers?.forEach(tm => {
+      console.log(`- TeleshopManager: ${tm.name} (${tm.mobileNumber}) → Branch: ${tm.branch?.name} (${tm.branch?.id})`)
+    })
+    
     res.json({ teleshopManagers: rtom.teleshopManagers || [] })
   } catch (error) {
     console.error("RTOM teleshop managers error:", error)
@@ -346,8 +475,73 @@ router.get("/teleshop-managers", async (req, res) => {
 // Get closure notices
 router.get("/closure-notices", async (req, res) => {
   try {
-    // For now, return empty notices - can be implemented later
-    res.json({ notices: [] })
+    // Check for JWT token from cookie or header
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+
+    if (!token) {
+      return res.status(401).json({ error: "RTOM authentication required" })
+    }
+
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch (e) {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    // Find RTOM and their assigned outlets through TeleshopManagers
+    const rtom = await prisma.rTOM.findFirst({
+      where: { mobileNumber: payload.mobileNumber },
+      include: { 
+        teleshopManagers: {
+          where: { isActive: true },
+          include: { branch: true }
+        }
+      }
+    })
+
+    if (!rtom) {
+      return res.status(404).json({ error: "RTOM not found" })
+    }
+
+    // Get outlet IDs from assigned TeleshopManagers
+    const outletIds = rtom.teleshopManagers
+      .filter(tm => tm.branch && tm.branchId)
+      .map(tm => tm.branchId!)
+
+    if (outletIds.length === 0) {
+      return res.json({ notices: [] })
+    }
+
+    const { outletId } = req.query
+    const where: any = {
+      outletId: outletId && outletIds.includes(outletId as string) 
+        ? (outletId as string) 
+        : { in: outletIds }  // Only notices from RTOM's assigned outlets
+    }
+
+    const notices = await prisma.closureNotice.findMany({
+      where,
+      include: {
+        outlet: { select: { id: true, name: true } }
+      },
+      orderBy: { createdAt: 'desc' }
+    })
+
+    // Also return the outlets this RTOM has access to
+    const outlets = await prisma.outlet.findMany({
+      where: { id: { in: outletIds } },
+      select: { id: true, name: true, location: true },
+      orderBy: { name: 'asc' }
+    })
+
+    res.json({ notices, outlets })
   } catch (error) {
     console.error("RTOM closure notices error:", error)
     res.status(500).json({ error: "Failed to fetch closure notices" })
@@ -569,30 +763,65 @@ router.post("/service-case/complete", async (req, res) => {
 
 // Get manager's region analytics
 router.get("/analytics", async (req, res) => {
+  console.log("=== RTOM ANALYTICS MAIN ENDPOINT CALLED ===")
   try {
-    const { managerId, email, startDate, endDate } = req.query
+    const { startDate, endDate } = req.query
+    console.log("RTOM Analytics Main: Request params:", { startDate, endDate })
+    console.log("RTOM Analytics Main: Headers:", req.headers.authorization ? "Bearer token present" : "Cookie auth")
+    console.log("RTOM Analytics Main: Full URL:", req.originalUrl)
 
-    // Find the manager's region
-    let region
-    if (managerId) {
-      region = await prisma.region.findFirst({
-        where: { managerId: managerId as string },
-        include: { outlets: true }
-      })
-    } else if (email) {
-      region = await prisma.region.findFirst({
-        where: { managerEmail: email as string },
-        include: { outlets: true }
-      })
-    } else {
-      return res.status(400).json({ error: "Manager ID or email is required" })
+    // Check for JWT token from cookie or header
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
     }
 
-    if (!region) {
-      return res.status(404).json({ error: "Manager not found" })
+    if (!token) {
+      return res.status(401).json({ error: "RTOM authentication required" })
     }
 
-    const outletIds = region.outlets.map(outlet => outlet.id)
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch (e) {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    // Find RTOM and their assigned outlets through TeleshopManagers
+    const rtom = await prisma.rTOM.findFirst({
+      where: { mobileNumber: payload.mobileNumber },
+      include: { 
+        region: true,  // Add region include
+        teleshopManagers: {
+          where: { isActive: true },
+          include: { branch: true }
+        }
+      }
+    })
+
+    if (!rtom) {
+      return res.status(404).json({ error: "RTOM not found" })
+    }
+
+    // Get outlet IDs from assigned TeleshopManagers
+    const outletIds = rtom.teleshopManagers
+      .filter(tm => tm.branch && tm.branchId)
+      .map(tm => tm.branchId!)
+
+    if (outletIds.length === 0) {
+      return res.json({
+        totalTokens: 0,
+        avgWaitTime: 0,
+        avgServiceTime: 0,
+        customerSatisfaction: 0,
+        outlets: [],
+        hourlyData: [],
+        ratingDistribution: []
+      })
+    }
 
     const where: any = {
       status: "completed",
@@ -653,14 +882,18 @@ router.get("/analytics", async (req, res) => {
       }
     })
 
+    const outletData = rtom.teleshopManagers.filter(tm => tm.branch).map(tm => tm.branch)
+    console.log(`RTOM Analytics Response: RTOM ${rtom.name} has ${outletData.length} outlets:`, outletData.map(o => `${o.name} (${o.id})`))
+    
     res.json({
-      regionName: region.name,
+      rtomName: rtom.name,
+      regionName: rtom.region?.name || "No Region Assigned",
       totalTokens,
       avgWaitTime: Math.round(avgWaitTime * 10) / 10,
       avgServiceTime: Math.round(avgServiceTime * 10) / 10,
       feedbackStats,
-      outletsCount: region.outlets.length,
-      outlets: region.outlets
+      outletsCount: outletIds.length,
+      outlets: outletData
     })
   } catch (error) {
     console.error("Manager analytics error:", error)
@@ -697,24 +930,51 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
     // Find RTOM using mobile number from JWT token
     const rtom = await prisma.rTOM.findFirst({
       where: { mobileNumber: payload.mobileNumber },
-      include: { region: true }
+      include: { 
+        region: true,
+        teleshopManagers: {
+          where: { isActive: true },
+          include: { branch: true }
+        }
+      }
     })
 
     if (!rtom || !rtom.region) {
       return res.status(404).json({ error: "RTOM not found or not assigned to region" })
     }
 
-    // Verify the outlet belongs to this RTOM's region
-    const outlet = await prisma.outlet.findFirst({
+    // Get outlets this RTOM has access to
+    const accessibleOutlets = rtom.teleshopManagers
+      .filter(tm => tm.branch && tm.branchId)
+      .map(tm => tm.branchId!)
+    
+    console.log(`RTOM Analytics Request: RTOM ${rtom.name} requesting outlet ${outletId}`)
+    console.log(`RTOM ${rtom.name} has access to outlets:`, accessibleOutlets)
+    console.log(`Requested outlet ${outletId} is ${accessibleOutlets.includes(outletId) ? 'ALLOWED' : 'FORBIDDEN'}`)
+
+    // Verify the outlet is assigned to this RTOM through TeleshopManagers
+    const teleshopManager = await prisma.teleshopManager.findFirst({
       where: {
-        id: outletId,
-        regionId: rtom.region.id,
+        rtomId: rtom.id,
+        branchId: outletId,
         isActive: true
+      },
+      include: {
+        branch: true
       }
     })
 
-    if (!outlet) {
-      return res.status(403).json({ error: "Outlet not found in your region" })
+    if (!teleshopManager || !teleshopManager.branch) {
+      console.log(`RTOM Analytics 403: No TeleshopManager found for RTOM ${rtom.id} and outlet ${outletId}`)
+      // Return empty data instead of 403 to prevent frontend errors
+      return res.json({
+        totalTokens: 0,
+        avgWaitTime: 0,
+        avgServiceTime: 0,
+        customerSatisfaction: 0,
+        hourlyData: [],
+        ratingDistribution: []
+      })
     }
 
     const where: any = {
@@ -795,8 +1055,8 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
       officer.status === 'available' || officer.status === 'online'
     ).length || 0
 
-    // Get teleshop manager
-    const teleshopManager = outletDetails?.teleshopManagers?.[0] || null
+    // Get teleshop manager for outlet
+    const assignedTeleshopManager = outletDetails?.teleshopManagers?.[0] || null
 
     // Calculate officer-specific performance metrics
     const officerPerformance = await Promise.all(outletDetails?.officers.map(async (officer: any) => {
@@ -844,8 +1104,8 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
     }) || [])
 
     res.json({
-      outletId: outlet.id,
-      outletName: outlet.name,
+      outletId: teleshopManager.branch.id,
+      outletName: teleshopManager.branch.name,
       totalCustomers: totalTokens, // Frontend expects this name
       totalTokens,
       avgWaitTime: Math.round(avgWaitTime * 10) / 10,
@@ -886,11 +1146,11 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
         count: stat._count
       })),
       officers: officerPerformance,
-      teleshopManager: teleshopManager ? {
-        id: teleshopManager.id,
-        name: teleshopManager.name,
-        email: teleshopManager.email,
-        mobileNumber: teleshopManager.mobileNumber
+      teleshopManager: assignedTeleshopManager ? {
+        id: assignedTeleshopManager.id,
+        name: assignedTeleshopManager.name,
+        email: assignedTeleshopManager.email,
+        mobileNumber: assignedTeleshopManager.mobileNumber
       } : null,
       alerts: feedbackStats.filter(stat => stat.rating <= 2).reduce((sum, stat) => sum + stat._count, 0)
     })
@@ -1738,67 +1998,71 @@ router.get("/outlets", async (req, res) => {
 
     // Find RTOM using mobile number from JWT token
     const rtom = await prisma.rTOM.findFirst({
-      where: { mobileNumber: payload.mobileNumber },
-      include: { region: true }
+      where: { mobileNumber: payload.phone || payload.mobileNumber },
+      include: { 
+        region: true,
+        dgm: {  // Include DGM to get provinceId
+          select: { provinceId: true }
+        }
+      }
     })
 
-    console.log('Found RTOM:', rtom ? {name: rtom.name, mobile: rtom.mobileNumber, regionId: rtom.regionId} : 'null');
+    console.log('Found RTOM:', rtom ? {name: rtom.name, mobile: rtom.mobileNumber, regionId: rtom.regionId, provinceId: rtom.dgm?.provinceId} : 'null');
 
     if (!rtom || !rtom.region) {
       console.log('RTOM not found or not assigned to region');
       return res.status(404).json({ error: "RTOM not found or not assigned to region" })
     }
 
-    console.log(`Fetching outlets for RTOM: ${rtom.name} (${rtom.mobileNumber}) in region: ${rtom.region.name} (ID: ${rtom.region.id})`)
+    const provinceId = rtom.dgm?.provinceId
+    if (!provinceId) {
+      console.log('RTOM DGM has no provinceId assigned');
+      return res.status(403).json({ error: "RTOM province assignment not found" })
+    }
 
-    const outlets = await prisma.outlet.findMany({
+    console.log(`Fetching outlets for RTOM: ${rtom.name} (${rtom.mobileNumber})`)
+
+    // Get outlets that this RTOM manages through TeleshopManagers
+    const teleshopManagers = await prisma.teleshopManager.findMany({
       where: {
-        regionId: rtom.region.id,
+        rtomId: rtom.id,
         isActive: true,
+        branchId: { not: null }  // Only TeleshopManagers assigned to outlets
       },
       include: {
-        officers: {
-          select: {
-            id: true,
-            name: true,
-            status: true,
-            counterNumber: true
-          }
-        },
-        teleshopManagers: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            mobileNumber: true
-          }
-        },
-        _count: {
-          select: {
-            tokens: {
-              where: {
-                createdAt: {
-                  gte: new Date(new Date().setHours(0, 0, 0, 0))
-                }
+        branch: {
+          include: {
+            officers: {
+              select: {
+                id: true,
+                name: true,
+                status: true,
+                counterNumber: true,
+                isTraining: true
+              }
+            },
+            region: { select: { name: true } },
+            _count: {
+              select: {
+                tokens: { where: { status: { in: ["waiting", "inProgress"] } } }
               }
             }
           }
         }
-      },
-      orderBy: {
-        name: 'asc'
       }
     })
 
-    console.log(`Found ${outlets.length} outlets in region ${rtom.region.name}`)
+    // Extract outlets from TeleshopManagers
+    const outlets = teleshopManagers
+      .filter(tm => tm.branch)
+      .map(tm => ({
+        ...tm.branch,
+        teleshopManagerId: tm.id,
+        teleshopManagerName: tm.name
+      }))
+    console.log(`Found ${outlets.length} outlets assigned to RTOM ${rtom.name}`)
 
-    // Transform the response to match frontend expectations
-    const outletData = outlets.map(outlet => ({
-      ...outlet,
-      teleshopManager: outlet.teleshopManagers?.[0] || null // Convert array to single object
-    }))
-
-    res.json(outletData)
+    res.json(outlets)
   } catch (error) {
     console.error("Get outlets error:", error)
     res.status(500).json({ error: "Failed to get outlets" })
@@ -2084,6 +2348,35 @@ router.delete("/outlets/:outletId/hard", async (req, res) => {
 // Get break analytics for all officers in manager's outlets
 router.get("/analytics/breaks/:regionId", async (req, res) => {
   try {
+    // Check for JWT token from cookie or header
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+
+    let rtom = null
+    if (token) {
+      try {
+        const payload = (jwt as any).verify(token, JWT_SECRET)
+        // Find RTOM using mobile number from JWT token
+        rtom = await prisma.rTOM.findFirst({
+          where: { mobileNumber: payload.phone || payload.mobileNumber },
+          include: { 
+            teleshopManagers: {
+              where: { isActive: true, branchId: { not: null } },
+              include: { branch: true }
+            }
+          }
+        })
+        console.log(`RTOM Break Analytics: ${rtom?.name || 'Unknown'} requesting break data`)
+      } catch (e) {
+        console.log("JWT verification failed for break analytics, falling back to region-wide access")
+      }
+    }
+
     const { regionId } = req.params
     const { timeframe = 'today' } = req.query
 
@@ -2110,25 +2403,55 @@ router.get("/analytics/breaks/:regionId", async (req, res) => {
         break
     }
 
-    // Get all outlets in the region
-    const outlets = await prisma.outlet.findMany({
-      where: { regionId },
-      include: {
-        officers: {
-          include: {
-            BreakLog: {
-              where: {
-                startedAt: {
-                  gte: startDate,
-                  lte: endDate
-                }
-              },
-              orderBy: { startedAt: 'desc' }
+    let outlets = []
+    
+    if (rtom && rtom.teleshopManagers.length > 0) {
+      // RTOM access control: Only get outlets assigned through TeleshopManagers
+      const outletIds = rtom.teleshopManagers
+        .filter(tm => tm.branch && tm.branchId)
+        .map(tm => tm.branchId!)
+
+      console.log(`RTOM ${rtom.name} has access to outlets: ${outletIds}`)
+
+      outlets = await prisma.outlet.findMany({
+        where: { id: { in: outletIds } },
+        include: {
+          officers: {
+            include: {
+              BreakLog: {
+                where: {
+                  startedAt: {
+                    gte: startDate,
+                    lte: endDate
+                  }
+                },
+                orderBy: { startedAt: 'desc' }
+              }
             }
           }
         }
-      }
-    })
+      })
+    } else {
+      // GM/Admin access: Get all outlets in the region (fallback for non-RTOM users)
+      outlets = await prisma.outlet.findMany({
+        where: { regionId },
+        include: {
+          officers: {
+            include: {
+              BreakLog: {
+                where: {
+                  startedAt: {
+                    gte: startDate,
+                    lte: endDate
+                  }
+                },
+                orderBy: { startedAt: 'desc' }
+              }
+            }
+          }
+        }
+      })
+    }
 
     // Aggregate break data
     const breakAnalytics = outlets.map(outlet => {
@@ -3058,39 +3381,8 @@ function getManagerPayload(req: any): any | null {
   }
 }
 
-// List closure notices for outlets in RTOM's region (?outletId= optional filter)
-router.get("/closure-notices", async (req, res) => {
-  try {
-    const payload = getManagerPayload(req)
-    if (!payload) return res.status(401).json({ error: "RTOM authentication required" })
-
-    const region = await prisma.region.findFirst({
-      where: payload.mobileNumber ? { managerMobile: payload.mobileNumber } : { managerEmail: payload.email },
-      include: { outlets: true }
-    })
-    if (!region) return res.status(404).json({ error: "Manager not found" })
-
-    const outletIds = region.outlets.map((o: any) => o.id)
-    const { outletId } = req.query
-
-    const where: any = {
-      outletId: outletId ? String(outletId) : { in: outletIds }
-    }
-    if (outletId && !outletIds.includes(String(outletId))) {
-      return res.status(403).json({ error: "Outlet not in your region" })
-    }
-
-    const notices = await (prisma as any).closureNotice.findMany({
-      where,
-      include: { outlet: { select: { id: true, name: true } } },
-      orderBy: { startsAt: "asc" }
-    })
-    res.json({ success: true, notices, outlets: region.outlets })
-  } catch (error) {
-    console.error("RTOM get closure notices error:", error)
-    res.status(500).json({ error: "Failed to fetch closure notices" })
-  }
-})
+// List closure notices for outlets assigned to RTOM through TeleshopManagers (?outletId= optional filter)
+// NOTE: This endpoint is handled by the first /closure-notices route above
 
 // Create a closure notice (RTOM can pick any outlet in region)
 router.post("/closure-notices", async (req, res) => {

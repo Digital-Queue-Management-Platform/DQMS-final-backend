@@ -679,10 +679,11 @@ server.listen(PORT, "0.0.0.0", () => {
     if (!(global as any).recentAudioEvents) return
     
     const now = new Date().getTime()
-    const beforeCount = (global as any).recentAudioEvents.length
+    const recentEvents = (global as any).recentAudioEvents || []
+    const beforeCount = recentEvents.length
     
     // Remove events older than 2 minutes (performance optimization)
-    (global as any).recentAudioEvents = (global as any).recentAudioEvents.filter((event: any) => {
+    (global as any).recentAudioEvents = recentEvents.filter((event: any) => {
       const eventTime = new Date(event.timestamp).getTime()
       return (now - eventTime) < 120000 // 2 minutes
     })

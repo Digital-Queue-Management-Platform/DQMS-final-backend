@@ -9,7 +9,7 @@ import otpService from "../services/otpService"
 const router = Router()
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 
-function verifyDGMToken(req: any): { dgmId: string } | null {
+function verifyDGMToken(req: any): { dgmId: string; provinceId?: string } | null {
     let token = req.cookies?.dq_dgm_jwt
     if (!token) {
         const authHeader = req.headers.authorization
@@ -19,7 +19,7 @@ function verifyDGMToken(req: any): { dgmId: string } | null {
     try {
         const payload: any = (jwt as any).verify(token, JWT_SECRET)
         if (!payload.dgmId) return null
-        return { dgmId: payload.dgmId }
+        return { dgmId: payload.dgmId, provinceId: payload.provinceId }
     } catch { return null }
 }
 
@@ -54,10 +54,17 @@ router.post("/login", async (req, res) => {
         const verifyResult = await otpService.verifyOTP(mobileNumber, otpCode, 'dgm')
         if (!verifyResult.success) return res.status(401).json({ error: verifyResult.message })
 
-        const dgm = await (prisma as any).dGM.findFirst({ where: { mobileNumber, isActive: true } })
+        const dgm = await (prisma as any).dGM.findFirst({ 
+            where: { mobileNumber, isActive: true },
+            include: { province: true }
+        })
         if (!dgm) return res.status(401).json({ error: "DGM not found with this mobile number" })
 
-        const token = (jwt as any).sign({ dgmId: dgm.id, mobileNumber: dgm.mobileNumber }, JWT_SECRET)
+        const token = (jwt as any).sign({ 
+            dgmId: dgm.id, 
+            mobileNumber: dgm.mobileNumber,
+            provinceId: dgm.provinceId  // Add provinceId to JWT token
+        }, JWT_SECRET)
         res.cookie("dq_dgm_jwt", token, { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", path: "/" })
         await (prisma as any).dGM.update({ where: { id: dgm.id }, data: { lastLoginAt: new Date() } })
 
@@ -75,38 +82,75 @@ router.post("/logout", (req, res) => {
 })
 
 // GET /me - DGM profile with assigned regions
+// GET /me - DGM profile (province-specific)
 router.get("/me", async (req, res) => {
     try {
         const auth = verifyDGMToken(req)
         if (!auth) return res.status(401).json({ error: "DGM authentication required" })
 
-        const dgm = await (prisma as any).dGM.findUnique({ where: { id: auth.dgmId } })
+        const dgm = await (prisma as any).dGM.findUnique({ 
+            where: { id: auth.dgmId },
+            include: { province: true }
+        })
         if (!dgm) return res.status(404).json({ error: "DGM not found" })
 
-        const regions = await prisma.region.findMany({
-            where: { id: { in: dgm.regionIds } },
-            include: {
-                outlets: { include: { _count: { select: { officers: true, tokens: true } } } }
+        if (!dgm.provinceId) {
+            return res.status(404).json({ error: "DGM province not assigned" })
+        }
+
+        // Get outlets only in DGM's province (not entire regions)
+        const outlets = await prisma.outlet.findMany({
+            where: { provinceId: dgm.provinceId },
+            include: { 
+                _count: { select: { officers: true, tokens: true } },
+                region: { select: { name: true } }
             }
         })
 
-        res.json({ dgm: { id: dgm.id, name: dgm.name, email: dgm.email, mobileNumber: dgm.mobileNumber, gmId: dgm.gmId, regionIds: dgm.regionIds, regions } })
+        // Count RTOMs under this DGM in the province
+        const rtomCount = await (prisma as any).rTOM.count({ where: { dgmId: dgm.id } })
+
+        res.json({ 
+            dgm: { 
+                id: dgm.id, 
+                name: dgm.name, 
+                email: dgm.email, 
+                mobileNumber: dgm.mobileNumber, 
+                gmId: dgm.gmId, 
+                provinceId: dgm.provinceId,
+                provinceName: dgm.province?.name || "No Province Assigned",
+                outlets,
+                rtomCount,
+                outletCount: outlets.length
+            } 
+        })
     } catch (err) {
         console.error("DGM /me error:", err)
         res.status(500).json({ error: "Failed to fetch DGM profile" })
     }
 })
 
-// GET /feedback - feedbacks for all outlets in DGM's regions
+// GET /feedback - feedbacks for outlets in DGM's province only
 router.get("/feedback", async (req, res) => {
     try {
         const auth = verifyDGMToken(req)
         if (!auth) return res.status(401).json({ error: "DGM authentication required" })
 
-        const dgm = await (prisma as any).dGM.findUnique({ where: { id: auth.dgmId } })
-        if (!dgm) return res.status(404).json({ error: "DGM not found" })
+        // Get DGM with province information to enforce province-based access
+        const dgm = await (prisma as any).dGM.findUnique({
+            where: { id: auth.dgmId },
+            include: { province: true }
+        })
 
-        const outlets = await prisma.outlet.findMany({ where: { regionId: { in: dgm.regionIds } }, select: { id: true } })
+        if (!dgm || !dgm.provinceId) {
+            return res.status(404).json({ error: "DGM province not found" })
+        }
+
+        // Get outlets only in DGM's province
+        const outlets = await prisma.outlet.findMany({ 
+            where: { provinceId: dgm.provinceId }, 
+            select: { id: true } 
+        })
         const allOutletIds = outlets.map((o: any) => o.id)
 
         const { page = "1", limit = "15", rating, startDate, endDate, outletId } = req.query
@@ -115,11 +159,23 @@ router.get("/feedback", async (req, res) => {
         const skip = (pageNum - 1) * limitNum
 
         let scopedOutletIds = allOutletIds
-        if (outletId && allOutletIds.includes(outletId as string)) scopedOutletIds = [outletId as string]
+        if (outletId) {
+            // Validate outlet belongs to DGM's province
+            if (!allOutletIds.includes(outletId as string)) {
+                return res.status(403).json({ error: "Access denied: Outlet not in your province" })
+            }
+            scopedOutletIds = [outletId as string]
+        }
 
         const where: any = { token: { outletId: { in: scopedOutletIds } } }
         if (rating && rating !== "") where.rating = parseInt(rating as string)
         if (startDate && endDate) where.createdAt = { gte: new Date(startDate as string), lte: new Date(endDate as string) }
+
+        console.log('DGM Feedback Query:', { 
+            dgmProvince: dgm.province.name, 
+            outletsCount: allOutletIds.length,
+            requestedOutlet: outletId || 'all'
+        })
 
         const [feedbacks, total] = await Promise.all([
             prisma.feedback.findMany({
@@ -140,22 +196,36 @@ router.get("/feedback", async (req, res) => {
     }
 })
 
-// GET /closure-notices - notices for all outlets in DGM's regions
+// GET /closure-notices - notices for outlets in DGM's province only
 router.get("/closure-notices", async (req, res) => {
     try {
         const auth = verifyDGMToken(req)
         if (!auth) return res.status(401).json({ error: "DGM authentication required" })
 
-        const dgm = await (prisma as any).dGM.findUnique({ where: { id: auth.dgmId } })
-        if (!dgm) return res.status(404).json({ error: "DGM not found" })
+        // Get DGM with province information to enforce province-based access
+        const dgm = await (prisma as any).dGM.findUnique({
+            where: { id: auth.dgmId },
+            include: { province: true }
+        })
 
-        const outlets = await prisma.outlet.findMany({ where: { regionId: { in: dgm.regionIds } }, select: { id: true } })
-        const outletIds = outlets.map((o: any) => o.id)
+        if (!dgm || !dgm.provinceId) {
+            return res.status(404).json({ error: "DGM province not found" })
+        }
 
+        // Get closure notices only for outlets in DGM's province
         const notices = await (prisma as any).closureNotice.findMany({
-            where: { outletId: { in: outletIds } },
-            include: { outlet: { select: { name: true, region: { select: { name: true } } } } },
+            where: {
+                outlet: {
+                    provinceId: dgm.provinceId
+                }
+            },
+            include: { outlet: { select: { name: true, region: { select: { name: true } }, province: { select: { name: true } } } } },
             orderBy: { createdAt: "desc" }
+        })
+
+        console.log('DGM Closure Notices:', { 
+            dgmProvince: dgm.province.name, 
+            noticesCount: notices.length 
         })
 
         res.json({ notices })
@@ -268,26 +338,116 @@ router.get("/rtoms", async (req, res) => {
         const auth = verifyDGMToken(req)
         if (!auth) return res.status(401).json({ error: "DGM authentication required" })
 
-        const dgm = await (prisma as any).dGM.findUnique({ where: { id: auth.dgmId } })
-        if (!dgm) return res.status(404).json({ error: "DGM not found" })
+        // Get DGM with province information to enforce province-based access
+        const dgm = await (prisma as any).dGM.findUnique({
+            where: { id: auth.dgmId },
+            include: { province: true }
+        })
 
-        // Get regions assigned to this DGM
-        const regions = await prisma.region.findMany({
-            where: { id: { in: dgm.regionIds } },
+        if (!dgm || !dgm.provinceId) {
+            return res.status(404).json({ error: "DGM province not found" })
+        }
+
+        // Get RTOMs only in DGM's province
+        // Since DGM is assigned to a province, get the region that contains this province
+        // Then find RTOMs in that region assigned to this DGM
+        const province = await prisma.province.findUnique({
+            where: { id: dgm.provinceId },
+            select: { regionId: true }
+        })
+
+        if (!province) {
+            console.log('Province not found for DGM')
+            return res.json({ success: true, rtoms: [] })
+        }
+
+        console.log('DGM RTOMs Query:', { 
+            dgmProvince: dgm.province.name, 
+            regionId: province.regionId
+        })
+
+        const rtoms = await (prisma as any).rTOM.findMany({
+            where: { 
+                dgmId: auth.dgmId,
+                regionId: province.regionId
+            },
             include: {
-                rtoms: {
-                    where: { dgmId: auth.dgmId }, // Only RTOMs assigned to this DGM
-                    include: {
-                        teleshopManagers: {
+                region: {
+                    select: {
+                        id: true,
+                        name: true,
+                        outlets: {
                             select: {
                                 id: true,
                                 name: true,
-                                mobileNumber: true,
                                 isActive: true
                             }
                         }
                     }
                 },
+                teleshopManagers: {
+                    select: {
+                        id: true,
+                        name: true,
+                        mobileNumber: true,
+                        isActive: true,
+                        branchId: true,
+                        branch: {
+                            select: {
+                                id: true,
+                                name: true,
+                                isActive: true
+                            }
+                        }
+                    }
+                }
+            }
+        })
+
+        console.log('DGM RTOMs:', { 
+            dgmProvince: dgm.province.name, 
+            rtomsCount: rtoms.length 
+        })
+
+        res.json({ success: true, rtoms })
+    } catch (error) {
+        console.error("Error fetching DGM RTOMs:", error)
+        res.status(500).json({ error: "Failed to fetch RTOMs" })
+    }
+})
+
+// GET /regions - Get regions available for RTOM assignment in DGM's province
+router.get("/regions", async (req, res) => {
+    try {
+        const auth = verifyDGMToken(req)
+        if (!auth) return res.status(401).json({ error: "DGM authentication required" })
+
+        // Get DGM with province information
+        const dgm = await (prisma as any).dGM.findUnique({
+            where: { id: auth.dgmId },
+            include: { province: true }
+        })
+
+        if (!dgm || !dgm.provinceId) {
+            return res.status(404).json({ error: "DGM province not found" })
+        }
+
+        // Get the province to find its region
+        const province = await prisma.province.findUnique({
+            where: { id: dgm.provinceId },
+            select: { regionId: true }
+        })
+
+        if (!province) {
+            return res.status(404).json({ error: "Province not found" })
+        }
+
+        // Get the region that contains this province
+        const region = await prisma.region.findUnique({
+            where: { id: province.regionId },
+            select: {
+                id: true,
+                name: true,
                 outlets: {
                     select: {
                         id: true,
@@ -298,38 +458,32 @@ router.get("/rtoms", async (req, res) => {
             }
         })
 
-        // Transform to properly support multiple RTOMs per DGM
-        const transformedRegions = regions.map(region => ({
-            id: region.id,
-            name: region.name,
-            outlets: region.outlets,
-            rtoms: region.rtoms.map(rtom => ({
-                id: rtom.id,
-                name: rtom.name,
-                email: rtom.email,
-                mobileNumber: rtom.mobileNumber,
-                isActive: rtom.isActive,
-                lastLoginAt: rtom.lastLoginAt,
-                createdAt: rtom.createdAt,
-                teleshopManagers: rtom.teleshopManagers
-            }))
-        }))
+        if (!region) {
+            return res.status(404).json({ error: "Region not found" })
+        }
 
-        res.json({ success: true, regions: transformedRegions })
-    } catch (err) {
-        console.error("DGM list RTOMs error:", err)
-        res.status(500).json({ error: "Failed to fetch RTOMs" })
+        res.json({ success: true, regions: [region] })
+    } catch (error) {
+        console.error("Error fetching DGM regions:", error)
+        res.status(500).json({ error: "Failed to fetch regions" })
     }
 })
 
-// POST /rtoms - create/assign an RTOM to one of DGM's regions (updated for new hierarchy)
+// POST /rtoms - create/assign an RTOM to one of DGM's regions (updated for province-based hierarchy)
 router.post("/rtoms", async (req, res) => {
     try {
         const auth = verifyDGMToken(req)
         if (!auth) return res.status(401).json({ error: "DGM authentication required" })
 
-        const dgm = await (prisma as any).dGM.findUnique({ where: { id: auth.dgmId } })
-        if (!dgm) return res.status(404).json({ error: "DGM not found" })
+        // Get DGM with province information to enforce province-based access
+        const dgm = await (prisma as any).dGM.findUnique({
+            where: { id: auth.dgmId },
+            include: { province: true }
+        })
+
+        if (!dgm || !dgm.provinceId) {
+            return res.status(404).json({ error: "DGM province not found" })
+        }
 
         const { regionId, name, mobileNumber, email } = req.body
         if (!regionId || !name || !mobileNumber) return res.status(400).json({ error: "regionId, name, and mobileNumber are required" })
@@ -337,7 +491,16 @@ router.post("/rtoms", async (req, res) => {
         if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
         if (email && !isValidEmail(email)) return res.status(400).json({ error: "Invalid email address format" })
 
-        if (!dgm.regionIds.includes(regionId)) return res.status(403).json({ error: "Region not assigned to you" })
+        // Validate region belongs to DGM's province
+        // Check if the provided regionId is the same as the region that contains the DGM's province
+        const dgmProvince = await prisma.province.findUnique({
+            where: { id: dgm.provinceId },
+            select: { regionId: true }
+        })
+
+        if (!dgmProvince || dgmProvince.regionId !== regionId) {
+            return res.status(403).json({ error: "Region not in your assigned province" })
+        }
 
         // Check mobile not already in use by another RTOM
         const existing = await prisma.rTOM.findUnique({ where: { mobileNumber } })
@@ -450,23 +613,30 @@ router.delete("/rtoms/:regionId", async (req, res) => {
     }
 })
 
-// GET /analytics - Analytics for DGMs (region-scoped access)
+// GET /analytics - Analytics for DGMs (province-scoped access)
 router.get("/analytics", async (req, res) => {
     try {
         const auth = verifyDGMToken(req)
         if (!auth) return res.status(401).json({ error: "DGM authentication required" })
 
-        const dgm = await (prisma as any).dGM.findUnique({ where: { id: auth.dgmId } })
-        if (!dgm) return res.status(404).json({ error: "DGM not found" })
+        // Get DGM with province information to enforce province-based access
+        const dgm = await (prisma as any).dGM.findUnique({
+            where: { id: auth.dgmId },
+            include: { province: true }
+        })
+
+        if (!dgm || !dgm.provinceId) {
+            return res.status(404).json({ error: "DGM province not found" })
+        }
 
         const { startDate, endDate, outletId } = req.query
-        console.log('DGM Analytics request:', { startDate, endDate, outletId })
+        console.log('DGM Analytics request:', { startDate, endDate, outletId, province: dgm.province.name })
 
-        // Verify DGM has access to this outlet (must be in their regions)
+        // Verify DGM has access to this outlet (must be in their province)
         if (outletId) {
-            const outlet = await prisma.outlet.findUnique({ where: { id: outletId as string }, select: { regionId: true } })
-            if (!outlet || !dgm.regionIds.includes(outlet.regionId)) {
-                return res.status(403).json({ error: "Access denied to this outlet" })
+            const outlet = await prisma.outlet.findUnique({ where: { id: outletId as string }, select: { provinceId: true } })
+            if (!outlet || outlet.provinceId !== dgm.provinceId) {
+                return res.status(403).json({ error: "Access denied: Outlet not in your province" })
             }
         }
 
@@ -480,6 +650,13 @@ router.get("/analytics", async (req, res) => {
 
         if (outletId) {
             where.outletId = outletId
+        } else {
+            // Filter by province - get all outlets in DGM's province
+            const provinceOutlets = await prisma.outlet.findMany({
+                where: { provinceId: dgm.provinceId },
+                select: { id: true }
+            })
+            where.outletId = { in: provinceOutlets.map(o => o.id) }
         }
 
         console.log('DGM Query where clause:', where)
