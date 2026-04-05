@@ -676,7 +676,7 @@ server.listen(PORT, "0.0.0.0", () => {
 
   // Audio event cleanup and optimization service
   setInterval(() => {
-    if (!(global as any).recentAudioEvents) return
+    if (!(global as any).recentAudioEvents || !Array.isArray((global as any).recentAudioEvents)) return
     
     const now = new Date().getTime()
     const beforeCount = (global as any).recentAudioEvents.length

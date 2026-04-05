@@ -3,8 +3,36 @@ import { prisma, broadcast } from "../server"
 import * as jwt from "jsonwebtoken"
 import smsHelper from "../utils/smsHelper"
 import { getLastDailyReset } from "../utils/resetWindow"
+import * as crypto from "crypto"
 
 const router = Router()
+
+// In-memory store for idempotency keys (use Redis in production)
+const idempotencyStore = new Map<string, { appointmentId: string; timestamp: number }>()
+const IDEMPOTENCY_TTL = 10 * 60 * 1000 // 10 minutes
+
+// Clean up expired idempotency keys
+setInterval(() => {
+  const now = Date.now()
+  for (const [key, value] of idempotencyStore.entries()) {
+    if (now - value.timestamp > IDEMPOTENCY_TTL) {
+      idempotencyStore.delete(key)
+    }
+  }
+}, 5 * 60 * 1000) // Clean every 5 minutes
+
+// Generate idempotency key from request data
+function generateIdempotencyKey(data: any): string {
+  const keyData = {
+    name: data.name,
+    mobileNumber: data.mobileNumber,
+    outletId: data.outletId,
+    serviceTypes: data.serviceTypes?.sort(), // Sort to handle array order differences
+    appointmentAt: data.appointmentAt,
+    sltTelephoneNumbers: data.sltTelephoneNumbers?.sort()
+  }
+  return crypto.createHash('sha256').update(JSON.stringify(keyData)).digest('hex')
+}
 
 // Reuse OTP JWT for booking verification (resolved at request time for safety)
 const getOtpJwtSecret = () => process.env.OTP_JWT_SECRET || "otp-dev-secret"
@@ -45,6 +73,25 @@ router.post("/book", async (req, res) => {
 
     if (!name || !mobileNumber || !outletId || !Array.isArray(serviceTypes) || serviceTypes.length === 0 || !appointmentAt) {
       return res.status(400).json({ error: "Missing required fields" })
+    }
+
+    // Generate idempotency key to prevent duplicate requests
+    const idempotencyKey = generateIdempotencyKey(req.body)
+    const existingRequest = idempotencyStore.get(idempotencyKey)
+    
+    if (existingRequest) {
+      // Return the existing appointment instead of creating a new one
+      const existingAppointment = await prisma.appointment.findUnique({
+        where: { id: existingRequest.appointmentId }
+      })
+      
+      if (existingAppointment) {
+        return res.json({ 
+          success: true, 
+          appointment: existingAppointment,
+          message: "Duplicate request detected, returning existing appointment"
+        })
+      }
     }
 
     // Handle both single and multiple telephone numbers for backward compatibility
@@ -124,6 +171,29 @@ router.post("/book", async (req, res) => {
       if (appointmentDate.getTime() < Date.now()) {
         return res.status(400).json({ error: "Appointments cannot be booked in the past" })
       }
+    }
+
+    // Check for existing appointment to prevent duplicates
+    const appointmentDate = new Date(appointmentAt)
+    const existingAppointment = await prisma.appointment.findFirst({
+      where: {
+        mobileNumber,
+        outletId,
+        appointmentAt: appointmentDate,
+        status: { in: ['booked', 'queued'] } // Only check active appointments
+      }
+    })
+
+    if (existingAppointment) {
+      return res.status(409).json({ 
+        error: "An appointment already exists for this mobile number, outlet, and time",
+        existingAppointment: {
+          id: existingAppointment.id,
+          name: existingAppointment.name,
+          appointmentAt: existingAppointment.appointmentAt,
+          status: existingAppointment.status
+        }
+      })
     }
 
     // Create appointment (keep as 'booked' initially, will be queued based on time)
@@ -225,6 +295,12 @@ router.post("/book", async (req, res) => {
     } catch (e) {
       console.error('Appointment SMS send failed:', e)
     }
+
+    // Store idempotency key for this successful request
+    idempotencyStore.set(idempotencyKey, {
+      appointmentId: appt.id,
+      timestamp: Date.now()
+    })
 
     res.json({ success: true, appointment: appt })
   } catch (error) {
@@ -939,6 +1015,106 @@ router.post("/debug/reset-appointments", async (req, res) => {
   } catch (error) {
     console.error("Debug reset appointments error:", error)
     res.status(500).json({ error: "Reset failed", details: (error as Error).message })
+  }
+})
+
+// Manual queue appointment (for troubleshooting or immediate queueing)
+router.post("/:apptId/queue-now", async (req, res) => {
+  try {
+    const { apptId } = req.params
+
+    // Find the appointment
+    const appt = await prisma.appointment.findUnique({
+      where: { id: apptId },
+      include: {
+        outlet: true
+      }
+    })
+
+    if (!appt) {
+      return res.status(404).json({ error: "Appointment not found" })
+    }
+
+    if (appt.status !== 'booked') {
+      return res.status(400).json({ error: `Appointment is ${appt.status}, can only queue 'booked' appointments` })
+    }
+
+    // Check if appointment already has a token
+    if (appt.tokenId) {
+      return res.status(400).json({ error: "Appointment already queued with token" })
+    }
+
+    // Use the same logic as the automatic processor
+    const result = await addAppointmentToQueue(appt)
+    
+    res.json({ 
+      success: true, 
+      message: "Appointment queued successfully",
+      appointment: appt,
+      tokenId: result.id
+    })
+    
+  } catch (error) {
+    console.error("Manual queue appointment error:", error)
+    res.status(500).json({ error: "Failed to queue appointment" })
+  }
+})
+
+// Get all booked appointments that should be queued (for debugging)
+router.get("/debug/pending-queue", async (req, res) => {
+  try {
+    const now = new Date()
+    
+    // Check both the automatic processor window (15 min) and manual processor window (2 hours)
+    const autoQueueTime = new Date(now.getTime() + 15 * 60 * 1000)
+    const manualQueueTime = new Date(now.getTime() + 2 * 60 * 60 * 1000)
+    
+    const autoEligible = await prisma.appointment.findMany({
+      where: {
+        status: 'booked',
+        appointmentAt: { lte: autoQueueTime }
+      },
+      include: { outlet: { select: { name: true } } },
+      orderBy: { appointmentAt: 'asc' }
+    })
+    
+    const manualEligible = await prisma.appointment.findMany({
+      where: {
+        status: 'booked',
+        appointmentAt: { lte: manualQueueTime }
+      },
+      include: { outlet: { select: { name: true } } },
+      orderBy: { appointmentAt: 'asc' }
+    })
+
+    res.json({
+      currentTime: now,
+      autoQueueWindow: `${15} minutes`,
+      autoQueueTime,
+      autoEligibleCount: autoEligible.length,
+      autoEligible: autoEligible.map(a => ({
+        id: a.id,
+        name: a.name,
+        mobile: a.mobileNumber,
+        outlet: a.outlet.name,
+        appointmentAt: a.appointmentAt,
+        minutesUntil: Math.round((new Date(a.appointmentAt).getTime() - now.getTime()) / (1000 * 60))
+      })),
+      manualQueueWindow: `${2} hours`,
+      manualQueueTime,
+      manualEligibleCount: manualEligible.length,
+      manualEligible: manualEligible.map(a => ({
+        id: a.id,
+        name: a.name,
+        mobile: a.mobileNumber,
+        outlet: a.outlet.name,
+        appointmentAt: a.appointmentAt,
+        minutesUntil: Math.round((new Date(a.appointmentAt).getTime() - now.getTime()) / (1000 * 60))
+      }))
+    })
+  } catch (error) {
+    console.error("Debug pending queue error:", error)
+    res.status(500).json({ error: "Failed to get pending appointments" })
   }
 })
 
