@@ -87,9 +87,16 @@ router.get("/me", async (req, res) => {
                 email: true, 
                 mobileNumber: true, 
                 isActive: true, 
-                regionId: true 
+                regionId: true,
+                region: {
+                    select: {
+                        id: true,
+                        name: true
+                    }
+                }
             }
         })
+        console.log("GM /me query result:", JSON.stringify(gm, null, 2))
         if (!gm) return res.status(404).json({ error: "GM not found" })
 
         // Count DGMs under this GM (already correctly filtered)
@@ -110,6 +117,7 @@ router.get("/me", async (req, res) => {
                 email: gm.email, 
                 mobileNumber: gm.mobileNumber, 
                 isActive: gm.isActive, 
+                region: gm.region,
                 dgmCount, 
                 regionCount, 
                 outletCount 
