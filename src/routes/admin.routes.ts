@@ -951,11 +951,21 @@ router.get("/regions", async (req, res) => {
         gm: {
           select: { id: true, name: true, mobileNumber: true, email: true }
         },
-        outlets: { select: { id: true, name: true } }
+        outlets: { select: { id: true, name: true } },
+        provinces: {
+          include: {
+            dgm: {
+              select: { id: true, name: true, mobileNumber: true, email: true }
+            }
+          }
+        },
+        _count: {
+          select: { provinces: true, rtoms: true, outlets: true }
+        }
       },
       orderBy: { name: "asc" }
     })
-    res.json({ regions })
+    res.json({ success: true, regions })
   } catch (error: any) {
     console.error("Get regions error:", error)
     res.status(500).json({ error: "Failed to fetch regions" })
@@ -2766,37 +2776,6 @@ router.post("/test/sms", async (req, res) => {
 // ====== HIERARCHY MANAGEMENT APIS ======
 
 // Region Management
-router.get("/regions", async (req, res) => {
-  try {
-    const regions = await prisma.region.findMany({
-      include: {
-        gm: {
-          select: { id: true, name: true, mobileNumber: true, email: true }
-        },
-        provinces: {
-          include: {
-            dgm: {
-              select: { id: true, name: true, mobileNumber: true, email: true }
-            }
-          }
-        },
-        _count: {
-          select: { provinces: true, rtoms: true, teleshopManagers: true }
-        }
-      },
-      orderBy: { name: 'asc' }
-    })
-
-    res.json({
-      success: true,
-      regions
-    })
-  } catch (error) {
-    console.error("Get regions error:", error)
-    res.status(500).json({ error: "Failed to fetch regions" })
-  }
-})
-
 router.post("/regions", async (req, res) => {
   try {
     const { name } = req.body
