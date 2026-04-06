@@ -283,7 +283,8 @@ router.get("/rtoms", async (req, res) => {
                                 id: true,
                                 name: true,
                                 mobileNumber: true,
-                                isActive: true
+                                isActive: true,
+                                branchId: true
                             }
                         }
                     }
@@ -331,7 +332,7 @@ router.post("/rtoms", async (req, res) => {
         const dgm = await (prisma as any).dGM.findUnique({ where: { id: auth.dgmId } })
         if (!dgm) return res.status(404).json({ error: "DGM not found" })
 
-        const { regionId, name, mobileNumber, email } = req.body
+        const { regionId, name, mobileNumber, email, assignedOutletIds } = req.body
         if (!regionId || !name || !mobileNumber) return res.status(400).json({ error: "regionId, name, and mobileNumber are required" })
         if (!isValidName(name)) return res.status(400).json({ error: "Name must be between 2 and 100 characters" })
         if (!isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number. Must be a valid Sri Lankan number (e.g. 0771234567)" })
@@ -356,6 +357,51 @@ router.post("/rtoms", async (req, res) => {
                 region: { select: { id: true, name: true } }
             }
         })
+
+        // Handle outlet assignments through TeleshopManager relationships
+        // Note: This requires TeleshopManagers to exist for the outlets first
+        if (assignedOutletIds && Array.isArray(assignedOutletIds) && assignedOutletIds.length > 0) {
+            // Validate that all outlet IDs exist and belong to the specified region
+            const outlets = await prisma.outlet.findMany({
+                where: {
+                    id: { in: assignedOutletIds },
+                    regionId: regionId
+                }
+            })
+            
+            if (outlets.length !== assignedOutletIds.length) {
+                await prisma.rTOM.delete({ where: { id: rtom.id } }) // Rollback RTOM creation
+                return res.status(400).json({ error: "Some outlet IDs are invalid or don't belong to this region" })
+            }
+
+            // Find existing TeleshopManagers for these outlets and assign them to this RTOM
+            const managersToAssign = await prisma.teleshopManager.findMany({
+                where: {
+                    branchId: { in: assignedOutletIds },
+                    regionId: regionId
+                }
+            })
+
+            if (managersToAssign.length > 0) {
+                // Update existing TeleshopManagers to report to this RTOM
+                await prisma.teleshopManager.updateMany({
+                    where: {
+                        id: { in: managersToAssign.map(m => m.id) }
+                    },
+                    data: {
+                        rtomId: rtom.id
+                    }
+                })
+            }
+
+            // For outlets without TeleshopManagers, create a note (but don't create fake managers)
+            const outletsWithManagers = managersToAssign.map(m => m.branchId)
+            const outletsWithoutManagers = assignedOutletIds.filter(id => !outletsWithManagers.includes(id))
+            
+            if (outletsWithoutManagers.length > 0) {
+                console.log(`Note: ${outletsWithoutManagers.length} outlets assigned to RTOM ${rtom.name} don't have TeleshopManagers yet`)
+            }
+        }
 
         // Send notifications
         const loginUrl = `${process.env.FRONTEND_BASE_URL || 'https://sltsecmanage.slt.lk:7443'}/manager/login`
@@ -421,6 +467,100 @@ router.put("/rtoms/:regionId", async (req, res) => {
         })
 
         res.json({ success: true, region })
+    } catch (err) {
+        console.error("DGM update RTOM error:", err)
+        res.status(500).json({ error: "Failed to update RTOM" })
+    }
+})
+
+// PUT /rtoms/:rtomId - update a specific RTOM by ID
+router.put("/rtoms/:rtomId", async (req, res) => {
+    try {
+        const auth = verifyDGMToken(req)
+        if (!auth) return res.status(401).json({ error: "DGM authentication required" })
+
+        const dgm = await (prisma as any).dGM.findUnique({ where: { id: auth.dgmId } })
+        if (!dgm) return res.status(404).json({ error: "DGM not found" })
+
+        const { name, mobileNumber, email, assignedOutletIds } = req.body
+        const rtomId = req.params.rtomId
+
+        // Find the RTOM and verify it belongs to this DGM
+        const existingRTOM = await prisma.rTOM.findUnique({
+            where: { id: rtomId },
+            include: { region: true }
+        })
+
+        console.log(`RTOM Update Debug - RTOM ID: ${rtomId}, DGM ID: ${auth.dgmId}`)
+        if (existingRTOM) {
+            console.log(`RTOM found - Name: ${existingRTOM.name}, RTOM dgmId: ${existingRTOM.dgmId}, Current DGM: ${auth.dgmId}`)
+        }
+
+        if (!existingRTOM) {
+            return res.status(404).json({ error: "RTOM not found" })
+        }
+
+        if (existingRTOM.dgmId !== auth.dgmId) {
+            console.log(`403 Error - RTOM belongs to DGM ${existingRTOM.dgmId}, but current DGM is ${auth.dgmId}`)
+            return res.status(403).json({ error: "This RTOM is not assigned to you" })
+        }
+
+        // Validate input
+        if (name && !isValidName(name)) return res.status(400).json({ error: "Name must be between 2 and 100 characters" })
+        if (mobileNumber && !isValidSLMobile(mobileNumber)) return res.status(400).json({ error: "Invalid mobile number format" })
+        if (email && !isValidEmail(email)) return res.status(400).json({ error: "Invalid email address format" })
+
+        // Check if mobile number is already in use by another RTOM (if changing)
+        if (mobileNumber && mobileNumber !== existingRTOM.mobileNumber) {
+            const existing = await prisma.rTOM.findUnique({ where: { mobileNumber } })
+            if (existing) return res.status(400).json({ error: "This mobile number is already used by another RTOM" })
+        }
+
+        // Update the RTOM
+        const updatedRTOM = await prisma.rTOM.update({
+            where: { id: rtomId },
+            data: {
+                ...(name && { name }),
+                ...(mobileNumber && { mobileNumber }),
+                email: email !== undefined ? (email || null) : undefined
+            }
+        })
+
+        // Handle outlet assignment updates
+        if (assignedOutletIds && Array.isArray(assignedOutletIds)) {
+            // Validate all outlet IDs belong to the RTOM's region
+            if (assignedOutletIds.length > 0) {
+                const outlets = await prisma.outlet.findMany({
+                    where: {
+                        id: { in: assignedOutletIds },
+                        regionId: existingRTOM.regionId
+                    }
+                })
+                
+                if (outlets.length !== assignedOutletIds.length) {
+                    return res.status(400).json({ error: "Some outlet IDs are invalid or don't belong to this region" })
+                }
+            }
+
+            // First, remove this RTOM from all current TeleshopManagers
+            await prisma.teleshopManager.updateMany({
+                where: { rtomId: rtomId },
+                data: { rtomId: null }
+            })
+
+            // Then, assign new outlets by updating their TeleshopManagers
+            if (assignedOutletIds.length > 0) {
+                await prisma.teleshopManager.updateMany({
+                    where: {
+                        branchId: { in: assignedOutletIds },
+                        regionId: existingRTOM.regionId
+                    },
+                    data: { rtomId: rtomId }
+                })
+            }
+        }
+
+        res.json({ success: true, rtom: updatedRTOM })
     } catch (err) {
         console.error("DGM update RTOM error:", err)
         res.status(500).json({ error: "Failed to update RTOM" })
