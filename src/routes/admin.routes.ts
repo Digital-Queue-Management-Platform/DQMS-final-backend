@@ -1363,14 +1363,7 @@ router.get('/outlets', async (req, res) => {
       include: {
         region: {
           select: {
-            name: true,
-            rtoms: {
-              select: {
-                id: true,
-                name: true,
-                mobileNumber: true
-              }
-            }
+            name: true
           }
         },
         province: {
@@ -1379,6 +1372,17 @@ router.get('/outlets', async (req, res) => {
             dgm: {
               select: {
                 name: true
+              }
+            }
+          }
+        },
+        teleshopManagers: {
+          select: {
+            rtom: {
+              select: {
+                id: true,
+                name: true,
+                mobileNumber: true
               }
             }
           }
@@ -1396,22 +1400,27 @@ router.get('/outlets', async (req, res) => {
     })
 
     // Return outlets with kiosk password info
-    const outletsWithPasswords = outlets.map(outlet => ({
-      id: outlet.id,
-      name: outlet.name,
-      location: outlet.location,
-      regionName: outlet.region.name,
-      regionId: outlet.regionId,
-      provinceName: outlet.province?.name || null,
-      provinceId: outlet.provinceId,
-      rtoms: outlet.region.rtoms || [],
-      dgmName: outlet.province?.dgm?.name || null,
-      isActive: outlet.isActive,
-      kioskPassword: outlet.kioskPassword, // Admin can see passwords
-      counterCount: outlet.counterCount,
-      officerCount: outlet._count.officers,
-      createdAt: outlet.createdAt
-    }))
+    const outletsWithPasswords = outlets.map(outlet => {
+      // Get the RTOM assigned to this outlet through teleshop managers
+      const assignedRtom = outlet.teleshopManagers.find(tm => tm.rtom)?.rtom || null;
+      
+      return {
+        id: outlet.id,
+        name: outlet.name,
+        location: outlet.location,
+        regionName: outlet.region.name,
+        regionId: outlet.regionId,
+        provinceName: outlet.province?.name || null,
+        provinceId: outlet.provinceId,
+        assignedRtom: assignedRtom,
+        dgmName: outlet.province?.dgm?.name || null,
+        isActive: outlet.isActive,
+        kioskPassword: outlet.kioskPassword, // Admin can see passwords
+        counterCount: outlet.counterCount,
+        officerCount: outlet._count.officers,
+        createdAt: outlet.createdAt
+      }
+    })
 
     res.json(outletsWithPasswords)
   } catch (error) {
