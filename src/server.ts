@@ -676,44 +676,57 @@ server.listen(PORT, "0.0.0.0", () => {
 
   // Audio event cleanup and optimization service
   setInterval(() => {
-    if (!(global as any).recentAudioEvents || !Array.isArray((global as any).recentAudioEvents)) return
-    
-    const now = new Date().getTime()
-    const beforeCount = (global as any).recentAudioEvents.length
-    
-    // Remove events older than 2 minutes (performance optimization)
-    (global as any).recentAudioEvents = (global as any).recentAudioEvents.filter((event: any) => {
-      const eventTime = new Date(event.timestamp).getTime()
-      return (now - eventTime) < 120000 // 2 minutes
-    })
-    
-    // Limit total events to prevent memory issues
-    if ((global as any).recentAudioEvents.length > 50) {
-      (global as any).recentAudioEvents = (global as any).recentAudioEvents.slice(-50)
-    }
-    
-    const afterCount = (global as any).recentAudioEvents.length
-    const removedCount = beforeCount - afterCount
-    
-    if (removedCount > 0) {
-      console.log(`🧹 Audio Event Cleanup: Removed ${removedCount} old/excess events, ${afterCount} remaining`)
-      
-      // Log performance warnings
-      if (afterCount > 30) {
-        console.log(`⚠️  HIGH AUDIO EVENT QUEUE: ${afterCount} events - APK may need acknowledgment optimization`)
+    try {
+      if (!(global as any).recentAudioEvents || !Array.isArray((global as any).recentAudioEvents)) {
+        // Initialize if not present or corrupted
+        (global as any).recentAudioEvents = []
+        return
       }
       
-      // Group events by outlet for performance monitoring
-      const eventsByOutlet = (global as any).recentAudioEvents.reduce((acc: any, event: any) => {
-        acc[event.outletId] = (acc[event.outletId] || 0) + 1
-        return acc
-      }, {})
+      const now = new Date().getTime()
+      const beforeCount = (global as any).recentAudioEvents.length
       
-      for (const [outletId, count] of Object.entries(eventsByOutlet)) {
-        if ((count as number) > 10) {
-          console.log(`⚠️  Outlet ${outletId} has ${count} unacknowledged events - check APK performance`)
+      // Remove events older than 2 minutes (performance optimization)
+      (global as any).recentAudioEvents = (global as any).recentAudioEvents.filter((event: any) => {
+        if (!event || !event.timestamp) return false
+        const eventTime = new Date(event.timestamp).getTime()
+        return (now - eventTime) < 120000 // 2 minutes
+      })
+      
+      // Limit total events to prevent memory issues
+      if ((global as any).recentAudioEvents.length > 50) {
+        (global as any).recentAudioEvents = (global as any).recentAudioEvents.slice(-50)
+      }
+      
+      const afterCount = (global as any).recentAudioEvents.length
+      const removedCount = beforeCount - afterCount
+      
+      if (removedCount > 0) {
+        console.log(`🧹 Audio Event Cleanup: Removed ${removedCount} old/excess events, ${afterCount} remaining`)
+        
+        // Log performance warnings
+        if (afterCount > 30) {
+          console.log(`⚠️  HIGH AUDIO EVENT QUEUE: ${afterCount} events - APK may need acknowledgment optimization`)
+        }
+        
+        // Group events by outlet for performance monitoring
+        const eventsByOutlet = (global as any).recentAudioEvents.reduce((acc: any, event: any) => {
+          if (event && event.outletId) {
+            acc[event.outletId] = (acc[event.outletId] || 0) + 1
+          }
+          return acc
+        }, {})
+        
+        for (const [outletId, count] of Object.entries(eventsByOutlet)) {
+          if ((count as number) > 10) {
+            console.log(`⚠️  Outlet ${outletId} has ${count} unacknowledged events - check APK performance`)
+          }
         }
       }
+    } catch (error) {
+      console.error('❌ Audio Event Cleanup Error:', error);
+      // Reset to empty array to prevent further crashes
+      (global as any).recentAudioEvents = [];
     }
   }, 60000) // Run cleanup every minute
 

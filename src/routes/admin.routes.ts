@@ -18,6 +18,21 @@ const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admindqms@slt.lk"
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "dqms2026@"
+
+// GM Token verification function (shared from gm.routes.ts)
+function verifyGMToken(req: any): { gmId: string } | null {
+    let token = req.cookies?.dq_gm_jwt
+    if (!token) {
+        const authHeader = req.headers.authorization
+        if (authHeader && authHeader.startsWith("Bearer ")) token = authHeader.substring(7)
+    }
+    if (!token) return null
+    try {
+        const payload: any = (jwt as any).verify(token, JWT_SECRET)
+        if (!payload.gmId) return null
+        return { gmId: payload.gmId }
+    } catch { return null }
+}
 const STAFF_PRESENCE_WINDOW_MINUTES = Math.max(1, Number(process.env.ADMIN_STAFF_PRESENCE_MINUTES || 30))
 
 // Interface for manager credentials
@@ -338,6 +353,47 @@ const getBackupRestoreHistoryRaw = async ({
 // Get dashboard analytics
 router.get("/analytics", async (req, res) => {
   try {
+    // Check for GM authentication first
+    const gmAuth = verifyGMToken(req)
+    let allowedOutletIds: string[] | null = null
+
+    if (gmAuth) {
+      // GM user - enforce regional filtering
+      const gm = await prisma.gM.findUnique({
+        where: { id: gmAuth.gmId },
+        select: { regionId: true }
+      })
+      
+      if (!gm || !gm.regionId) {
+        return res.status(403).json({ error: "GM region not assigned" })
+      }
+
+      // Get outlets in GM's region only
+      const outletsInGmRegion = await prisma.outlet.findMany({ 
+        where: { regionId: gm.regionId }, 
+        select: { id: true } 
+      })
+      allowedOutletIds = outletsInGmRegion.map(outlet => outlet.id)
+      
+      if (allowedOutletIds.length === 0) {
+        return res.json({
+          totalTokens: 0,
+          totalCompleted: 0,
+          avgWaitTime: 0,
+          avgServiceTime: 0,
+          feedbackStats: [],
+          serviceTypes: [],
+          officerPerformance: [],
+          branchPerformance: [],
+          hourlyWaitingTimes: [],
+          staffUtilizationTrend: [],
+          tokenFlow: []
+        })
+      }
+    }
+    // If not GM authenticated, assume admin access (original behavior)
+    // TODO: Add proper admin authentication in the future
+
     const { startDate, endDate, outletId } = req.query
     const sDate = startDate ? new Date(startDate as string) : new Date()
     const eDate = endDate ? new Date(endDate as string) : new Date()
@@ -353,7 +409,24 @@ router.get("/analytics", async (req, res) => {
         lte: eDate,
       }
     }
-    if (outletId) baseWhere.outletId = outletId as string
+    
+    // Apply regional filtering for GMs
+    if (allowedOutletIds) {
+      if (outletId) {
+        // If specific outlet requested, check if it's in GM's region
+        if (allowedOutletIds.includes(outletId as string)) {
+          baseWhere.outletId = outletId as string
+        } else {
+          return res.status(403).json({ error: "Access denied to outlet outside your region" })
+        }
+      } else {
+        // Filter to GM's region outlets
+        baseWhere.outletId = { in: allowedOutletIds }
+      }
+    } else {
+      // Admin access - original behavior
+      if (outletId) baseWhere.outletId = outletId as string
+    }
 
     // Fetch all tokens for the range once
     const allTokens = await prisma.token.findMany({
@@ -375,18 +448,58 @@ router.get("/analytics", async (req, res) => {
     const completedTokens = allTokens.filter(t => t.status === "completed" && t.completedAt && t.startedAt)
     const totalCompleted = completedTokens.length
 
-    // Run other aggregated queries
+    // Run other aggregated queries with regional filtering
+    const outletQuery: any = allowedOutletIds 
+      ? { where: { id: { in: allowedOutletIds } }, select: { id: true, name: true } }
+      : { select: { id: true, name: true } }
+
+    const feedbackQuery = allowedOutletIds
+      ? { 
+          where: { 
+            token: { 
+              outletId: { in: allowedOutletIds },
+              createdAt: { gte: sDate, lte: eDate },
+              status: "completed" 
+            } 
+          },
+          select: { rating: true, createdAt: true, tokenId: true }
+        }
+      : { 
+          where: { token: { ...baseWhere, status: "completed" } },
+          select: { rating: true, createdAt: true, tokenId: true }
+        }
+
+    let officerQuery: any
+    if (allowedOutletIds) {
+      if (outletId) {
+        officerQuery = { 
+          where: { outletId: outletId as string }, 
+          include: { outlet: true } 
+        }
+      } else {
+        officerQuery = { 
+          where: { outletId: { in: allowedOutletIds } }, 
+          include: { outlet: true } 
+        }
+      }
+    } else {
+      if (outletId) {
+        officerQuery = { 
+          where: { outletId: outletId as string }, 
+          include: { outlet: true } 
+        }
+      } else {
+        officerQuery = { 
+          include: { outlet: true } 
+        }
+      }
+    }
+
     const [feedbackStats, officerRecords, allServices, allOutlets] = await Promise.all([
-      prisma.feedback.findMany({
-        where: { token: { ...baseWhere, status: "completed" } },
-        select: { rating: true, createdAt: true, tokenId: true }
-      }),
-      prisma.officer.findMany({ 
-        where: outletId ? { outletId: outletId as string } : {}, 
-        include: { outlet: true } 
-      }),
+      prisma.feedback.findMany(feedbackQuery),
+      prisma.officer.findMany(officerQuery),
       prisma.service.findMany({ select: { code: true, title: true } }),
-      prisma.outlet.findMany({ select: { id: true, name: true } })
+      prisma.outlet.findMany(outletQuery)
     ])
 
     const avgWaitTime = totalCompleted > 0
@@ -838,11 +951,21 @@ router.get("/regions", async (req, res) => {
         gm: {
           select: { id: true, name: true, mobileNumber: true, email: true }
         },
-        outlets: { select: { id: true, name: true } }
+        outlets: { select: { id: true, name: true } },
+        provinces: {
+          include: {
+            dgm: {
+              select: { id: true, name: true, mobileNumber: true, email: true }
+            }
+          }
+        },
+        _count: {
+          select: { provinces: true, rtoms: true, outlets: true }
+        }
       },
       orderBy: { name: "asc" }
     })
-    res.json({ regions })
+    res.json({ success: true, regions })
   } catch (error: any) {
     console.error("Get regions error:", error)
     res.status(500).json({ error: "Failed to fetch regions" })
@@ -1240,14 +1363,7 @@ router.get('/outlets', async (req, res) => {
       include: {
         region: {
           select: {
-            name: true,
-            rtoms: {
-              select: {
-                id: true,
-                name: true,
-                mobileNumber: true
-              }
-            }
+            name: true
           }
         },
         province: {
@@ -1256,6 +1372,17 @@ router.get('/outlets', async (req, res) => {
             dgm: {
               select: {
                 name: true
+              }
+            }
+          }
+        },
+        teleshopManagers: {
+          select: {
+            rtom: {
+              select: {
+                id: true,
+                name: true,
+                mobileNumber: true
               }
             }
           }
@@ -1273,22 +1400,27 @@ router.get('/outlets', async (req, res) => {
     })
 
     // Return outlets with kiosk password info
-    const outletsWithPasswords = outlets.map(outlet => ({
-      id: outlet.id,
-      name: outlet.name,
-      location: outlet.location,
-      regionName: outlet.region.name,
-      regionId: outlet.regionId,
-      provinceName: outlet.province?.name || null,
-      provinceId: outlet.provinceId,
-      rtoms: outlet.region.rtoms || [],
-      dgmName: outlet.province?.dgm?.name || null,
-      isActive: outlet.isActive,
-      kioskPassword: outlet.kioskPassword, // Admin can see passwords
-      counterCount: outlet.counterCount,
-      officerCount: outlet._count.officers,
-      createdAt: outlet.createdAt
-    }))
+    const outletsWithPasswords = outlets.map(outlet => {
+      // Get the RTOM assigned to this outlet through teleshop managers
+      const assignedRtom = outlet.teleshopManagers.find(tm => tm.rtom)?.rtom || null;
+      
+      return {
+        id: outlet.id,
+        name: outlet.name,
+        location: outlet.location,
+        regionName: outlet.region.name,
+        regionId: outlet.regionId,
+        provinceName: outlet.province?.name || null,
+        provinceId: outlet.provinceId,
+        assignedRtom: assignedRtom,
+        dgmName: outlet.province?.dgm?.name || null,
+        isActive: outlet.isActive,
+        kioskPassword: outlet.kioskPassword, // Admin can see passwords
+        counterCount: outlet.counterCount,
+        officerCount: outlet._count.officers,
+        createdAt: outlet.createdAt
+      }
+    })
 
     res.json(outletsWithPasswords)
   } catch (error) {
@@ -2653,37 +2785,6 @@ router.post("/test/sms", async (req, res) => {
 // ====== HIERARCHY MANAGEMENT APIS ======
 
 // Region Management
-router.get("/regions", async (req, res) => {
-  try {
-    const regions = await prisma.region.findMany({
-      include: {
-        gm: {
-          select: { id: true, name: true, mobileNumber: true, email: true }
-        },
-        provinces: {
-          include: {
-            dgm: {
-              select: { id: true, name: true, mobileNumber: true, email: true }
-            }
-          }
-        },
-        _count: {
-          select: { provinces: true, rtoms: true, teleshopManagers: true }
-        }
-      },
-      orderBy: { name: 'asc' }
-    })
-
-    res.json({
-      success: true,
-      regions
-    })
-  } catch (error) {
-    console.error("Get regions error:", error)
-    res.status(500).json({ error: "Failed to fetch regions" })
-  }
-})
-
 router.post("/regions", async (req, res) => {
   try {
     const { name } = req.body
