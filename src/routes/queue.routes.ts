@@ -1,12 +1,30 @@
 import { Router } from "express"
 import { prisma } from "../server"
 import { getLastDailyReset } from "../utils/resetWindow"
+import * as jwt from "jsonwebtoken"
 
 const router = Router()
 const PRIORITY_SERVICE_SETTING_KEY = 'priority_service_enabled'
 const SHOW_SERVICE_TYPE_IN_QUEUE_KEY = 'show_service_type_in_queue'
 const DISPLAY_SPEAKER_KEY = 'display_speaker_enabled'
 const ADVANCED_APPOINTMENT_REQUIRED_KEY = 'advanced_appointment_required'
+
+const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
+
+// GM Token verification function (shared from gm.routes.ts)
+function verifyGMToken(req: any): { gmId: string } | null {
+    let token = req.cookies?.dq_gm_jwt
+    if (!token) {
+        const authHeader = req.headers.authorization
+        if (authHeader && authHeader.startsWith("Bearer ")) token = authHeader.substring(7)
+    }
+    if (!token) return null
+    try {
+        const payload: any = jwt.verify(token, JWT_SECRET)
+        if (!payload.gmId) return null
+        return { gmId: payload.gmId }
+    } catch { return null }
+}
 
 async function getPriorityServiceEnabled() {
   const rows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
@@ -150,11 +168,38 @@ router.get("/outlet/:outletId", async (req, res) => {
   }
 })
 
-// Get all outlets
+// Get all outlets (with GM regional filtering)
 router.get("/outlets", async (req, res) => {
   try {
+    // Check for GM authentication and apply regional filtering
+    const gmAuth = verifyGMToken(req)
+    let whereClause: any = { isActive: true }
+
+    console.log('Queue outlets request - GM auth:', gmAuth ? 'authenticated' : 'not authenticated')
+
+    if (gmAuth) {
+      // GM user - enforce regional filtering
+      const gm = await prisma.gM.findUnique({
+        where: { id: gmAuth.gmId },
+        select: { regionId: true }
+      })
+      
+      console.log('GM found:', gm ? `regionId: ${gm.regionId}` : 'not found')
+      
+      if (!gm || !gm.regionId) {
+        return res.status(403).json({ error: "GM region not assigned" })
+      }
+
+      // Filter to only outlets in GM's region
+      whereClause.regionId = gm.regionId
+      console.log('Applied regional filter - whereClause:', whereClause)
+    } else {
+      console.log('No GM auth - returning all outlets')
+    }
+    // If no GM auth, return all outlets (for admin or other users)
+
     const outlets = await prisma.outlet.findMany({
-      where: { isActive: true },
+      where: whereClause,
       include: {
         region: {
           select: {
@@ -176,8 +221,21 @@ router.get("/outlets", async (req, res) => {
     console.error("Outlets fetch error:", error)
     // Try without the region include as fallback
     try {
+      const gmAuth = verifyGMToken(req)
+      let whereClause: any = { isActive: true }
+      
+      if (gmAuth) {
+        const gm = await prisma.gM.findUnique({
+          where: { id: gmAuth.gmId },
+          select: { regionId: true }
+        })
+        if (gm?.regionId) {
+          whereClause.regionId = gm.regionId
+        }
+      }
+
       const outletsWithoutRegion = await prisma.outlet.findMany({
-        where: { isActive: true },
+        where: whereClause,
       })
       console.log("Fallback: returning outlets without region data")
       res.json(outletsWithoutRegion)

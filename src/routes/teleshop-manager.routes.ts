@@ -3209,12 +3209,14 @@ router.post("/test-audio-for-device/:deviceId", async (req: any, res) => {
     (global as any).recentAudioEvents.push(audioEvent)
     
     // Keep only recent events (last 20 per outlet)
-    (global as any).recentAudioEvents = (global as any).recentAudioEvents
+    const allEvents = (global as any).recentAudioEvents || [];
+    const currentOutletEvents = allEvents
       .filter((event: any) => event.outletId === targetOutlet.id)
-      .slice(-20)
-      .concat(
-        (global as any).recentAudioEvents.filter((event: any) => event.outletId !== targetOutlet.id)
-      )
+      .slice(-20);
+    const otherOutletEvents = allEvents
+      .filter((event: any) => event.outletId !== targetOutlet.id);
+    
+    (global as any).recentAudioEvents = [...currentOutletEvents, ...otherOutletEvents];
 
     // Try WebSocket broadcast
     const { broadcast } = require('../server')
