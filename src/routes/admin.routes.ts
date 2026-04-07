@@ -759,7 +759,7 @@ router.get("/analytics/export-pdf", async (req, res) => {
 // Get alerts
 router.get("/alerts", async (req, res) => {
   try {
-    const { isRead, type, severity, outletId, importantOnly } = req.query
+    const { isRead, type, severity, outletId, importantOnly, timeFilter } = req.query
 
     const where: any = {}
     if (isRead !== undefined) {
@@ -770,9 +770,43 @@ router.get("/alerts", async (req, res) => {
     }
 
     if (importantOnly === "true") {
-      where.severity = { in: ["high", "critical"] }
+      // Include medium severity for admin view since long waits are important for branch management
+      where.severity = { in: ["medium", "high", "critical"] }
     } else if (severity) {
       where.severity = severity as string
+    }
+
+    // Time filtering
+    if (timeFilter) {
+      const now = new Date()
+      let startDate: Date
+      
+      switch (timeFilter) {
+        case "today":
+          // Start of today (00:00:00)
+          startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+          break
+        case "weekly":
+          // 7 days ago
+          startDate = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000))
+          break
+        case "monthly":
+          // 30 days ago
+          startDate = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000))
+          break
+        case "annual":
+          // 365 days ago (1 year)
+          startDate = new Date(now.getTime() - (365 * 24 * 60 * 60 * 1000))
+          break
+        default:
+          startDate = null
+      }
+      
+      if (startDate) {
+        where.createdAt = {
+          gte: startDate
+        }
+      }
     }
 
     // Direct outletId filter (for new alerts)
@@ -798,9 +832,13 @@ router.get("/alerts", async (req, res) => {
       })
       const tokenIds = tokens.map(t => t.id)
       
+      // Create fallback query - exclude outletId but keep other filters (including time)
+      const fallbackWhere = { ...where }
+      delete fallbackWhere.outletId // Remove outletId for fallback query
+      
       const oldAlerts = await prisma.alert.findMany({
         where: {
-          ...where,
+          ...fallbackWhere,
           outletId: null, // Only look at old alerts without outletId
           relatedEntity: { in: tokenIds }
         },
