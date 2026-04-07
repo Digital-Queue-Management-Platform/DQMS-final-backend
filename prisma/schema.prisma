@@ -118,6 +118,7 @@ model Outlet {
   kioskPassword     String?
   displaySettings   Json?
   provinceId        String?
+  rtomId            String?
   appointments      Appointment[]
   auditLogs         AuditLog[]
   closureNotices    ClosureNotice[]
@@ -128,11 +129,14 @@ model Outlet {
   officers          Officer[]
   province          Province?          @relation(fields: [provinceId], references: [id])
   region            Region             @relation(fields: [regionId], references: [id])
+  RTOM              RTOM?              @relation(fields: [rtomId], references: [id])
   qrSessions        QRSession[]
   serviceCases      ServiceCase[]
   systemLogs        SystemLog[]
   teleshopManagers  TeleshopManager[]
   tokens            Token[]
+
+  @@index([rtomId])
 }
 
 model Region {
@@ -484,6 +488,7 @@ model RTOM {
   isActive         Boolean           @default(true)
   createdAt        DateTime          @default(now())
   lastLoginAt      DateTime?
+  Outlet           Outlet[]
   dgm              DGM               @relation(fields: [dgmId], references: [id])
   region           Region            @relation(fields: [regionId], references: [id])
   teleshopManagers TeleshopManager[]
