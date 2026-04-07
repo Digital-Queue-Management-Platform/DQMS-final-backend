@@ -779,7 +779,7 @@ router.get("/alerts", async (req, res) => {
     // Time filtering
     if (timeFilter) {
       const now = new Date()
-      let startDate: Date
+      let startDate: Date | null = null
       
       switch (timeFilter) {
         case "today":
