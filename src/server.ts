@@ -736,29 +736,12 @@ server.listen(PORT, "0.0.0.0", () => {
   // The QRSession and DeviceLink tables have Prisma client issues - keeping disabled until resolved
   console.log("QR session cleanup jobs disabled - using existing ManagerQRToken flow")
   
-  // Cleanup job for ManagerQRToken (cleanup tokens older than 24 hours)
-  setInterval(async () => {
-    try {
-      const cutoffDate = new Date(Date.now() - 24 * 60 * 60 * 1000) // 24 hours ago
-      const result = await prisma.managerQRToken.deleteMany({
-        where: {
-          generatedAt: { lt: cutoffDate }
-        }
-      })
-      if (result.count > 0) {
-        console.log(`🧹 Cleaned up ${result.count} old ManagerQRToken records`)
-      }
-    } catch (error: any) {
-      // Silently ignore errors - this is just cleanup
-      logger.debug({ error: error.message }, "MANAGER_QR_TOKEN_CLEANUP_FAILED")
-    }
-  }, 6 * 60 * 60 * 1000)  // Every 6 hours
-
-  console.log("ManagerQRToken cleanup job started")
-  systemLogger.info("ManagerQRToken cleanup job initialized", {
+  // ManagerQRToken cleanup job removed - QR codes remain valid until manually refreshed via dashboard
+  console.log("ManagerQRToken persists until manual refresh - no automatic expiry")
+  systemLogger.info("ManagerQRToken - no automatic cleanup, tokens persist until manual refresh", {
     service: 'backend',
     module: 'qr-session',
-    event: 'cleanup-jobs-started'
+    event: 'no-auto-cleanup'
   })
 })
 
