@@ -96,7 +96,7 @@ router.get("/outlet/:outletId", async (req, res) => {
       prisma.officer.count({
         where: {
           outletId,
-          status: { in: ["available", "serving"] },
+          status: { in: ["available", "serving", "break", "away"] },
           lastLoginAt: { gte: lastReset }
         },
       }),
