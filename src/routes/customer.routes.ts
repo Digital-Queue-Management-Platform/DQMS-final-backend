@@ -52,6 +52,43 @@ function toE164(mobile: string): string {
   return mobile.startsWith("+") ? mobile : "+" + cleaned
 }
 
+/**
+ * Calculates the estimated wait time for an outlet based on recent performance.
+ * @param outletId The outlet ID
+ * @param position Queue position (number of people ahead + 1)
+ * @returns Estimated wait time in minutes
+ */
+async function calculateEstimatedWaitTime(outletId: string, position: number): Promise<number> {
+  try {
+    const recentCompleted = await prisma.token.findMany({
+      where: {
+        outletId,
+        status: { in: ["in_service", "completed"] },
+        calledAt: { not: null },
+      },
+      orderBy: { calledAt: "desc" },
+      take: 10,
+    })
+
+    let avgWaitPerPerson = 5 // fallback to 5 minutes
+    if (recentCompleted.length > 0) {
+      const totalWait = recentCompleted.reduce((acc, t) => {
+        const wait = t.calledAt!.getTime() - t.createdAt.getTime()
+        return acc + wait
+      }, 0)
+      avgWaitPerPerson = (totalWait / recentCompleted.length) / (1000 * 60)
+    }
+
+    // Return estimated wait based on position (people ahead)
+    // position 1 means you are next, position 2 means 1 person ahead.
+    const peopleAhead = Math.max(0, position - 1)
+    return Math.max(1, Math.round(peopleAhead * avgWaitPerPerson))
+  } catch (err) {
+    console.error("Error calculating estimated wait time:", err)
+    return Math.max(1, (position - 1) * 5)
+  }
+}
+
 // Enhanced OTP for customer registration with recovery URL
 router.post("/registration/otp/start", async (req, res) => {
   try {
@@ -479,7 +516,7 @@ router.post("/register", async (req, res) => {
       },
     }) + 1
 
-    const estimatedWait = Math.max(1, queuePosition * 5) // 5 min per person, minimum 1 min
+    const estimatedWait = await calculateEstimatedWaitTime(token.outletId, queuePosition)
 
     // Broadcast update immediately so officer dashboards refresh without waiting on SMS delivery.
     broadcast({ type: "NEW_TOKEN", data: token })
@@ -559,8 +596,8 @@ router.get("/token/:tokenId", async (req, res) => {
       },
     })
 
-    // Calculate estimated wait time (5 minutes per person)
-    const estimatedWaitMinutes = position * 5
+    // Calculate estimated wait time using real average data
+    const estimatedWaitMinutes = await calculateEstimatedWaitTime(token.outletId, position + 1)
 
     res.json({
       token,
@@ -718,7 +755,7 @@ router.post("/lookup", async (req, res) => {
             },
           }) + 1
 
-          estimatedWait = Math.max(1, queuePosition * 5) // 5 min per person
+          estimatedWait = await calculateEstimatedWaitTime(token.outletId, queuePosition)
         }
 
         return {

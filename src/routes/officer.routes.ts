@@ -497,7 +497,7 @@ router.post("/next-token", async (req, res) => {
       tokenData: {
         tokenNumber: updatedToken.tokenNumber,
         counterNumber: officer.counterNumber || 0,
-        customerName: firstName
+        customerName: "Customer"
       }
     }
     
@@ -515,9 +515,9 @@ router.post("/next-token", async (req, res) => {
 
     // Also trigger hardware IP speaker if configured
     let tokenSpeech = ""
-    if (customerLang === "si") tokenSpeech = `${firstName}. ටෝකන් අංක ${updatedToken.tokenNumber}, කරුණාකර කවුන්ටර අංක ${officer.counterNumber || 0} වෙත පැමිණෙන්න.`
-    else if (customerLang === "ta") tokenSpeech = `${firstName}. அடையாள எண் ${updatedToken.tokenNumber}, தயவுசெய்து கவுண்டர் எண் ${officer.counterNumber || 0} க்கு செல்லவும்.`
-    else tokenSpeech = `${firstName}. Token number ${updatedToken.tokenNumber}, please proceed to counter number ${officer.counterNumber || 0}.`
+    if (customerLang === "si") tokenSpeech = `ටෝකන් අංක ${updatedToken.tokenNumber}, කරුණාකර කවුන්ටර අංක ${officer.counterNumber || 0} වෙත පැමිණෙන්න.`
+    else if (customerLang === "ta") tokenSpeech = `அடையாள எண் ${updatedToken.tokenNumber}, தயவுசெய்து கவுண்டர் எண் ${officer.counterNumber || 0} க்கு செல்லவும்.`
+    else tokenSpeech = `Token number ${updatedToken.tokenNumber}, please proceed to counter number ${officer.counterNumber || 0}.`
     
     announceToIpSpeaker(updatedToken.outletId, tokenSpeech, customerLang)
 
@@ -744,7 +744,7 @@ router.post("/reannounce-token", async (req, res) => {
       tokenData: {
         tokenNumber: token.tokenNumber,
         counterNumber: token.officer?.counterNumber || 0,
-        customerName: token.customer?.name || "Customer"
+        customerName: "Customer"
       }
     }
     
@@ -827,9 +827,9 @@ router.post("/recall-token", async (req, res) => {
 
     // Also trigger hardware IP speaker if configured
     let recallSpeech = ""
-    if (customerLang === "si") recallSpeech = `${firstName}. ටෝකන් අංක ${recalled.tokenNumber} නැවත කැඳවනු ලැබේ. කරුණාකර වහාම කවුන්ටරය ${recalled.counterNumber || 0} වෙත පැමිණෙන්න.`
-    else if (customerLang === "ta") recallSpeech = `${firstName}. அடையாள எண் ${recalled.tokenNumber} மீண்டும் அழைக்கப்படுகிறது. உடனடியாக கவுண்டர் ${recalled.counterNumber || 0} க்கு வரவும்.`
-    else recallSpeech = `${firstName}. Token number ${recalled.tokenNumber} is being recalled. Please proceed to counter number ${recalled.counterNumber || 0} immediately.`
+    if (customerLang === "si") recallSpeech = `ටෝකන් අංක ${recalled.tokenNumber} නැවත කැඳවනු ලැබේ. කරුණාකර වහාම කවුන්ටරය ${recalled.counterNumber || 0} වෙත පැමිණෙන්න.`
+    else if (customerLang === "ta") recallSpeech = `அடையாள எண் ${recalled.tokenNumber} மீண்டும் அழைக்கப்படுகிறது. உடனடியாக கவுண்டர் ${recalled.counterNumber || 0} க்கு வரவும்.`
+    else recallSpeech = `Token number ${recalled.tokenNumber} is being recalled. Please proceed to counter number ${recalled.counterNumber || 0} immediately.`
 
     announceToIpSpeaker(recalled.outletId, recallSpeech, customerLang)
 
@@ -975,7 +975,7 @@ router.post("/call-token", async (req, res) => {
       tokenData: {
         tokenNumber: called.tokenNumber,
         counterNumber: called.officer?.counterNumber || 0,
-        customerName: called.customer?.name || "Customer"
+        customerName: "Customer"
       }
     }
     
