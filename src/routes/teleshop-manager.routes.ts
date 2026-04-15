@@ -744,13 +744,38 @@ router.post("/upload-promo-video", (req: any, res: any) => {
       return res.status(400).json({ error: "You are not assigned to any outlet" })
     }
 
-    const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol
-    const host = (req.headers["x-forwarded-host"] as string) || req.get("host")
-    const fileUrl = `${proto}://${host}/uploads/${req.file.filename}`
+    const relativePath = `/uploads/${req.file.filename}`
+    const originHeader = String(req.headers.origin || "").trim()
+    const frontendBase = String(process.env.FRONTEND_ORIGIN || "")
+      .split(",")
+      .map((s) => s.trim())
+      .find(Boolean) || ""
+
+    const resolveAbsoluteUrl = (base: string) => {
+      try {
+        return new URL(relativePath, base).toString()
+      } catch {
+        return ""
+      }
+    }
+
+    // Prefer browser Origin for correct public HTTPS host behind reverse proxies.
+    let fileUrl = resolveAbsoluteUrl(originHeader)
+
+    if (!fileUrl) {
+      fileUrl = resolveAbsoluteUrl(frontendBase)
+    }
+
+    if (!fileUrl) {
+      const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol
+      const host = (req.headers["x-forwarded-host"] as string) || req.get("host")
+      fileUrl = `${proto}://${host}${relativePath}`
+    }
 
     return res.json({
       success: true,
       url: fileUrl,
+      relativeUrl: relativePath,
       filename: req.file.filename,
       originalName: req.file.originalname,
       size: req.file.size,
