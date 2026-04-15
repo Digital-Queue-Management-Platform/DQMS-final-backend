@@ -2932,25 +2932,17 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
       })
     }
 
-    // Check if setup code has expired (24 hours from generation)
-    const currentTime = Date.now()
-    const timeDiff = currentTime - timestamp
-    const hourInMs = 24 * 3600000 // 24 hours - consistent with QR generation
-    
-    console.log("QR Setup validation:", {
-      setupCode: setupCode,
-      tokenOutletId: tokenData.outletId,
-      managerOutletId: teleshopManager.branchId,
-      timestamp: timestamp,
-      currentTime: currentTime,
-      timeDiff: timeDiff,
-      timeDiffHours: Math.round(timeDiff / 3600000),
-      isExpired: timeDiff > hourInMs
-    })
-    
-    if (timestamp && timeDiff > hourInMs) {
-      return res.status(400).json({ 
-        error: "Setup code has expired. Please generate a new QR code on the Android TV device." 
+    // Manager QR tokens persist until manually refreshed, so do not reject based on client timestamp.
+    // Device/emulator clocks can drift and would cause false "expired" errors for valid setup codes.
+    if (timestamp) {
+      const clientAgeHours = Math.round((Date.now() - Number(timestamp)) / 3600000)
+      console.log("QR Setup validation:", {
+        setupCode,
+        tokenOutletId: tokenData.outletId,
+        managerOutletId: teleshopManager.branchId,
+        clientTimestamp: timestamp,
+        clientAgeHours,
+        expiryPolicy: "manual_refresh_only"
       })
     }
 
