@@ -744,7 +744,8 @@ router.post("/upload-promo-video", (req: any, res: any) => {
       return res.status(400).json({ error: "You are not assigned to any outlet" })
     }
 
-    const relativePath = `/uploads/${req.file.filename}`
+    const relativePath = `/api/uploads/${req.file.filename}`
+    const legacyRelativePath = `/uploads/${req.file.filename}`
     const originHeader = String(req.headers.origin || "").trim()
     const frontendBase = String(process.env.FRONTEND_ORIGIN || "")
       .split(",")
@@ -776,6 +777,7 @@ router.post("/upload-promo-video", (req: any, res: any) => {
       success: true,
       url: fileUrl,
       relativeUrl: relativePath,
+      legacyRelativeUrl: legacyRelativePath,
       filename: req.file.filename,
       originalName: req.file.originalname,
       size: req.file.size,

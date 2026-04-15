@@ -108,6 +108,7 @@ app.use(compression({ threshold: Number(process.env.COMPRESS_THRESHOLD || 1024) 
 app.use(cookieParser())
 app.use(express.json({ limit: '20mb' }))
 app.use("/uploads", express.static(UPLOAD_DIR))
+app.use("/api/uploads", express.static(UPLOAD_DIR))
 app.use("/public", express.static("public")) // 🚀 Serve the fixed outlet display
 
 // System logging middleware (logs errors and slow requests to database)
