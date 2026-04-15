@@ -9,13 +9,14 @@ import emailService from "../services/emailService"
 import sltSmsService from "../services/sltSmsService"
 import { getFrontendBaseUrl } from "../utils/urlHelper"
 import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
+import { resolveUploadDir } from "../utils/uploadDir"
 
 import { announceToIpSpeaker } from "../utils/announcer"
 
 const router = Router()
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
-const UPLOAD_DIR = process.env.UPLOAD_DIR || "uploads"
+const UPLOAD_DIR = resolveUploadDir(path.resolve(__dirname, "../.."))
 
 const promoVideoStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
@@ -589,7 +590,7 @@ router.post('/audio-events/:outletId/ack', async (req: Request, res: Response) =
     const { eventIds } = req.body
     
     if (eventIds && Array.isArray(eventIds)) {
-      const initialCount = ((global as any).recentAudioEvents || []).length
+      const initialCount = ((global as any).recentAudioEvents || []).length;
       (global as any).recentAudioEvents = ((global as any).recentAudioEvents || [])
         .filter((event: any) => !eventIds.includes(event.id))
       
@@ -3349,7 +3350,7 @@ router.post("/audio-events/:outletId/ack", async (req: any, res) => {
     }
 
     // Remove acknowledged events
-    const beforeCount = (global as any).recentAudioEvents.length
+    const beforeCount = (global as any).recentAudioEvents.length;
     (global as any).recentAudioEvents = (global as any).recentAudioEvents.filter(
       (event: any) => !eventIds.includes(event.id)
     )

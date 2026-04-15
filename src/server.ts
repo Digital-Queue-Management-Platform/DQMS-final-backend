@@ -3,6 +3,7 @@ import express from "express"
 import cors from "cors"
 import cookieParser from "cookie-parser"
 import fs from "fs"
+import path from "path"
 import { WebSocketServer } from "ws"
 import { createServer } from "http"
 import { PrismaClient } from "@prisma/client"
@@ -35,6 +36,7 @@ import outletRoutes from "./routes/outlet.routes"
 import { healthTracker } from "./services/healthTracker"
 import { systemLogger, requestLoggerMiddleware, errorLoggerMiddleware } from "./services/systemLogger"
 import { wsManager, OUTLET_DEVICES_ROOM, MANAGER_DEVICES_ROOM } from "./services/wsManager"
+import { resolveUploadDir } from "./utils/uploadDir"
 // NOTE: qrSessionService and deviceLinkService disabled - using ManagerQRToken table instead
 // import { qrSessionService } from "./services/qrSessionService"
 // import { deviceLinkService } from "./services/deviceLinkService"
@@ -69,7 +71,8 @@ const app = express()
 app.set("trust proxy", true)
 const server = createServer(app)
 const wss = new WebSocketServer({ server })
-const UPLOAD_DIR = process.env.UPLOAD_DIR || "uploads"
+const PROJECT_ROOT = path.resolve(__dirname, "..")
+const UPLOAD_DIR = resolveUploadDir(PROJECT_ROOT)
 
 // Ensure upload directory exists at boot (required for fresh cloud instances).
 // Ensure upload directory exists at boot
@@ -631,7 +634,8 @@ server.listen(PORT, "0.0.0.0", () => {
     port: PORT, 
     nodeEnv: process.env.NODE_ENV,
     databaseUrlSet: !!process.env.DATABASE_URL,
-    uploadDir: UPLOAD_DIR
+    uploadDir: UPLOAD_DIR,
+    uploadDirConfigured: process.env.UPLOAD_DIR || "uploads"
   }, "SERVER_STARTED");
   
   // Log server startup to system logs
@@ -642,7 +646,8 @@ server.listen(PORT, "0.0.0.0", () => {
     metadata: {
       port: PORT,
       nodeEnv: process.env.NODE_ENV,
-      uploadDir: UPLOAD_DIR
+      uploadDir: UPLOAD_DIR,
+      uploadDirConfigured: process.env.UPLOAD_DIR || "uploads"
     }
   });
   
@@ -685,7 +690,7 @@ server.listen(PORT, "0.0.0.0", () => {
       }
       
       const now = new Date().getTime()
-      const beforeCount = (global as any).recentAudioEvents.length
+      const beforeCount = (global as any).recentAudioEvents.length;
       
       // Remove events older than 2 minutes (performance optimization)
       (global as any).recentAudioEvents = (global as any).recentAudioEvents.filter((event: any) => {

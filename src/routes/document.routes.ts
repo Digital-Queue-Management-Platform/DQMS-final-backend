@@ -2,9 +2,10 @@ import { Router } from "express"
 import multer from "multer"
 import path from "path"
 import { prisma } from "../server"
+import { resolveUploadDir } from "../utils/uploadDir"
 
 const router = Router()
-const UPLOAD_DIR = process.env.UPLOAD_DIR || "uploads"
+const UPLOAD_DIR = resolveUploadDir(path.resolve(__dirname, "../.."))
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
