@@ -2,6 +2,8 @@ import { Router, Request, Response } from "express"
 import { prisma, broadcast, priorityBroadcast } from "../server"
 import * as jwt from "jsonwebtoken"
 import { randomUUID } from "crypto"
+import multer from "multer"
+import path from "path"
 import otpService from "../services/otpService"
 import emailService from "../services/emailService"
 import sltSmsService from "../services/sltSmsService"
@@ -13,6 +15,31 @@ import { announceToIpSpeaker } from "../utils/announcer"
 const router = Router()
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
+const UPLOAD_DIR = process.env.UPLOAD_DIR || "uploads"
+
+const promoVideoStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+  filename: (_req, file, cb) => {
+    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`
+    const ext = path.extname(file.originalname || "").toLowerCase() || ".mp4"
+    cb(null, `promo-${uniqueSuffix}${ext}`)
+  },
+})
+
+const promoVideoUpload = multer({
+  storage: promoVideoStorage,
+  limits: { fileSize: 200 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const mime = (file.mimetype || "").toLowerCase()
+    const ext = path.extname(file.originalname || "").toLowerCase()
+    const isMp4 = mime === "video/mp4" || ext === ".mp4"
+    if (!isMp4) {
+      cb(new Error("Only MP4 files are supported"))
+      return
+    }
+    cb(null, true)
+  },
+})
 
 // Helper to write an audit log entry (fire-and-forget, non-blocking)
 const auditLog = (
@@ -698,6 +725,37 @@ router.get("/me", async (req: any, res) => {
     console.error("Teleshop Manager profile fetch error:", error)
     res.status(500).json({ error: "Failed to fetch profile" })
   }
+})
+
+// Upload a promo video for outlet display (MP4 only)
+router.post("/upload-promo-video", (req: any, res: any) => {
+  promoVideoUpload.single("file")(req, res, (err: any) => {
+    if (err) {
+      const msg = err?.message || "Failed to upload file"
+      return res.status(400).json({ error: msg })
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" })
+    }
+
+    const tm = req.teleshopManager
+    if (!tm?.branchId) {
+      return res.status(400).json({ error: "You are not assigned to any outlet" })
+    }
+
+    const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol
+    const host = (req.headers["x-forwarded-host"] as string) || req.get("host")
+    const fileUrl = `${proto}://${host}/uploads/${req.file.filename}`
+
+    return res.json({
+      success: true,
+      url: fileUrl,
+      filename: req.file.filename,
+      originalName: req.file.originalname,
+      size: req.file.size,
+    })
+  })
 })
 
 // Trigger a test sound on the outlet display via WebSocket
