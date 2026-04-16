@@ -311,7 +311,7 @@ export const broadcast = (data: any) => {
   
   // If this is an audio/token event, queue it for disconnected outlet displays
   if (data.type === 'TOKEN_CALLED' || data.type === 'TOKEN_RECALLED' || data.type === 'TEST_SOUND') {
-    const outletId = data.outletId || 'default'
+    const outletId = data.outletId || data.data?.outletId || 'default'
     
     if (!messageQueue.has(outletId)) {
       messageQueue.set(outletId, [])
