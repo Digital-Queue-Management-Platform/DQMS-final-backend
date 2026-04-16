@@ -878,6 +878,36 @@ router.post("/recall-token", async (req, res) => {
 
     announceToIpSpeaker(recalled.outletId, recallSpeech, customerLang)
 
+    // Store TOKEN_CALLED (recall) event for APK HTTP polling fallback
+    const audioEvent = {
+      id: Date.now().toString(),
+      outletId: recalled.outletId,
+      type: "TOKEN_CALLED",
+      testType: "recall",
+      lang: customerLang,
+      customText: null,
+      chimeVolume: 100,
+      voiceVolume: 300,
+      timestamp: new Date().toISOString(),
+      tokenData: {
+        tokenNumber: String(recalled.tokenNumber),
+        counterNumber: recalled.counterNumber || 0,
+        customerName: firstName
+      }
+    }
+
+    if (!global.recentAudioEvents) {
+      global.recentAudioEvents = []
+    }
+    global.recentAudioEvents.push(audioEvent)
+
+    // Keep only last 20 events
+    if (global.recentAudioEvents.length > 20) {
+      global.recentAudioEvents = global.recentAudioEvents.slice(-20)
+    }
+
+    console.log(`[HTTP_FALLBACK] TOKEN_CALLED (recall) event stored for APK polling: ${audioEvent.id} (outlet: ${audioEvent.outletId})`)
+
     broadcast({ type: "OFFICER_STATUS_CHANGE", data: { officerId, status: "serving", timestamp: new Date().toISOString() } })
 
     res.json({ success: true, token: recalled })
