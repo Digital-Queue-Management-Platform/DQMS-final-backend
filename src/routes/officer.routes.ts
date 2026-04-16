@@ -529,7 +529,7 @@ router.post("/next-token", async (req, res) => {
       voiceVolume: 300,
       timestamp: new Date().toISOString(),
       tokenData: {
-        tokenNumber: updatedToken.tokenNumber,
+        tokenNumber: String(updatedToken.tokenNumber),
         counterNumber: officer.counterNumber || 0,
         customerName: firstName
       }
@@ -787,7 +787,7 @@ router.post("/reannounce-token", async (req, res) => {
       voiceVolume: 300,
       timestamp: new Date().toISOString(),
       tokenData: {
-        tokenNumber: token.tokenNumber,
+        tokenNumber: String(token.tokenNumber),
         counterNumber: token.officer?.counterNumber || 0,
         customerName: firstName
       }
@@ -966,6 +966,7 @@ router.post("/call-token", async (req, res) => {
     })
 
     if (!called) return res.status(404).json({ error: 'Token lost after calling' })
+    const customerLang = resolveCustomerLanguage((called as any).preferredLanguages)
 
     // set officer to serving
     const updatedOfficer = await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
@@ -979,16 +980,6 @@ router.post("/call-token", async (req, res) => {
       const trackingUrl = getTrackingUrl(called.id)
 
       console.log(`[CALL-TOKEN] About to send SMS to ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
-
-      const _callPrefs = (called as any).preferredLanguages
-      let customerLang: 'en' | 'si' | 'ta' = 'en'
-      if (Array.isArray(_callPrefs) && _callPrefs.length > 0) {
-        const fp = String(_callPrefs[0]).toLowerCase()
-        if (['en', 'si', 'ta'].includes(fp)) customerLang = fp as 'en' | 'si' | 'ta'
-      } else if (typeof _callPrefs === 'string') {
-        if (_callPrefs.includes('si')) customerLang = 'si'
-        else if (_callPrefs.includes('ta')) customerLang = 'ta'
-      }
 
       await sltSmsService.sendCustomerCalled(called.customer.mobileNumber, {
         firstName,
@@ -1012,13 +1003,13 @@ router.post("/call-token", async (req, res) => {
       outletId: called.outletId,
       type: "TOKEN_CALLED", 
       testType: "recall",
-      lang: (called as any).preferredLanguages || 'en',
+      lang: customerLang,
       customText: null,
       chimeVolume: 100,
       voiceVolume: 300,
       timestamp: new Date().toISOString(),
       tokenData: {
-        tokenNumber: called.tokenNumber,
+        tokenNumber: String(called.tokenNumber),
         counterNumber: called.officer?.counterNumber || 0,
         customerName: "Customer"
       }
