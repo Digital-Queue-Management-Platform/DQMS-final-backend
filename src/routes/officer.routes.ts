@@ -9,6 +9,40 @@ import { announceToIpSpeaker } from "../utils/announcer"
 
 const router = Router()
 
+type SupportedLanguage = "en" | "si" | "ta"
+
+function resolveCustomerLanguage(preferredLanguages: unknown): SupportedLanguage {
+  const normalize = (value: unknown): SupportedLanguage | null => {
+    const lang = String(value || "").trim().toLowerCase()
+    if (lang === "en" || lang === "si" || lang === "ta") return lang
+    return null
+  }
+
+  if (Array.isArray(preferredLanguages) && preferredLanguages.length > 0) {
+    const direct = normalize(preferredLanguages[0])
+    if (direct) return direct
+  }
+
+  if (typeof preferredLanguages === "string") {
+    const direct = normalize(preferredLanguages)
+    if (direct) return direct
+
+    const lowered = preferredLanguages.toLowerCase()
+    if (lowered.includes("si")) return "si"
+    if (lowered.includes("ta")) return "ta"
+    if (lowered.includes("en")) return "en"
+  }
+
+  if (preferredLanguages && typeof preferredLanguages === "object") {
+    for (const value of Object.values(preferredLanguages as Record<string, unknown>)) {
+      const direct = normalize(value)
+      if (direct) return direct
+    }
+  }
+
+  return "en"
+}
+
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 // No expiration for production system - officers need continuous access during shifts
 const JWT_EXPIRES = process.env.JWT_EXPIRES || undefined
@@ -458,15 +492,7 @@ router.post("/next-token", async (req, res) => {
 
     const firstName = updatedToken.customer.name.split(' ')[0]
     const trackingUrl = getTrackingUrl(updatedToken.id)
-    const _prefs = (updatedToken as any).preferredLanguages
-    let customerLang: "en" | "si" | "ta" = "en"
-    if (Array.isArray(_prefs) && _prefs.length > 0) {
-      const fp = String(_prefs[0]).toLowerCase()
-      if (["en", "si", "ta"].includes(fp)) customerLang = fp as "en" | "si" | "ta"
-    } else if (typeof _prefs === "string") {
-      if (_prefs.includes("si")) customerLang = "si"
-      else if (_prefs.includes("ta")) customerLang = "ta"
-    }
+    const customerLang = resolveCustomerLanguage((updatedToken as any).preferredLanguages)
 
     // Send SMS notification to customer
     try {
@@ -481,7 +507,15 @@ router.post("/next-token", async (req, res) => {
       console.error("Next-token SMS sending failed:", smsError)
     }
 
-    broadcast({ type: "TOKEN_CALLED", data: updatedToken })
+    broadcast({
+      type: "TOKEN_CALLED",
+      data: {
+        ...updatedToken,
+        customerLang,
+        firstName,
+        customerName: updatedToken.customer.name,
+      }
+    })
 
     // Store TOKEN_CALLED event for APK HTTP polling fallback
     const audioEvent = {
@@ -489,13 +523,13 @@ router.post("/next-token", async (req, res) => {
       outletId: updatedToken.outletId,
       type: "TOKEN_CALLED",
       testType: null,
-      lang: customerLang || 'en',
+      lang: customerLang,
       customText: null,
       chimeVolume: 100,
       voiceVolume: 300,
       timestamp: new Date().toISOString(),
       tokenData: {
-        tokenNumber: updatedToken.tokenNumber,
+        tokenNumber: String(updatedToken.tokenNumber),
         counterNumber: officer.counterNumber || 0,
         customerName: firstName
       }
@@ -515,9 +549,9 @@ router.post("/next-token", async (req, res) => {
 
     // Also trigger hardware IP speaker if configured
     let tokenSpeech = ""
-    if (customerLang === "si") tokenSpeech = `${firstName}. ටෝකන් අංක ${updatedToken.tokenNumber}, කරුණාකර කවුන්ටර අංක ${officer.counterNumber || 0} වෙත පැමිණෙන්න.`
-    else if (customerLang === "ta") tokenSpeech = `${firstName}. அடையாள எண் ${updatedToken.tokenNumber}, தயவுசெய்து கவுண்டர் எண் ${officer.counterNumber || 0} க்கு செல்லவும்.`
-    else tokenSpeech = `${firstName}. Token number ${updatedToken.tokenNumber}, please proceed to counter number ${officer.counterNumber || 0}.`
+    if (customerLang === "si") tokenSpeech = `ටෝකන් අංක ${updatedToken.tokenNumber}, කරුණාකර කවුන්ටර අංක ${officer.counterNumber || 0} වෙත පැමිණෙන්න.`
+    else if (customerLang === "ta") tokenSpeech = `அடையாள எண் ${updatedToken.tokenNumber}, தயவுசெய்து கவுண்டர் எண் ${officer.counterNumber || 0} க்கு செல்லவும்.`
+    else tokenSpeech = `Token number ${updatedToken.tokenNumber}, please proceed to counter number ${officer.counterNumber || 0}.`
     
     announceToIpSpeaker(updatedToken.outletId, tokenSpeech, customerLang)
 
@@ -727,8 +761,19 @@ router.post("/reannounce-token", async (req, res) => {
       return res.status(400).json({ error: 'Only in-service tokens can be re-announced' })
     }
 
+    const customerLang = resolveCustomerLanguage((token as any).preferredLanguages)
+    const firstName = token.customer?.name?.split(' ')[0] || 'Customer'
+
     // Broadcast again. The central display will speak it.
-    broadcast({ type: 'TOKEN_CALLED', data: token })
+    broadcast({
+      type: 'TOKEN_CALLED',
+      data: {
+        ...token,
+        customerLang,
+        firstName,
+        customerName: token.customer?.name || 'Customer',
+      }
+    })
 
     // Store TOKEN_CALLED (re-announce) event for APK HTTP polling fallback
     const audioEvent = {
@@ -736,15 +781,15 @@ router.post("/reannounce-token", async (req, res) => {
       outletId: token.outletId,
       type: "TOKEN_CALLED",
       testType: "re-announce",
-      lang: (token as any).preferredLanguages || 'en',
+      lang: customerLang,
       customText: null,
       chimeVolume: 100,
       voiceVolume: 300,
       timestamp: new Date().toISOString(),
       tokenData: {
-        tokenNumber: token.tokenNumber,
+        tokenNumber: String(token.tokenNumber),
         counterNumber: token.officer?.counterNumber || 0,
-        customerName: token.customer?.name || "Customer"
+        customerName: firstName
       }
     }
     
@@ -796,15 +841,7 @@ router.post("/recall-token", async (req, res) => {
 
     const firstName = recalled.customer.name.split(' ')[0]
     const trackingUrl = getTrackingUrl(recalled.id)
-    const _recallPrefs = (recalled as any).preferredLanguages
-    let customerLang: "en" | "si" | "ta" = "en"
-    if (Array.isArray(_recallPrefs) && _recallPrefs.length > 0) {
-      const fp = String(_recallPrefs[0]).toLowerCase()
-      if (["en", "si", "ta"].includes(fp)) customerLang = fp as "en" | "si" | "ta"
-    } else if (typeof _recallPrefs === "string") {
-      if (_recallPrefs.includes("si")) customerLang = "si"
-      else if (_recallPrefs.includes("ta")) customerLang = "ta"
-    }
+    const customerLang = resolveCustomerLanguage((recalled as any).preferredLanguages)
 
     // Send SMS notification to customer about recall  
     try {
@@ -823,15 +860,53 @@ router.post("/recall-token", async (req, res) => {
     await prisma.officer.update({ where: { id: officerId }, data: { status: "serving" } })
 
     // broadcast update
-    broadcast({ type: "TOKEN_RECALLED", data: recalled })
+    broadcast({
+      type: "TOKEN_RECALLED",
+      data: {
+        ...recalled,
+        customerLang,
+        firstName,
+        customerName: recalled.customer.name,
+      }
+    })
 
     // Also trigger hardware IP speaker if configured
     let recallSpeech = ""
-    if (customerLang === "si") recallSpeech = `${firstName}. ටෝකන් අංක ${recalled.tokenNumber} නැවත කැඳවනු ලැබේ. කරුණාකර වහාම කවුන්ටරය ${recalled.counterNumber || 0} වෙත පැමිණෙන්න.`
-    else if (customerLang === "ta") recallSpeech = `${firstName}. அடையாள எண் ${recalled.tokenNumber} மீண்டும் அழைக்கப்படுகிறது. உடனடியாக கவுண்டர் ${recalled.counterNumber || 0} க்கு வரவும்.`
-    else recallSpeech = `${firstName}. Token number ${recalled.tokenNumber} is being recalled. Please proceed to counter number ${recalled.counterNumber || 0} immediately.`
+    if (customerLang === "si") recallSpeech = `ටෝකන් අංක ${recalled.tokenNumber} නැවත කැඳවනු ලැබේ. කරුණාකර වහාම කවුන්ටර අංක ${recalled.counterNumber || 0} වෙත පැමිණෙන්න.`
+    else if (customerLang === "ta") recallSpeech = `அடையாள எண் ${recalled.tokenNumber} மீண்டும் அழைக்கப்படுகிறது. உடனடியாக கவுண்டர் ${recalled.counterNumber || 0} க்கு வரவும்.`
+    else recallSpeech = `Token number ${recalled.tokenNumber} is being recalled. Please proceed to counter number ${recalled.counterNumber || 0} immediately.`
 
     announceToIpSpeaker(recalled.outletId, recallSpeech, customerLang)
+
+    // Store TOKEN_CALLED (recall) event for APK HTTP polling fallback
+    const audioEvent = {
+      id: Date.now().toString(),
+      outletId: recalled.outletId,
+      type: "TOKEN_CALLED",
+      testType: "recall",
+      lang: customerLang,
+      customText: null,
+      chimeVolume: 100,
+      voiceVolume: 300,
+      timestamp: new Date().toISOString(),
+      tokenData: {
+        tokenNumber: String(recalled.tokenNumber),
+        counterNumber: recalled.counterNumber || 0,
+        customerName: firstName
+      }
+    }
+
+    if (!global.recentAudioEvents) {
+      global.recentAudioEvents = []
+    }
+    global.recentAudioEvents.push(audioEvent)
+
+    // Keep only last 20 events
+    if (global.recentAudioEvents.length > 20) {
+      global.recentAudioEvents = global.recentAudioEvents.slice(-20)
+    }
+
+    console.log(`[HTTP_FALLBACK] TOKEN_CALLED (recall) event stored for APK polling: ${audioEvent.id} (outlet: ${audioEvent.outletId})`)
 
     broadcast({ type: "OFFICER_STATUS_CHANGE", data: { officerId, status: "serving", timestamp: new Date().toISOString() } })
 
@@ -921,6 +996,7 @@ router.post("/call-token", async (req, res) => {
     })
 
     if (!called) return res.status(404).json({ error: 'Token lost after calling' })
+    const customerLang = resolveCustomerLanguage((called as any).preferredLanguages)
 
     // set officer to serving
     const updatedOfficer = await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
@@ -934,16 +1010,6 @@ router.post("/call-token", async (req, res) => {
       const trackingUrl = getTrackingUrl(called.id)
 
       console.log(`[CALL-TOKEN] About to send SMS to ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
-
-      const _callPrefs = (called as any).preferredLanguages
-      let customerLang: 'en' | 'si' | 'ta' = 'en'
-      if (Array.isArray(_callPrefs) && _callPrefs.length > 0) {
-        const fp = String(_callPrefs[0]).toLowerCase()
-        if (['en', 'si', 'ta'].includes(fp)) customerLang = fp as 'en' | 'si' | 'ta'
-      } else if (typeof _callPrefs === 'string') {
-        if (_callPrefs.includes('si')) customerLang = 'si'
-        else if (_callPrefs.includes('ta')) customerLang = 'ta'
-      }
 
       await sltSmsService.sendCustomerCalled(called.customer.mobileNumber, {
         firstName,
@@ -967,15 +1033,15 @@ router.post("/call-token", async (req, res) => {
       outletId: called.outletId,
       type: "TOKEN_CALLED", 
       testType: "recall",
-      lang: (called as any).preferredLanguages || 'en',
+      lang: customerLang,
       customText: null,
       chimeVolume: 100,
       voiceVolume: 300,
       timestamp: new Date().toISOString(),
       tokenData: {
-        tokenNumber: called.tokenNumber,
+        tokenNumber: String(called.tokenNumber),
         counterNumber: called.officer?.counterNumber || 0,
-        customerName: called.customer?.name || "Customer"
+        customerName: "Customer"
       }
     }
     

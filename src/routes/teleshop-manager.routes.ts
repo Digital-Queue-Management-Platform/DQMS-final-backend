@@ -2,17 +2,45 @@ import { Router, Request, Response } from "express"
 import { prisma, broadcast, priorityBroadcast } from "../server"
 import * as jwt from "jsonwebtoken"
 import { randomUUID } from "crypto"
+import multer from "multer"
+import path from "path"
 import otpService from "../services/otpService"
 import emailService from "../services/emailService"
 import sltSmsService from "../services/sltSmsService"
 import { getFrontendBaseUrl } from "../utils/urlHelper"
 import { isValidSLMobile, isValidEmail, isValidName } from "../utils/validators"
+import { resolveUploadDir } from "../utils/uploadDir"
 
 import { announceToIpSpeaker } from "../utils/announcer"
 
 const router = Router()
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
+const UPLOAD_DIR = resolveUploadDir(path.resolve(__dirname, "../.."))
+
+const promoVideoStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+  filename: (_req, file, cb) => {
+    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`
+    const ext = path.extname(file.originalname || "").toLowerCase() || ".mp4"
+    cb(null, `promo-${uniqueSuffix}${ext}`)
+  },
+})
+
+const promoVideoUpload = multer({
+  storage: promoVideoStorage,
+  limits: { fileSize: 200 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const mime = (file.mimetype || "").toLowerCase()
+    const ext = path.extname(file.originalname || "").toLowerCase()
+    const isMp4 = mime === "video/mp4" || ext === ".mp4"
+    if (!isMp4) {
+      cb(new Error("Only MP4 files are supported"))
+      return
+    }
+    cb(null, true)
+  },
+})
 
 // Helper to write an audit log entry (fire-and-forget, non-blocking)
 const auditLog = (
@@ -562,7 +590,7 @@ router.post('/audio-events/:outletId/ack', async (req: Request, res: Response) =
     const { eventIds } = req.body
     
     if (eventIds && Array.isArray(eventIds)) {
-      const initialCount = ((global as any).recentAudioEvents || []).length
+      const initialCount = ((global as any).recentAudioEvents || []).length;
       (global as any).recentAudioEvents = ((global as any).recentAudioEvents || [])
         .filter((event: any) => !eventIds.includes(event.id))
       
@@ -698,6 +726,64 @@ router.get("/me", async (req: any, res) => {
     console.error("Teleshop Manager profile fetch error:", error)
     res.status(500).json({ error: "Failed to fetch profile" })
   }
+})
+
+// Upload a promo video for outlet display (MP4 only)
+router.post("/upload-promo-video", (req: any, res: any) => {
+  promoVideoUpload.single("file")(req, res, (err: any) => {
+    if (err) {
+      const msg = err?.message || "Failed to upload file"
+      return res.status(400).json({ error: msg })
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" })
+    }
+
+    const tm = req.teleshopManager
+    if (!tm?.branchId) {
+      return res.status(400).json({ error: "You are not assigned to any outlet" })
+    }
+
+    const relativePath = `/api/uploads/${req.file.filename}`
+    const legacyRelativePath = `/uploads/${req.file.filename}`
+    const originHeader = String(req.headers.origin || "").trim()
+    const frontendBase = String(process.env.FRONTEND_ORIGIN || "")
+      .split(",")
+      .map((s) => s.trim())
+      .find(Boolean) || ""
+
+    const resolveAbsoluteUrl = (base: string) => {
+      try {
+        return new URL(relativePath, base).toString()
+      } catch {
+        return ""
+      }
+    }
+
+    // Prefer browser Origin for correct public HTTPS host behind reverse proxies.
+    let fileUrl = resolveAbsoluteUrl(originHeader)
+
+    if (!fileUrl) {
+      fileUrl = resolveAbsoluteUrl(frontendBase)
+    }
+
+    if (!fileUrl) {
+      const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol
+      const host = (req.headers["x-forwarded-host"] as string) || req.get("host")
+      fileUrl = `${proto}://${host}${relativePath}`
+    }
+
+    return res.json({
+      success: true,
+      url: fileUrl,
+      relativeUrl: relativePath,
+      legacyRelativeUrl: legacyRelativePath,
+      filename: req.file.filename,
+      originalName: req.file.originalname,
+      size: req.file.size,
+    })
+  })
 })
 
 // Trigger a test sound on the outlet display via WebSocket
@@ -2932,25 +3018,17 @@ router.post("/outlet-setup-qr", async (req: any, res) => {
       })
     }
 
-    // Check if setup code has expired (24 hours from generation)
-    const currentTime = Date.now()
-    const timeDiff = currentTime - timestamp
-    const hourInMs = 24 * 3600000 // 24 hours - consistent with QR generation
-    
-    console.log("QR Setup validation:", {
-      setupCode: setupCode,
-      tokenOutletId: tokenData.outletId,
-      managerOutletId: teleshopManager.branchId,
-      timestamp: timestamp,
-      currentTime: currentTime,
-      timeDiff: timeDiff,
-      timeDiffHours: Math.round(timeDiff / 3600000),
-      isExpired: timeDiff > hourInMs
-    })
-    
-    if (timestamp && timeDiff > hourInMs) {
-      return res.status(400).json({ 
-        error: "Setup code has expired. Please generate a new QR code on the Android TV device." 
+    // Manager QR tokens persist until manually refreshed, so do not reject based on client timestamp.
+    // Device/emulator clocks can drift and would cause false "expired" errors for valid setup codes.
+    if (timestamp) {
+      const clientAgeHours = Math.round((Date.now() - Number(timestamp)) / 3600000)
+      console.log("QR Setup validation:", {
+        setupCode,
+        tokenOutletId: tokenData.outletId,
+        managerOutletId: teleshopManager.branchId,
+        clientTimestamp: timestamp,
+        clientAgeHours,
+        expiryPolicy: "manual_refresh_only"
       })
     }
 
@@ -3272,7 +3350,7 @@ router.post("/audio-events/:outletId/ack", async (req: any, res) => {
     }
 
     // Remove acknowledged events
-    const beforeCount = (global as any).recentAudioEvents.length
+    const beforeCount = (global as any).recentAudioEvents.length;
     (global as any).recentAudioEvents = (global as any).recentAudioEvents.filter(
       (event: any) => !eventIds.includes(event.id)
     )

@@ -3,6 +3,7 @@ import express from "express"
 import cors from "cors"
 import cookieParser from "cookie-parser"
 import fs from "fs"
+import path from "path"
 import { WebSocketServer } from "ws"
 import { createServer } from "http"
 import { PrismaClient } from "@prisma/client"
@@ -32,9 +33,11 @@ import sltSmsRoutes from "./routes/slt-sms.routes"
 import utilsRoutes from "./routes/utils.routes"
 import logsRoutes from "./routes/logs.routes"
 import outletRoutes from "./routes/outlet.routes"
+import * as sltBillingService from "./services/sltBillingService"
 import { healthTracker } from "./services/healthTracker"
 import { systemLogger, requestLoggerMiddleware, errorLoggerMiddleware } from "./services/systemLogger"
 import { wsManager, OUTLET_DEVICES_ROOM, MANAGER_DEVICES_ROOM } from "./services/wsManager"
+import { resolveUploadDir } from "./utils/uploadDir"
 // NOTE: qrSessionService and deviceLinkService disabled - using ManagerQRToken table instead
 // import { qrSessionService } from "./services/qrSessionService"
 // import { deviceLinkService } from "./services/deviceLinkService"
@@ -69,7 +72,8 @@ const app = express()
 app.set("trust proxy", true)
 const server = createServer(app)
 const wss = new WebSocketServer({ server })
-const UPLOAD_DIR = process.env.UPLOAD_DIR || "uploads"
+const PROJECT_ROOT = path.resolve(__dirname, "..")
+const UPLOAD_DIR = resolveUploadDir(PROJECT_ROOT)
 
 // Ensure upload directory exists at boot (required for fresh cloud instances).
 // Ensure upload directory exists at boot
@@ -89,11 +93,11 @@ app.use(
   cors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true)
-      
+
       const normalizedOrigin = origin.toLowerCase()
-      const isAllowed = frontendOrigins.some(o => o.toLowerCase() === normalizedOrigin) || 
-                        normalizedOrigin.endsWith("vercel.app") ||
-                        normalizedOrigin.includes("digital-queue-management-platform")
+      const isAllowed = frontendOrigins.some(o => o.toLowerCase() === normalizedOrigin) ||
+        normalizedOrigin.endsWith("vercel.app") ||
+        normalizedOrigin.includes("digital-queue-management-platform")
 
       if (isAllowed) return callback(null, true)
 
@@ -108,6 +112,7 @@ app.use(compression({ threshold: Number(process.env.COMPRESS_THRESHOLD || 1024) 
 app.use(cookieParser())
 app.use(express.json({ limit: '20mb' }))
 app.use("/uploads", express.static(UPLOAD_DIR))
+app.use("/api/uploads", express.static(UPLOAD_DIR))
 app.use("/public", express.static("public")) // 🚀 Serve the fixed outlet display
 
 // System logging middleware (logs errors and slow requests to database)
@@ -182,7 +187,7 @@ wss.on("connection", (ws, req) => {
   if (deviceId) {
     logger.info({ deviceId }, "WS_DEVICE_CONNECTED")
   }
-  
+
   // 🚀 DELIVER QUEUED MESSAGES FOR OUTLET DISPLAYS
   if (outletId) {
     setTimeout(() => {
@@ -195,12 +200,12 @@ wss.on("connection", (ws, req) => {
     wsManager.updateHeartbeat(ws)
     console.log(`Pong received - connection alive`)
   })
-  
+
   // Handle incoming messages
   ws.on("message", async (data) => {
     try {
       const message = JSON.parse(data.toString())
-      
+
       switch (message.type) {
         case "HEARTBEAT":
           // Update heartbeat for the client
@@ -212,9 +217,9 @@ wss.on("connection", (ws, req) => {
           // Manager subscribing to outlet device updates
           if (message.outletId) {
             wsManager.joinRoom(ws, OUTLET_DEVICES_ROOM(message.outletId))
-            ws.send(JSON.stringify({ 
-              type: "SUBSCRIBED_OUTLET_DEVICES", 
-              outletId: message.outletId 
+            ws.send(JSON.stringify({
+              type: "SUBSCRIBED_OUTLET_DEVICES",
+              outletId: message.outletId
             }))
           }
           break
@@ -249,7 +254,7 @@ wss.on("connection", (ws, req) => {
     systemLogger.wsEvent('client-disconnected', `WebSocket client disconnected from ${ip}`, {
       ipAddress: ip || undefined
     })
-    
+
     // Unregister client from wsManager
     wsManager.unregisterClient(ws)
   })
@@ -282,7 +287,7 @@ const MAX_MESSAGE_AGE = 5 * 60 * 1000 // 5 minutes
 setInterval(() => {
   const now = Date.now()
   messageQueue.forEach((messages, outletId) => {
-    const filtered = messages.filter(msg => 
+    const filtered = messages.filter(msg =>
       now - msg.timestamp.getTime() < MAX_MESSAGE_AGE
     )
     if (filtered.length !== messages.length) {
@@ -297,22 +302,22 @@ export const broadcast = (data: any) => {
   const message = JSON.stringify(data)
   let delivered = 0
   let queued = 0
-  
+
   wss.clients.forEach((client) => {
     if (client.readyState === 1) { // OPEN
       client.send(message)
       delivered++
     }
   })
-  
+
   // If this is an audio/token event, queue it for disconnected outlet displays
   if (data.type === 'TOKEN_CALLED' || data.type === 'TOKEN_RECALLED' || data.type === 'TEST_SOUND') {
-    const outletId = data.outletId || 'default'
-    
+    const outletId = data.outletId || data.data?.outletId || 'default'
+
     if (!messageQueue.has(outletId)) {
       messageQueue.set(outletId, [])
     }
-    
+
     const queue = messageQueue.get(outletId)!
     const queuedMessage: QueuedMessage = {
       id: Date.now().toString(),
@@ -321,18 +326,18 @@ export const broadcast = (data: any) => {
       timestamp: new Date(),
       attempts: 0
     }
-    
+
     queue.push(queuedMessage)
-    
+
     // Keep only latest messages
     if (queue.length > MAX_QUEUE_SIZE) {
       queue.splice(0, queue.length - MAX_QUEUE_SIZE)
     }
-    
+
     queued++
     console.log(`📨 Message queued for outlet ${outletId} (delivered: ${delivered}, queued: ${queued})`)
   }
-  
+
   console.log(`Broadcast complete - delivered: ${delivered}, queued: ${queued}`)
 }
 
@@ -340,9 +345,9 @@ export const broadcast = (data: any) => {
 export const deliverQueuedMessages = (ws: any, outletId: string) => {
   const queue = messageQueue.get(outletId)
   if (!queue || queue.length === 0) return
-  
+
   console.log(`📬 Delivering ${queue.length} queued messages to outlet ${outletId}`)
-  
+
   queue.forEach(queuedMsg => {
     if (ws.readyState === 1) { // OPEN
       ws.send(JSON.stringify({
@@ -353,7 +358,7 @@ export const deliverQueuedMessages = (ws: any, outletId: string) => {
       queuedMsg.attempts++
     }
   })
-  
+
   // Clear delivered messages
   messageQueue.delete(outletId)
 }
@@ -361,19 +366,19 @@ export const deliverQueuedMessages = (ws: any, outletId: string) => {
 // Priority broadcast for urgent messages (sends multiple times for reliability)
 export const priorityBroadcast = (data: any) => {
   const message = JSON.stringify(data)
-  
+
   wss.clients.forEach((client) => {
     if (client.readyState === 1) {
       // Send immediately
       client.send(message)
-      
+
       // Send again after 100ms for reliability
       setTimeout(() => {
         if (client.readyState === 1) {
           client.send(message)
         }
       }, 100)
-      
+
       // Send once more after 500ms 
       setTimeout(() => {
         if (client.readyState === 1) {
@@ -388,7 +393,7 @@ export const priorityBroadcast = (data: any) => {
 app.get("/api/outlet/:outletId/queued-messages", (req, res) => {
   const { outletId } = req.params
   const queue = messageQueue.get(outletId) || []
-  
+
   res.json({
     outletId,
     messages: queue.map(msg => ({
@@ -413,19 +418,19 @@ app.get("/api/websocket/status", (req, res) => {
 
 // Health checks and root routes for Azure/LB probes
 app.get("/", (req, res) => {
-  res.json({ 
-    status: "ok", 
-    service: "digital-queue-backend", 
+  res.json({
+    status: "ok",
+    service: "digital-queue-backend",
     timestamp: new Date().toISOString()
   });
 });
 
 app.get("/api/health", (req, res) => {
   res.set('Cache-Control', 'no-store')
-  res.json({ 
-    status: "ok", 
-    timestamp: new Date().toISOString(), 
-    uptime: Number(process.uptime().toFixed(1)) 
+  res.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    uptime: Number(process.uptime().toFixed(1))
   });
 });
 
@@ -626,13 +631,14 @@ app.get('/api/metrics', (req, res) => {
 const PORT = Number(process.env.PORT) || 3001
 
 server.listen(PORT, "0.0.0.0", () => {
-  logger.info({ 
-    port: PORT, 
+  logger.info({
+    port: PORT,
     nodeEnv: process.env.NODE_ENV,
     databaseUrlSet: !!process.env.DATABASE_URL,
-    uploadDir: UPLOAD_DIR
+    uploadDir: UPLOAD_DIR,
+    uploadDirConfigured: process.env.UPLOAD_DIR || "uploads"
   }, "SERVER_STARTED");
-  
+
   // Log server startup to system logs
   systemLogger.info("Backend server started", {
     service: 'backend',
@@ -641,10 +647,11 @@ server.listen(PORT, "0.0.0.0", () => {
     metadata: {
       port: PORT,
       nodeEnv: process.env.NODE_ENV,
-      uploadDir: UPLOAD_DIR
+      uploadDir: UPLOAD_DIR,
+      uploadDirConfigured: process.env.UPLOAD_DIR || "uploads"
     }
   });
-  
+
   // Early DB connection check
   prisma.$connect().then(() => {
     logger.info("DATABASE_CONNECTED");
@@ -682,33 +689,33 @@ server.listen(PORT, "0.0.0.0", () => {
         (global as any).recentAudioEvents = []
         return
       }
-      
+
       const now = new Date().getTime()
-      const beforeCount = (global as any).recentAudioEvents.length
-      
+      const beforeCount = (global as any).recentAudioEvents.length;
+
       // Remove events older than 2 minutes (performance optimization)
       (global as any).recentAudioEvents = (global as any).recentAudioEvents.filter((event: any) => {
         if (!event || !event.timestamp) return false
         const eventTime = new Date(event.timestamp).getTime()
         return (now - eventTime) < 120000 // 2 minutes
       })
-      
+
       // Limit total events to prevent memory issues
       if ((global as any).recentAudioEvents.length > 50) {
         (global as any).recentAudioEvents = (global as any).recentAudioEvents.slice(-50)
       }
-      
+
       const afterCount = (global as any).recentAudioEvents.length
       const removedCount = beforeCount - afterCount
-      
+
       if (removedCount > 0) {
         console.log(`🧹 Audio Event Cleanup: Removed ${removedCount} old/excess events, ${afterCount} remaining`)
-        
+
         // Log performance warnings
         if (afterCount > 30) {
           console.log(`⚠️  HIGH AUDIO EVENT QUEUE: ${afterCount} events - APK may need acknowledgment optimization`)
         }
-        
+
         // Group events by outlet for performance monitoring
         const eventsByOutlet = (global as any).recentAudioEvents.reduce((acc: any, event: any) => {
           if (event && event.outletId) {
@@ -716,7 +723,7 @@ server.listen(PORT, "0.0.0.0", () => {
           }
           return acc
         }, {})
-        
+
         for (const [outletId, count] of Object.entries(eventsByOutlet)) {
           if ((count as number) > 10) {
             console.log(`⚠️  Outlet ${outletId} has ${count} unacknowledged events - check APK performance`)
@@ -735,7 +742,7 @@ server.listen(PORT, "0.0.0.0", () => {
   // NOTE: QR Session cleanup jobs disabled - using ManagerQRToken table instead of QRSession
   // The QRSession and DeviceLink tables have Prisma client issues - keeping disabled until resolved
   console.log("QR session cleanup jobs disabled - using existing ManagerQRToken flow")
-  
+
   // ManagerQRToken cleanup job removed - QR codes remain valid until manually refreshed via dashboard
   console.log("ManagerQRToken persists until manual refresh - no automatic expiry")
   systemLogger.info("ManagerQRToken - no automatic cleanup, tokens persist until manual refresh", {
@@ -847,11 +854,11 @@ async function processAppointments() {
       try {
         const outlet = await prisma.outlet.findUnique({ where: { id: appt.outletId } })
         const minutesUntil = Math.round((new Date(appt.appointmentAt).getTime() - now.getTime()) / (1000 * 60))
-        
+
         await smsHelper.sendAppointmentReminder(appt.mobileNumber, {
           name: appt.name,
           outletName: outlet?.name || 'SLT Office',
-          dateTime: new Date(appt.appointmentAt).toLocaleString('en-GB', { 
+          dateTime: new Date(appt.appointmentAt).toLocaleString('en-GB', {
             timeZone: 'Asia/Colombo',
             day: '2-digit',
             month: '2-digit',
@@ -879,11 +886,11 @@ async function processAppointments() {
       try {
         const outlet = await prisma.outlet.findUnique({ where: { id: appt.outletId } })
         const minutesUntil = Math.round((new Date(appt.appointmentAt).getTime() - now.getTime()) / (1000 * 60))
-        
+
         await smsHelper.sendAppointmentReminder(appt.mobileNumber, {
           name: appt.name,
           outletName: outlet?.name || 'SLT Office',
-          dateTime: new Date(appt.appointmentAt).toLocaleString('en-GB', { 
+          dateTime: new Date(appt.appointmentAt).toLocaleString('en-GB', {
             timeZone: 'Asia/Colombo',
             day: '2-digit',
             month: '2-digit',
@@ -916,33 +923,33 @@ async function processAppointments() {
           if (!apptRow || apptRow.status !== 'booked') return
 
           // Ensure customer exists - find the most recent customer with matching mobile number and name
-          let customer = await tx.customer.findFirst({ 
-            where: { 
+          let customer = await tx.customer.findFirst({
+            where: {
               mobileNumber: apptRow.mobileNumber,
               name: apptRow.name
             },
             orderBy: { createdAt: 'desc' } // Prioritize recently created customers
           })
-          
+
           // If still no customer found, check if there's a case sensitivity or whitespace issue
           if (!customer) {
             console.log('DEBUG: Exact match not found, trying case-insensitive search for appointment:', apptRow.name)
             const allCustomersWithMobile = await tx.customer.findMany({
               where: { mobileNumber: apptRow.mobileNumber }
             })
-            
+
             // Try to find a customer with the same name (case-insensitive and trimmed)
             const targetName = apptRow.name.trim().toLowerCase()
-            const matchingCustomer = allCustomersWithMobile.find(c => 
+            const matchingCustomer = allCustomersWithMobile.find(c =>
               c.name.trim().toLowerCase() === targetName
             )
-            
+
             if (matchingCustomer) {
               customer = matchingCustomer
               console.log('DEBUG: Found customer via case-insensitive search:', customer)
             }
           }
-          
+
           // If still no customer, create one
           if (!customer) {
             customer = await tx.customer.create({ data: { name: apptRow.name, mobileNumber: apptRow.mobileNumber } })
@@ -974,7 +981,7 @@ async function processAppointments() {
               billPaymentMethod: apptRow.billPaymentMethod,
             }
           })
-          
+
           let tokenId = newToken.id
           let createdTokenId = newToken.id
 
@@ -1015,13 +1022,59 @@ async function processAppointments() {
             WHERE "id" = ${apptRow.id}
           `
 
-          return { createdTokenId, outletId: apptRow.outletId }
+          return { 
+            createdTokenId, 
+            outletId: apptRow.outletId, 
+            appointmentBills, 
+            customerMobileNumber: apptRow.mobileNumber 
+          }
         }, { timeout: 10000 })
 
         if (result?.createdTokenId) {
           // Notify clients so officer queue refreshes automatically
           broadcast({ type: 'NEW_TOKEN', data: { tokenId: result.createdTokenId, outletId: result.outletId } })
           logger.info(`Queued appointment ${appt.id} as token ${result.createdTokenId}`)
+
+          // Trigger SLT bill amount SMS notifications if applicable
+          if (result.appointmentBills && result.appointmentBills.length > 0) {
+            const mobileNumber = result.customerMobileNumber;
+            const bills = result.appointmentBills;
+            
+            logger.info({ appointmentId: appt.id, mobileNumber, billsCount: bills.length }, '[AUTO-QUEUE] Triggering bill notifications');
+            
+            // Get last update times for these numbers to prevent duplicate SMS within 2 hours
+            const sltNumbers = bills.map(b => b.telephoneNumber).filter((num): num is string => !!num);
+            const existingBills = await prisma.sltBill.findMany({
+              where: { telephoneNumber: { in: sltNumbers } },
+              select: { telephoneNumber: true, updatedAt: true }
+            });
+
+            const COOLDOWN_MS = 2 * 60 * 60 * 1000; // 2 hours
+            const now = Date.now();
+
+            // Send notifications asynchronously (best-effort)
+            for (const bill of bills) {
+              if (bill.telephoneNumber) {
+                const existingBill = existingBills.find(eb => eb.telephoneNumber === bill.telephoneNumber);
+                if (existingBill && (now - existingBill.updatedAt.getTime() < COOLDOWN_MS)) {
+                  logger.info(`[AUTO-QUEUE] Skipping bill notification for ${bill.telephoneNumber} - sent recently (${existingBill.updatedAt.toISOString()})`);
+                  continue;
+                }
+
+                sltBillingService.sendBillNotificationToOwner(bill.telephoneNumber, mobileNumber)
+                  .then(res => {
+                    if (res.success) {
+                      logger.info(`[AUTO-QUEUE] Bill notification sent for SLT number: ${bill.telephoneNumber}`);
+                    } else {
+                      logger.warn(`[AUTO-QUEUE] Bill notification failed for SLT number: ${bill.telephoneNumber} - ${res.message}`);
+                    }
+                  })
+                  .catch(err => {
+                    logger.error({ err, sltNumber: bill.telephoneNumber }, '[AUTO-QUEUE] Error sending bill notification');
+                  });
+              }
+            }
+          }
         }
       } catch (e) {
         logger.error({ err: e, appointmentId: appt?.id }, 'Failed to enqueue appointment')
@@ -1035,7 +1088,7 @@ async function processAppointments() {
 if (process.env.DISABLE_APPOINTMENT_JOB !== 'true') {
   logger.info(`[AUTO-QUEUE] Starting appointment processor - runs every ${APPOINTMENT_POLL_MS / 1000} seconds, queue window: ${APPOINTMENT_ENQUEUE_AHEAD_MIN} minutes`)
   setInterval(processAppointments, APPOINTMENT_POLL_MS)
-  
+
   // Run once immediately to catch any pending appointments
   setTimeout(processAppointments, 5000) // Wait 5 seconds after server start
 }

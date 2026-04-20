@@ -10,7 +10,7 @@ const prisma = new PrismaClient();
 // POST /api/bills/verify-multiple - Verify multiple SLT telephone numbers and get bill details
 router.post('/verify-multiple', async (req: Request, res: Response) => {
   try {
-    const { telephoneNumbers } = req.body;
+    const { telephoneNumbers, mobileNumber } = req.body;
 
     // Validate input
     if (!Array.isArray(telephoneNumbers) || telephoneNumbers.length === 0) {
@@ -40,8 +40,9 @@ router.post('/verify-multiple', async (req: Request, res: Response) => {
     const smsNotifications: any[] = [];
     const errors: any[] = [];
 
-    // Check cache first if not forcing refresh
-    if (!forceRefresh) {
+    // Check cache first if not forcing refresh AND no mobile number provided
+    // (Providing a mobile number implies a request for a new SMS notification)
+    if (!forceRefresh && !mobileNumber) {
       for (const telephoneNumber of telephoneNumbers) {
         try {
           const cachedBill = await prisma.sltBill.findUnique({
@@ -84,8 +85,8 @@ router.post('/verify-multiple', async (req: Request, res: Response) => {
     if (numbersNeedingApi.length > 0) {
       try {
         // Fetch bill information from SLT API for multiple numbers
-        console.log(`Fetching bills from SLT API for: ${numbersNeedingApi.join(', ')}`);
-        const multiResult = await fetchMultipleBillsFromSltApi(numbersNeedingApi);
+        console.log(`Fetching bills from SLT API for: ${numbersNeedingApi.join(', ')} with mobile: ${mobileNumber}`);
+        const multiResult = await fetchMultipleBillsFromSltApi(numbersNeedingApi, mobileNumber);
 
         // Process successful bills
         for (const sltBillInfo of multiResult.bills) {
@@ -209,6 +210,7 @@ router.post('/verify-multiple', async (req: Request, res: Response) => {
 router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
   try {
     const { telephoneNumber } = req.params;
+    const mobileNumber = req.query.mobileNumber as string | undefined;
 
     // Relaxed validation: Just check for 10 digits
     const phoneRegex = /^\d{10}$/;
@@ -219,10 +221,11 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
     }
 
     try {
-      // Avoid excessive SLT API calls (which trigger SMS) by checking cache first
       const forceRefresh = req.query.force === 'true';
-      
-      if (!forceRefresh) {
+
+      // Avoid excessive SLT API calls by checking cache first,
+      // but ONLY if force refresh isn't requested AND no mobile number is provided
+      if (!forceRefresh && !mobileNumber) {
         const cachedBill = await prisma.sltBill.findUnique({
           where: { telephoneNumber },
           select: {
@@ -251,8 +254,8 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
       }
 
       // Fetch bill information from SLT API
-      console.log(`Fetching bill from SLT API for: ${telephoneNumber}`);
-      const sltBillInfo = await fetchBillFromSltApi(telephoneNumber);
+      console.log(`Fetching bill from SLT API for: ${telephoneNumber} with mobile: ${mobileNumber}`);
+      const sltBillInfo = await fetchBillFromSltApi(telephoneNumber, mobileNumber);
 
       // Normalize the data (pass the queried number to ensure consistency)
       const normalizedData = normalizeSltBillData(sltBillInfo, telephoneNumber);
@@ -337,7 +340,7 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
 // POST /api/bills/search - Search bill by telephone number (alternative endpoint)
 router.post('/search', async (req: Request, res: Response) => {
   try {
-    const { telephoneNumber } = req.body;
+    const { telephoneNumber, mobileNumber } = req.body;
 
     if (!telephoneNumber) {
       return res.status(400).json({ error: 'Telephone number is required' });
@@ -382,8 +385,8 @@ router.post('/search', async (req: Request, res: Response) => {
       }
 
       // Fetch bill information from SLT API
-      console.log(`Searching bill from SLT API for: ${telephoneNumber}`);
-      const sltBillInfo = await fetchBillFromSltApi(telephoneNumber);
+      console.log(`Searching bill from SLT API for: ${telephoneNumber} with mobile: ${mobileNumber}`);
+      const sltBillInfo = await fetchBillFromSltApi(telephoneNumber, mobileNumber);
 
       // Normalize the data (pass the queried number to ensure consistency)
       const normalizedData = normalizeSltBillData(sltBillInfo, telephoneNumber);
@@ -501,7 +504,7 @@ router.get('/all', async (req: Request, res: Response) => {
 // Send bill notification to registered owner using SLT API
 router.post('/send-bill-notification', async (req: Request, res: Response) => {
   try {
-    const { sltTelephoneNumbers } = req.body;
+    const { sltTelephoneNumbers, mobileNumber } = req.body;
 
     if (!sltTelephoneNumbers || !Array.isArray(sltTelephoneNumbers) || sltTelephoneNumbers.length === 0) {
       return res.status(400).json({ error: 'sltTelephoneNumbers array is required' });
@@ -510,7 +513,7 @@ router.post('/send-bill-notification', async (req: Request, res: Response) => {
     // Send notification for each telephone number
     const results = await Promise.all(
       sltTelephoneNumbers.map(async (sltNumber: string) => {
-        const result = await sltBillingService.sendBillNotificationToOwner(sltNumber);
+        const result = await sltBillingService.sendBillNotificationToOwner(sltNumber, mobileNumber);
         return {
           sltNumber,
           ...result
