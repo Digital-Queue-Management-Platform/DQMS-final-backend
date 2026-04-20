@@ -335,7 +335,7 @@ router.get("/validate-qr", async (req, res) => {
 // Register customer and create token
 router.post("/register", async (req, res) => {
   try {
-    const { name, mobileNumber, serviceTypes, outletId, qrToken, preferredLanguages, sltMobileNumber, nicNumber, email, verifiedMobileToken, sltTelephoneNumber, billPaymentIntent, billPaymentAmount, billPaymentMethod, billPaymentCustomAmounts } = req.body
+    const { name, mobileNumber, serviceTypes, outletId, qrToken, preferredLanguages, sltMobileNumber, nicNumber, email, verifiedMobileToken, sltTelephoneNumber, sltTelephoneNumbers, billPaymentIntent, billPaymentAmount, billPaymentMethod, billPaymentCustomAmounts } = req.body
 
     console.log(`Registration attempt - Mobile: ${mobileNumber}, Outlet: ${outletId}, Services: ${serviceTypes}`)
 
@@ -497,6 +497,22 @@ router.post("/register", async (req, res) => {
           outlet: true,
         },
       })
+      
+      // Create TokenBill entries if this is a bill payment service and we have telephone numbers
+      if (Array.isArray(sltTelephoneNumbers) && sltTelephoneNumbers.length > 0) {
+        for (const num of sltTelephoneNumbers) {
+          if (num && String(num).trim()) {
+            await tx.tokenBill.create({
+              data: {
+                tokenId: newToken.id,
+                telephoneNumber: num.trim(),
+                billPaymentIntent: billPaymentIntent || 'full',
+                billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : null
+              }
+            });
+          }
+        }
+      }
 
       return newToken
     }, {
@@ -578,6 +594,11 @@ router.get("/token/:tokenId", async (req, res) => {
         outlet: true,
         officer: true,
         feedback: true,
+        tokenBills: {
+          include: {
+            sltBill: true
+          }
+        }
       },
     })
 

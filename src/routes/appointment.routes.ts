@@ -4,6 +4,7 @@ import * as jwt from "jsonwebtoken"
 import smsHelper from "../utils/smsHelper"
 import { getLastDailyReset } from "../utils/resetWindow"
 import * as crypto from "crypto"
+import * as sltBillingService from "../services/sltBillingService"
 
 const router = Router()
 
@@ -565,13 +566,53 @@ async function addAppointmentToQueue(appt: any) {
       }
     })
 
-    return token
+    return { token, appointmentBills }
   }, {
     timeout: 10000
   })
 
   // Broadcast to officers
-  broadcast({ type: 'NEW_TOKEN', data: result })
+  broadcast({ type: 'NEW_TOKEN', data: result.token })
+  
+  // Trigger SLT bill amount SMS notifications if applicable
+  if (result.appointmentBills && result.appointmentBills.length > 0) {
+    const mobileNumber = appt.mobileNumber;
+    const bills = result.appointmentBills;
+    
+    console.log(`[APPT][BILL] Triggering notifications for appointment ${appt.id} to ${mobileNumber}`);
+    
+    // Get last update times for these numbers to prevent duplicate SMS within 2 hours
+    const sltNumbers = bills.map(b => b.telephoneNumber).filter((num): num is string => !!num);
+    const existingBills = await prisma.sltBill.findMany({
+      where: { telephoneNumber: { in: sltNumbers } },
+      select: { telephoneNumber: true, updatedAt: true }
+    });
+
+    const COOLDOWN_MS = 2 * 60 * 60 * 1000; // 2 hours
+    const now = Date.now();
+
+    for (const bill of bills) {
+      if (bill.telephoneNumber) {
+        const existingBill = existingBills.find(eb => eb.telephoneNumber === bill.telephoneNumber);
+        if (existingBill && (now - existingBill.updatedAt.getTime() < COOLDOWN_MS)) {
+          console.log(`[APPT][BILL] Skipping notification for ${bill.telephoneNumber} - sent recently (${existingBill.updatedAt.toISOString()})`);
+          continue;
+        }
+
+        sltBillingService.sendBillNotificationToOwner(bill.telephoneNumber, mobileNumber)
+          .then(res => {
+            if (res.success) {
+              console.log(`[APPT][BILL] Notification sent for ${bill.telephoneNumber}`);
+            } else {
+              console.warn(`[APPT][BILL] Notification failed for ${bill.telephoneNumber}: ${res.message}`);
+            }
+          })
+          .catch(err => {
+            console.error(`[APPT][BILL] Error sending notification for ${bill.telephoneNumber}:`, err);
+          });
+      }
+    }
+  }
   
   // Send token SMS to customer
   const outlet = await prisma.outlet.findUnique({ where: { id: appt.outletId } })
@@ -581,7 +622,7 @@ async function addAppointmentToQueue(appt: any) {
     console.error('Failed to send token SMS:', e)
   }
   
-  return result
+  return result.token
 }
 
 // List my appointments by mobile

@@ -41,14 +41,14 @@ interface MultiBillResult {
  * @param sltNumbers - Array of SLT telephone numbers (e.g., ["0112123456", "0112123457"])
  * @returns Results for all telephone numbers with success/error status
  */
-export async function fetchMultipleBillsFromSltApi(sltNumbers: string[]): Promise<MultiBillResult> {
+export async function fetchMultipleBillsFromSltApi(sltNumbers: string[], mobileNumber?: string): Promise<MultiBillResult> {
   const bills: SltBillInfo[] = [];
   const errors: { phoneNumber: string; error: string }[] = [];
 
   // Process each number sequentially to avoid overwhelming the API
   for (const sltNumber of sltNumbers) {
     try {
-      const billInfo = await fetchBillFromSltApi(sltNumber);
+      const billInfo = await fetchBillFromSltApi(sltNumber, mobileNumber);
       bills.push(billInfo);
     } catch (error: any) {
       console.error(`Error fetching bill for ${sltNumber}:`, error.message);
@@ -74,7 +74,7 @@ export async function fetchMultipleBillsFromSltApi(sltNumbers: string[]): Promis
  * @param sltNumber - SLT telephone number (e.g., "0112123456")
  * @returns Bill information from SLT API
  */
-export async function fetchBillFromSltApi(sltNumber: string): Promise<SltBillInfo> {
+export async function fetchBillFromSltApi(sltNumber: string, mobileNumber?: string): Promise<SltBillInfo> {
   try {
     // Relaxed validation: Just check for 10 digits
     const phoneRegex = /^\d{10}$/;
@@ -84,14 +84,17 @@ export async function fetchBillFromSltApi(sltNumber: string): Promise<SltBillInf
 
     console.log(`Fetching bill info for SLT number: ${sltNumber}`);
 
+    // Determine endpoint based on presence of mobileNumber
+    const url = mobileNumber
+      ? `https://omnilogin.slt.lk/DigitalQMS/api/Main/SendBillInfoV2?sltNumber=${sltNumber}&mobileNumber=${mobileNumber}`
+      : `${SLT_BILLING_API_URL}?sltNumber=${sltNumber}`;
+
+    const payload = { sltNumber: sltNumber };
+
     // Make request to SLT API
     const response = await axios.post<SltApiResponse>(
-      `${SLT_BILLING_API_URL}?sltNumber=${sltNumber}`,
-      {
-        sltNumber: sltNumber,
-        // Some APIs might need additional fields - uncomment if needed:
-        // senderMobile: "", // May need to pass this if required
-      },
+      url,
+      payload,
       {
         headers: {
           'Content-Type': 'application/json',
@@ -160,7 +163,7 @@ export async function fetchBillFromSltApi(sltNumber: string): Promise<SltBillInf
  * @param sltNumber - SLT telephone number (e.g., "0412255897")
  * @returns Success status from SLT API
  */
-export async function sendBillNotificationToOwner(sltNumber: string): Promise<{ success: boolean; message?: string }> {
+export async function sendBillNotificationToOwner(sltNumber: string, mobileNumber?: string): Promise<{ success: boolean; message?: string }> {
   try {
     // Validate telephone number format
     const phoneRegex = /^\d{10}$/;
@@ -170,12 +173,16 @@ export async function sendBillNotificationToOwner(sltNumber: string): Promise<{ 
 
     console.log(`Sending bill notification for SLT number: ${sltNumber}`);
 
-    // Make request to SLT SendBillInfo API to trigger SMS to registered owner
+    const url = mobileNumber
+      ? `https://omnilogin.slt.lk/DigitalQMS/api/Main/SendBillInfoV2?sltNumber=${sltNumber}&mobileNumber=${mobileNumber}`
+      : `https://omnilogin.slt.lk/DigitalQMS/api/Main/SendBillInfo?sltNumber=${sltNumber}`;
+
+    const payload = { sltNumber: sltNumber };
+
+    // Make request to SLT SendBillInfo API to trigger SMS 
     const response = await axios.post(
-      `https://omnilogin.slt.lk/DigitalQMS/api/Main/SendBillInfo?sltNumber=${sltNumber}`,
-      {
-        sltNumber: sltNumber
-      },
+      url,
+      payload,
       {
         headers: {
           'Content-Type': 'application/json',
@@ -253,8 +260,8 @@ export function normalizeSltBillData(sltBillInfo: SltBillInfo, queriedNumber: st
     mobileNumber: resolvedMobile,
     accountName: sltBillInfo.accountName || 'Verified Account',
     accountAddress: sltBillInfo.accountAddress || null,
-    currentBill: typeof sltBillInfo.currentBill === 'number'
-      ? sltBillInfo.currentBill
+    currentBill: sltBillInfo.currentBill !== undefined && sltBillInfo.currentBill !== null
+      ? parseFloat(String(sltBillInfo.currentBill))
       : 0, // Bill amount sent via SMS, not returned in API
     dueDate: sltBillInfo.dueDate ? new Date(sltBillInfo.dueDate) : new Date(),
     status: 'sms_sent', // Indicate that bill was sent via SMS
