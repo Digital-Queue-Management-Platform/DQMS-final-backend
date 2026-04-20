@@ -617,7 +617,7 @@ async function addAppointmentToQueue(appt: any) {
   // Send token SMS to customer
   const outlet = await prisma.outlet.findUnique({ where: { id: appt.outletId } })
   try {
-    await smsHelper.sendTokenNotification(appt.mobileNumber, result.tokenNumber, 1, appt.preferredLanguage as 'en' | 'si' | 'ta' || 'en')
+    await smsHelper.sendTokenNotification(appt.mobileNumber, result.token.tokenNumber, 1, appt.preferredLanguage as 'en' | 'si' | 'ta' || 'en')
   } catch (e) {
     console.error('Failed to send token SMS:', e)
   }
