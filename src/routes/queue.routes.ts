@@ -8,6 +8,7 @@ const PRIORITY_SERVICE_SETTING_KEY = 'priority_service_enabled'
 const SHOW_SERVICE_TYPE_IN_QUEUE_KEY = 'show_service_type_in_queue'
 const DISPLAY_SPEAKER_KEY = 'display_speaker_enabled'
 const ADVANCED_APPOINTMENT_REQUIRED_KEY = 'advanced_appointment_required'
+const OTP_VERIFICATION_KEY = 'otp_verification_enabled'
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 
@@ -418,6 +419,40 @@ router.patch('/settings/advance-appointment', async (req, res) => {
     res.status(500).json({ error: 'Failed to update advance appointment setting' })
   }
 })
+
+router.get('/settings/otp-verification', async (_req, res) => {
+  try {
+    const rows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
+      SELECT "booleanValue" FROM "AppSetting"
+      WHERE "key" = ${OTP_VERIFICATION_KEY}
+      LIMIT 1
+    `
+    // Default to true (enabled) if not set — keep existing behaviour
+    const enabled = rows[0]?.booleanValue ?? true
+    res.json({ enabled })
+  } catch (error) {
+    console.error('OTP verification setting fetch error:', error)
+    res.status(500).json({ error: 'Failed to fetch OTP verification setting' })
+  }
+})
+
+router.patch('/settings/otp-verification', async (req, res) => {
+  try {
+    const enabled = req.body?.enabled === true
+    await prisma.$executeRaw`
+      INSERT INTO "AppSetting" ("id", "key", "booleanValue", "createdAt", "updatedAt")
+      VALUES (gen_random_uuid()::text, ${OTP_VERIFICATION_KEY}, ${enabled}, now(), now())
+      ON CONFLICT ("key")
+      DO UPDATE SET "booleanValue" = EXCLUDED."booleanValue", "updatedAt" = now()
+    `
+    res.json({ success: true, enabled })
+  } catch (error) {
+    console.error('OTP verification setting update error:', error)
+    res.status(500).json({ error: 'Failed to update OTP verification setting' })
+  }
+})
+
+
 
 // Create service
 router.post('/services', async (req, res) => {
