@@ -286,9 +286,17 @@ router.get("/rtoms", async (req, res) => {
                                 isActive: true,
                                 branchId: true
                             }
+                        },
+                        Outlet: {
+                            select: {
+                                id: true,
+                                name: true,
+                                isActive: true
+                            }
                         }
                     }
                 },
+
                 outlets: {
                     select: {
                         id: true,
@@ -312,8 +320,10 @@ router.get("/rtoms", async (req, res) => {
                 isActive: rtom.isActive,
                 lastLoginAt: rtom.lastLoginAt,
                 createdAt: rtom.createdAt,
-                teleshopManagers: rtom.teleshopManagers
+                teleshopManagers: rtom.teleshopManagers,
+                outlets: rtom.Outlet
             }))
+
         }))
 
         res.json({ success: true, regions: transformedRegions })
