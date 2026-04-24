@@ -519,10 +519,10 @@ router.post("/next-token", async (req, res) => {
 
     // Store TOKEN_CALLED event for APK HTTP polling fallback
     const audioEvent = {
-      id: Date.now().toString(),
+      id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       outletId: updatedToken.outletId,
       type: "TOKEN_CALLED",
-      testType: null,
+      testType: "call", // Explicitly set to call
       lang: customerLang,
       customText: null,
       chimeVolume: 100,
@@ -777,7 +777,7 @@ router.post("/reannounce-token", async (req, res) => {
 
     // Store TOKEN_CALLED (re-announce) event for APK HTTP polling fallback
     const audioEvent = {
-      id: Date.now().toString(),
+      id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       outletId: token.outletId,
       type: "TOKEN_CALLED",
       testType: "re-announce",
@@ -879,7 +879,7 @@ router.post("/recall-token", async (req, res) => {
 
     // Store TOKEN_CALLED (recall) event for APK HTTP polling fallback
     const audioEvent = {
-      id: Date.now().toString(),
+      id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       outletId: recalled.outletId,
       type: "TOKEN_CALLED",
       testType: "recall",
@@ -1020,12 +1020,13 @@ router.post("/call-token", async (req, res) => {
     // Broadcast update
     broadcast({ type: 'TOKEN_CALLED', data: called })
 
-    // Store TOKEN_CALLED (recall) event for APK HTTP polling fallback  
+    // Store TOKEN_CALLED event for APK HTTP polling fallback  
     const audioEvent = {
-      id: Date.now().toString(),
+      // Use random suffix to prevent ID collision if multiple CSOs call at the same millisecond
+      id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       outletId: called.outletId,
       type: "TOKEN_CALLED", 
-      testType: "recall",
+      testType: "call", // Explicitly set to call
       lang: customerLang,
       customText: null,
       chimeVolume: 100,
