@@ -6,7 +6,7 @@ import { logger } from '../server'
 const router = express.Router()
 
 // ❗ UPDATE THIS VERSION WHEN YOU BUILD A NEW APK
-const CURRENT_APP_VERSION = '1.0.1'
+const CURRENT_APP_VERSION = '1.0.2'
 
 // Where the APK file is stored (uploads folder)
 const getApkPath = () => {
