@@ -41,6 +41,8 @@ router.get('/check-update', (req, res) => {
     // Simple version comparison (assumes semantic versioning like "1.0.0")
     const hasUpdate = compareVersions(deviceVersion, CURRENT_APP_VERSION) < 0
 
+    console.log(`[APP_UPDATE] Check requested from device. TV Version: ${deviceVersion}, Latest on Server: ${CURRENT_APP_VERSION}. Has Update: ${hasUpdate}`)
+
     const protocol = req.protocol
     const host = req.get('host')
     const downloadUrl = `${protocol}://${host}/api/app/download`
