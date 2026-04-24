@@ -41,10 +41,14 @@ router.get('/check-update', (req, res) => {
     // Simple version comparison (assumes semantic versioning like "1.0.0")
     const hasUpdate = compareVersions(deviceVersion, CURRENT_APP_VERSION) < 0
 
+    const protocol = req.protocol
+    const host = req.get('host')
+    const downloadUrl = `${protocol}://${host}/api/app/download`
+
     res.json({
       latestVersion: CURRENT_APP_VERSION,
       hasUpdate,
-      downloadUrl: `${process.env.SERVER_URL || 'http://localhost:3001'}/api/app/download`,
+      downloadUrl,
       changelog: 'Bug fixes and improvements',
       timestamp: new Date().toISOString()
     })
