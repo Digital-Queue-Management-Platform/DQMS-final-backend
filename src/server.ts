@@ -33,6 +33,7 @@ import sltSmsRoutes from "./routes/slt-sms.routes"
 import utilsRoutes from "./routes/utils.routes"
 import logsRoutes from "./routes/logs.routes"
 import outletRoutes from "./routes/outlet.routes"
+import appUpdateRoutes from "./routes/app-update.routes"
 import * as sltBillingService from "./services/sltBillingService"
 import { healthTracker } from "./services/healthTracker"
 import { systemLogger, requestLoggerMiddleware, errorLoggerMiddleware } from "./services/systemLogger"
@@ -455,6 +456,7 @@ app.use("/api/logs", logsRoutes)
 app.use("/api/dgm", dgmRoutes)
 app.use("/api/utils", utilsRoutes)
 app.use("/api/outlet", outletRoutes)
+app.use("/api/app", appUpdateRoutes)
 
 // Helper: parse "HH:MM" string to total minutes
 function parseTimeToMinutes(t: string): number {

@@ -569,13 +569,19 @@ router.get('/audio-events/:outletId', async (req: Request, res: Response) => {
         new Date(event.timestamp) > since
       )
     
-    console.log(`[APK_POLLING] Outlet ${outletId} polled for events since ${since.toISOString()}, found ${recentEvents.length} events`)
+    // Dynamic polling interval (Optimized for SLT Retail Environment):
+    // - 1 second if there are pending announcements (active mode)
+    // - 5 seconds if queue is empty (idle mode)
+    const pollInterval = recentEvents.length > 0 ? 1000 : 5000
+    
+    console.log(`[APK_POLLING] Outlet ${outletId} polled for events since ${since.toISOString()}, found ${recentEvents.length} events, next poll in ${pollInterval}ms`)
     
     res.json({
       success: true,
       events: recentEvents,
       serverTime: new Date().toISOString(),
-      count: recentEvents.length
+      count: recentEvents.length,
+      pollInterval: pollInterval // Tell APK how often to poll next
     })
     
   } catch (error: any) {
