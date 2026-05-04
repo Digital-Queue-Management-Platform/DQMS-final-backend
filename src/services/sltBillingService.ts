@@ -99,7 +99,7 @@ export async function fetchBillFromSltApi(sltNumber: string, mobileNumber?: stri
         headers: {
           'Content-Type': 'application/json',
         },
-        timeout: 10000, // 10 second timeout
+        timeout: 30000, // 30 second timeout
       }
     );
 
@@ -187,7 +187,7 @@ export async function sendBillNotificationToOwner(sltNumber: string, mobileNumbe
         headers: {
           'Content-Type': 'application/json',
         },
-        timeout: 10000, // 10 second timeout
+        timeout: 30000, // 30 second timeout
       }
     );
 
