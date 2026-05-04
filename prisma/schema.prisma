@@ -39,20 +39,21 @@ model Token {
   calledAt           DateTime?
   startedAt          DateTime?
   completedAt        DateTime?
-  serviceTypes          String[]           @default([]) @map("serviceType")
-  isPriority            Boolean            @default(false)
-  isTransferred         Boolean            @default(false)
-  sltTelephoneNumber    String?
-  billPaymentIntent     String?
-  billPaymentAmount     Float?
-  billPaymentMethod     String?
+  serviceTypes       String[]           @default([]) @map("serviceType")
+  isPriority         Boolean            @default(false)
+  billPaymentAmount  Float?
+  billPaymentIntent  String?
+  billPaymentMethod  String?
+  isTransferred      Boolean            @default(false)
+  sltTelephoneNumber String?
   completedServices  CompletedService[]
   feedback           Feedback?
   serviceCases       ServiceCase[]
-  transferLogs       TransferLog[]
   officer            Officer?           @relation(fields: [assignedTo], references: [id])
   customer           Customer           @relation(fields: [customerId], references: [id])
   outlet             Outlet             @relation(fields: [outletId], references: [id])
+  TokenBill          TokenBill[]
+  transferLogs       TransferLog[]
 
   @@index([outletId, status])
   @@index([assignedTo])
@@ -60,19 +61,19 @@ model Token {
 }
 
 model TeleshopManager {
-  id                String             @id @default(uuid())
+  id                String                    @id @default(uuid())
   name              String
-  mobileNumber      String             @unique
+  mobileNumber      String                    @unique
   regionId          String
-  isActive          Boolean            @default(true)
-  createdAt         DateTime           @default(now())
+  isActive          Boolean                   @default(true)
+  createdAt         DateTime                  @default(now())
   lastLoginAt       DateTime?
   email             String?
   branchId          String?
   completedServices CompletedService[]
+  branch            Outlet?                   @relation(fields: [branchId], references: [id])
+  region            Region                    @relation(fields: [regionId], references: [id])
   auditLogs         TeleshopManagerAuditLog[]
-  branch            Outlet?            @relation(fields: [branchId], references: [id])
-  region            Region             @relation(fields: [regionId], references: [id])
 
   @@index([regionId])
   @@index([mobileNumber])
@@ -91,6 +92,7 @@ model Officer {
   lastLoginAt       DateTime?
   assignedServices  Json?
   languages         Json?
+  email             String?
   BreakLog          BreakLog[]
   completedServices CompletedService[]
   outlet            Outlet             @relation(fields: [outletId], references: [id])
@@ -111,7 +113,6 @@ model Outlet {
   counterCount      Int?               @default(0)
   kioskPassword     String?
   displaySettings   Json?
-
   appointments      Appointment[]
   closureNotices    ClosureNotice[]
   completedServices CompletedService[]
@@ -124,16 +125,16 @@ model Outlet {
 }
 
 model Region {
-  id               String            @id @default(uuid())
-  name             String
-  managerId        String?
-  managerEmail     String?
-  managerMobile    String?
+  id                 String            @id @default(uuid())
+  name               String
+  managerId          String?
+  managerEmail       String?
+  managerMobile      String?
+  createdAt          DateTime          @default(now())
+  managerPassword    String?
   managerLastLoginAt DateTime?
-  createdAt        DateTime          @default(now())
-  managerPassword  String?
-  outlets          Outlet[]
-  teleshopManagers TeleshopManager[]
+  outlets            Outlet[]
+  teleshopManagers   TeleshopManager[]
 }
 
 model Feedback {
@@ -178,8 +179,10 @@ model Alert {
   relatedEntity String?
   isRead        Boolean  @default(false)
   createdAt     DateTime @default(now())
+  outletId      String?
 
   @@index([isRead, createdAt])
+  @@index([outletId])
 }
 
 model BackupRestoreHistory {
@@ -207,6 +210,7 @@ model Service {
   createdAt         DateTime           @default(now())
   order             Int                @default(999)
   isPriorityService Boolean            @default(false)
+  requireOtp        Boolean            @default(false)
   completedServices CompletedService[]
 
   @@index([order])
@@ -263,8 +267,8 @@ model TransferLog {
   newServiceTypes      String[]
   notes                String?
   createdAt            DateTime @default(now())
-  token                Token    @relation(fields: [tokenId], references: [id])
   fromOfficer          Officer  @relation(fields: [fromOfficerId], references: [id])
+  token                Token    @relation(fields: [tokenId], references: [id])
 
   @@index([tokenId])
   @@index([fromOfficerId, createdAt])
@@ -295,24 +299,27 @@ model ManagerQRToken {
 }
 
 model Appointment {
-  id                 String    @id @default(uuid())
+  id                 String            @id @default(uuid())
   name               String
   mobileNumber       String
   outletId           String
   serviceTypes       String[]
   preferredLanguage  String?
   appointmentAt      DateTime
-  status             String    @default("booked")
+  status             String            @default("booked")
   tokenId            String?
   notes              String?
-  createdAt          DateTime  @default(now())
+  createdAt          DateTime          @default(now())
   queuedAt           DateTime?
   completedAt        DateTime?
   sltTelephoneNumber String?
-  billPaymentIntent  String?
   billPaymentAmount  Float?
+  billPaymentIntent  String?
   billPaymentMethod  String?
-  outlet             Outlet    @relation(fields: [outletId], references: [id])
+  reminder1hSentAt   DateTime?
+  reminder30mSentAt  DateTime?
+  outlet             Outlet            @relation(fields: [outletId], references: [id])
+  AppointmentBill    AppointmentBill[]
 
   @@index([outletId, appointmentAt])
   @@index([mobileNumber, appointmentAt])
@@ -356,17 +363,19 @@ model ServiceCaseUpdate {
 }
 
 model SltBill {
-  id              String    @id @default(uuid())
-  telephoneNumber String    @unique
+  id              String            @id @default(uuid())
+  telephoneNumber String            @unique
   accountName     String
   accountAddress  String?
   currentBill     Float
   dueDate         DateTime
-  status          String    @default("unpaid")
+  status          String            @default("unpaid")
   lastPaymentDate DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
   mobileNumber    String?
+  AppointmentBill AppointmentBill[]
+  TokenBill       TokenBill[]
 
   @@index([telephoneNumber])
   @@index([status, dueDate])
@@ -411,13 +420,13 @@ model ClosureNotice {
   createdBy          String
   createdById        String
   createdAt          DateTime  @default(now())
-  noticeType         String    @default("closure")
   isRecurring        Boolean   @default(false)
   recurringType      String?
   recurringDays      String[]  @default([])
   recurringEndDate   DateTime?
   recurringStartTime String?
   recurringEndTime   String?
+  noticeType         String    @default("closure")
   outlet             Outlet    @relation(fields: [outletId], references: [id])
 
   @@index([outletId, endsAt])
@@ -446,4 +455,34 @@ model OTP {
 
   @@index([mobileNumber, userType, verified])
   @@index([expiresAt])
+}
+
+model AppointmentBill {
+  id                String      @id
+  appointmentId     String
+  telephoneNumber   String
+  billPaymentIntent String?
+  billPaymentAmount Float?
+  createdAt         DateTime    @default(now())
+  Appointment       Appointment @relation(fields: [appointmentId], references: [id])
+  SltBill           SltBill     @relation(fields: [telephoneNumber], references: [telephoneNumber])
+
+  @@unique([appointmentId, telephoneNumber])
+  @@index([appointmentId])
+  @@index([telephoneNumber])
+}
+
+model TokenBill {
+  id                String   @id
+  tokenId           String
+  telephoneNumber   String
+  billPaymentIntent String?
+  billPaymentAmount Float?
+  createdAt         DateTime @default(now())
+  SltBill           SltBill  @relation(fields: [telephoneNumber], references: [telephoneNumber])
+  Token             Token    @relation(fields: [tokenId], references: [id])
+
+  @@unique([tokenId, telephoneNumber])
+  @@index([telephoneNumber])
+  @@index([tokenId])
 }
