@@ -72,6 +72,8 @@ router.post("/book", async (req, res) => {
       billPaymentMethod 
     } = req.body || {}
 
+    const parsedAmount = billPaymentAmount ? parseFloat(String(billPaymentAmount)) : null
+
     if (!name || !outletId || !Array.isArray(serviceTypes) || serviceTypes.length === 0 || !appointmentAt) {
       return res.status(400).json({ error: "Missing required fields" })
     }
@@ -229,7 +231,7 @@ router.post("/book", async (req, res) => {
           preferredLanguage: preferredLanguage || undefined,
           sltTelephoneNumber: sltTelephoneNumber || undefined, // Keep for backward compatibility
           billPaymentIntent: billPaymentIntent || undefined,
-          billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : undefined,
+          billPaymentAmount: billPaymentIntent === 'partial' ? parsedAmount : undefined,
           billPaymentMethod: billPaymentMethod || undefined,
           appointmentAt: new Date(appointmentAt),
           status: 'booked', // Keep as booked initially
@@ -245,7 +247,7 @@ router.post("/book", async (req, res) => {
               appointmentId: newAppointment.id,
               telephoneNumber: phoneNumber,
               billPaymentIntent: billPaymentIntent || null,
-              billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : null,
+              billPaymentAmount: billPaymentIntent === 'partial' ? parsedAmount : null,
             }
           })
         }

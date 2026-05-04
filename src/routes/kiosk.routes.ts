@@ -182,10 +182,11 @@ router.post("/tokens", async (req: any, res: any) => {
     }
 
     // Validate bill payment intent if provided
+    const parsedAmount = billPaymentAmount ? parseFloat(String(billPaymentAmount)) : null
     if (billPaymentIntent && !['full', 'partial'].includes(billPaymentIntent)) {
       return res.status(400).json({ error: "billPaymentIntent must be 'full' or 'partial'" })
     }
-    if (billPaymentIntent === 'partial' && (typeof billPaymentAmount !== 'number' || billPaymentAmount <= 0)) {
+    if (billPaymentIntent === 'partial' && (!parsedAmount || parsedAmount <= 0)) {
       return res.status(400).json({ error: "billPaymentAmount must be a positive number for partial payments" })
     }
     if (billPaymentMethod && !['cash', 'card', 'cheque', 'bank_transfer'].includes(billPaymentMethod)) {
@@ -288,7 +289,7 @@ router.post("/tokens", async (req: any, res: any) => {
           outletId: outletId,
           sltTelephoneNumber: sltTelephoneNumber?.trim() || null, // Keep for backward compatibility
           billPaymentIntent: billPaymentIntent || null,
-          billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : null,
+          billPaymentAmount: billPaymentIntent === 'partial' ? parsedAmount : null,
           billPaymentMethod: billPaymentMethod || null,
         },
         include: {
@@ -315,7 +316,7 @@ router.post("/tokens", async (req: any, res: any) => {
               tokenId: newToken.id,
               telephoneNumber: phoneNumber,
               billPaymentIntent: billPaymentIntent || null,
-              billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : null,
+              billPaymentAmount: billPaymentIntent === 'partial' ? parsedAmount : null,
             }
           })
         }
