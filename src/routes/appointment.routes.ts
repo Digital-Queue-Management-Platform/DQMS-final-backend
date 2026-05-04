@@ -123,11 +123,22 @@ router.post("/book", async (req, res) => {
       }
     }
 
-    // Check OTP requirement from admin setting
-    const otpSettingRows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
-      SELECT "booleanValue" FROM "AppSetting" WHERE "key" = 'otp_verification_enabled' LIMIT 1
-    `
-    const otpRequired = otpSettingRows[0]?.booleanValue ?? true
+    // Check if any selected service requires OTP at the service level
+    let serviceRequiresOtp = true
+    if (Array.isArray(serviceTypes) && serviceTypes.length > 0) {
+      const serviceOtpRows = await prisma.$queryRaw<{ requireOtp: boolean }[]>`
+        SELECT "requireOtp" FROM "Service"
+        WHERE "code" = ANY(${serviceTypes}::text[]) AND "requireOtp" = false
+        LIMIT 1
+      `
+      // If we found a service that explicitly has OTP disabled, we respect that
+      if (serviceOtpRows.length > 0) {
+        serviceRequiresOtp = false
+      }
+    }
+
+    // OTP logic: Only depend on the specific service configuration as per user request
+    const otpRequired = serviceRequiresOtp;
 
     // Enforce phone verification via OTP only when required
     if (otpRequired) {
