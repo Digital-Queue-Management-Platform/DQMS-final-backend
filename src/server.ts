@@ -33,6 +33,7 @@ import sltSmsRoutes from "./routes/slt-sms.routes"
 import utilsRoutes from "./routes/utils.routes"
 import logsRoutes from "./routes/logs.routes"
 import outletRoutes from "./routes/outlet.routes"
+import appUpdateRoutes from "./routes/app-update.routes"
 import * as sltBillingService from "./services/sltBillingService"
 import { healthTracker } from "./services/healthTracker"
 import { systemLogger, requestLoggerMiddleware, errorLoggerMiddleware } from "./services/systemLogger"
@@ -151,6 +152,7 @@ if (process.env.PERF_LOG !== "false") {
 // WebSocket for real-time updates
 wss.on("connection", (ws, req) => {
   const ip = req.socket.remoteAddress
+  console.log(`[DEVICE_CONNECT] Connection attempt from IP: ${ip}`)
   logger.info({ ip }, "WS_CLIENT_CONNECTED")
   systemLogger.wsEvent('client-connected', `WebSocket client connected from ${ip}`, {
     ipAddress: ip || undefined,
@@ -455,6 +457,7 @@ app.use("/api/logs", logsRoutes)
 app.use("/api/dgm", dgmRoutes)
 app.use("/api/utils", utilsRoutes)
 app.use("/api/outlet", outletRoutes)
+app.use("/api/app", appUpdateRoutes)
 
 // Helper: parse "HH:MM" string to total minutes
 function parseTimeToMinutes(t: string): number {
@@ -1022,11 +1025,11 @@ async function processAppointments() {
             WHERE "id" = ${apptRow.id}
           `
 
-          return { 
-            createdTokenId, 
-            outletId: apptRow.outletId, 
-            appointmentBills, 
-            customerMobileNumber: apptRow.mobileNumber 
+          return {
+            createdTokenId,
+            outletId: apptRow.outletId,
+            appointmentBills,
+            customerMobileNumber: apptRow.mobileNumber
           }
         }, { timeout: 10000 })
 
@@ -1039,9 +1042,9 @@ async function processAppointments() {
           if (result.appointmentBills && result.appointmentBills.length > 0) {
             const mobileNumber = result.customerMobileNumber;
             const bills = result.appointmentBills;
-            
+
             logger.info({ appointmentId: appt.id, mobileNumber, billsCount: bills.length }, '[AUTO-QUEUE] Triggering bill notifications');
-            
+
             // Get last update times for these numbers to prevent duplicate SMS within 2 hours
             const sltNumbers = bills.map(b => b.telephoneNumber).filter((num): num is string => !!num);
             const existingBills = await prisma.sltBill.findMany({

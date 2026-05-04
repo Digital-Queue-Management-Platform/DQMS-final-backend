@@ -519,10 +519,10 @@ router.post("/next-token", async (req, res) => {
 
     // Store TOKEN_CALLED event for APK HTTP polling fallback
     const audioEvent = {
-      id: Date.now().toString(),
+      id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       outletId: updatedToken.outletId,
       type: "TOKEN_CALLED",
-      testType: null,
+      testType: "call", // Explicitly set to call
       lang: customerLang,
       customText: null,
       chimeVolume: 100,
@@ -777,7 +777,7 @@ router.post("/reannounce-token", async (req, res) => {
 
     // Store TOKEN_CALLED (re-announce) event for APK HTTP polling fallback
     const audioEvent = {
-      id: Date.now().toString(),
+      id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       outletId: token.outletId,
       type: "TOKEN_CALLED",
       testType: "re-announce",
@@ -843,18 +843,17 @@ router.post("/recall-token", async (req, res) => {
     const trackingUrl = getTrackingUrl(recalled.id)
     const customerLang = resolveCustomerLanguage((recalled as any).preferredLanguages)
 
-    // Send SMS notification to customer about recall  
-    try {
-      await sltSmsService.sendCustomerRecalled(recalled.customer.mobileNumber, {
-        firstName,
-        tokenNumber: recalled.tokenNumber,
-        outletName: recalled.outlet?.name || "SLT Office",
-        recoveryUrl: trackingUrl,
-        counterNumber: recalled.counterNumber || undefined
-      }, customerLang)
-    } catch (smsError) {
-      console.error("Recall SMS sending failed:", smsError)
-    }
+    // Send SMS notification asynchronously (non-blocking, fire-and-forget)
+    // This avoids delaying the recall response by 1-3 seconds
+    sltSmsService.sendCustomerRecalled(recalled.customer.mobileNumber, {
+      firstName,
+      tokenNumber: recalled.tokenNumber,
+      outletName: recalled.outlet?.name || "SLT Office",
+      recoveryUrl: trackingUrl,
+      counterNumber: recalled.counterNumber || undefined
+    }, customerLang).catch((smsError: any) => {
+      console.error("Recall SMS sending failed (async):", smsError)
+    })
 
     // set officer to serving
     await prisma.officer.update({ where: { id: officerId }, data: { status: "serving" } })
@@ -880,7 +879,7 @@ router.post("/recall-token", async (req, res) => {
 
     // Store TOKEN_CALLED (recall) event for APK HTTP polling fallback
     const audioEvent = {
-      id: Date.now().toString(),
+      id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       outletId: recalled.outletId,
       type: "TOKEN_CALLED",
       testType: "recall",
@@ -1002,37 +1001,32 @@ router.post("/call-token", async (req, res) => {
     const updatedOfficer = await prisma.officer.update({ where: { id: officerId }, data: { status: 'serving' } })
     broadcast({ type: 'OFFICER_STATUS_CHANGE', data: { officerId, status: 'serving', timestamp: new Date().toISOString() } })
 
-    // Send SMS notification to customer
-    try {
-      const firstName = called.customer.name.split(' ')[0]
+    // Prepare SMS data
+    const firstName = called.customer?.name?.split(' ')[0] || 'Customer'
+    const trackingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/customer/tracking/${called.id}`
 
-      // Build recovery URL for customer lookup
-      const trackingUrl = getTrackingUrl(called.id)
-
-      console.log(`[CALL-TOKEN] About to send SMS to ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
-
-      await sltSmsService.sendCustomerCalled(called.customer.mobileNumber, {
-        firstName,
-        tokenNumber: called.tokenNumber,
-        counterNumber: officer.counterNumber || 0,
-        outletName: called.outlet?.name || 'SLT Office',
-        recoveryUrl: trackingUrl
-      }, customerLang)
-      console.log(`✓ Call-to-counter SMS sent to customer ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
-    } catch (smsError) {
-      console.error('Call-to-counter SMS sending failed:', smsError)
-      // Continue execution even if SMS fails
-    }
+    // Send SMS notification to customer (non-blocking, fire-and-forget)
+    sltSmsService.sendCustomerCalled(called.customer.mobileNumber, {
+      firstName,
+      tokenNumber: called.tokenNumber,
+      counterNumber: officer.counterNumber || 0,
+      outletName: called.outlet?.name || 'SLT Office',
+      recoveryUrl: trackingUrl
+    }, customerLang).catch(smsError => {
+      console.error('Call-to-counter SMS sending failed (async):', smsError)
+    })
+    console.log(`✓ Call-to-counter SMS triggered for customer ${called.customer.mobileNumber} for token #${called.tokenNumber}`)
 
     // Broadcast update
     broadcast({ type: 'TOKEN_CALLED', data: called })
 
-    // Store TOKEN_CALLED (recall) event for APK HTTP polling fallback  
+    // Store TOKEN_CALLED event for APK HTTP polling fallback  
     const audioEvent = {
-      id: Date.now().toString(),
+      // Use random suffix to prevent ID collision if multiple CSOs call at the same millisecond
+      id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       outletId: called.outletId,
       type: "TOKEN_CALLED", 
-      testType: "recall",
+      testType: "call", // Explicitly set to call
       lang: customerLang,
       customText: null,
       chimeVolume: 100,

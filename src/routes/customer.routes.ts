@@ -339,19 +339,42 @@ router.post("/register", async (req, res) => {
 
     console.log(`Registration attempt - Mobile: ${mobileNumber}, Outlet: ${outletId}, Services: ${serviceTypes}`)
 
-    // Validate input
-    if (!name || !mobileNumber || !Array.isArray(serviceTypes) || serviceTypes.length === 0 || !outletId) {
+    // Validate input (mobileNumber can be absent when OTP is disabled)
+    if (!name || !Array.isArray(serviceTypes) || serviceTypes.length === 0 || !outletId) {
       return res.status(400).json({ error: "Missing required fields" })
     }
+    // Use a placeholder mobile when not supplied (OTP-disabled flow)
+    const effectiveMobile = mobileNumber || 'N/A'
 
-    // Enforce phone verification via OTP
-    try {
-      const payload = (jwt as any).verify(verifiedMobileToken || "", OTP_JWT_SECRET as jwt.Secret) as any
-      if (payload?.purpose !== "phone_verification" || payload?.mobileNumber !== mobileNumber) {
+    // Check OTP requirement from admin setting (global switch)
+    const otpSettingRows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
+      SELECT "booleanValue" FROM "AppSetting" WHERE "key" = 'otp_verification_enabled' LIMIT 1
+    `
+    const globalOtpEnabled = otpSettingRows[0]?.booleanValue ?? true
+
+    // Check if any selected service requires OTP at the service level
+    let serviceRequiresOtp = false
+    if (!globalOtpEnabled && Array.isArray(serviceTypes) && serviceTypes.length > 0) {
+      const serviceOtpRows = await prisma.$queryRaw<{ requireOtp: boolean }[]>`
+        SELECT "requireOtp" FROM "Service"
+        WHERE "code" = ANY(${serviceTypes}::text[]) AND "requireOtp" = true
+        LIMIT 1
+      `
+      serviceRequiresOtp = serviceOtpRows.length > 0
+    }
+
+    const otpRequired = globalOtpEnabled || serviceRequiresOtp
+
+    // Enforce phone verification via OTP only when required
+    if (otpRequired) {
+      try {
+        const payload = (jwt as any).verify(verifiedMobileToken || "", OTP_JWT_SECRET as jwt.Secret) as any
+        if (payload?.purpose !== "phone_verification" || payload?.mobileNumber !== mobileNumber) {
+          return res.status(403).json({ error: "Phone verification required" })
+        }
+      } catch {
         return res.status(403).json({ error: "Phone verification required" })
       }
-    } catch {
-      return res.status(403).json({ error: "Phone verification required" })
     }
 
     // Enforce QR gating: require a valid QR token bound to this outlet (unless outlet is specified directly)
@@ -451,7 +474,7 @@ router.post("/register", async (req, res) => {
       const customer = await tx.customer.create({
         data: {
           name,
-          mobileNumber,
+          mobileNumber: effectiveMobile,
           sltMobileNumber: sltMobileNumber || undefined,
           nicNumber: nicNumber || undefined,
           email: email || undefined,

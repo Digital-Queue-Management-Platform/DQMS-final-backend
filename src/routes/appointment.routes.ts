@@ -72,9 +72,10 @@ router.post("/book", async (req, res) => {
       billPaymentMethod 
     } = req.body || {}
 
-    if (!name || !mobileNumber || !outletId || !Array.isArray(serviceTypes) || serviceTypes.length === 0 || !appointmentAt) {
+    if (!name || !outletId || !Array.isArray(serviceTypes) || serviceTypes.length === 0 || !appointmentAt) {
       return res.status(400).json({ error: "Missing required fields" })
     }
+    const effectiveMobile = mobileNumber || 'N/A'
 
     // Generate idempotency key to prevent duplicate requests
     const idempotencyKey = generateIdempotencyKey(req.body)
@@ -122,27 +123,35 @@ router.post("/book", async (req, res) => {
       }
     }
 
-    // Enforce phone verification via OTP (same policy as registration)
-    try {
-      const payload = (jwt as any).verify(verifiedMobileToken || "", getOtpJwtSecret() as jwt.Secret) as any
-      const sameNumber = digitsOnly(payload?.mobileNumber) === digitsOnly(mobileNumber)
-      if (payload?.purpose !== "phone_verification" || !sameNumber) {
+    // Check OTP requirement from admin setting
+    const otpSettingRows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
+      SELECT "booleanValue" FROM "AppSetting" WHERE "key" = 'otp_verification_enabled' LIMIT 1
+    `
+    const otpRequired = otpSettingRows[0]?.booleanValue ?? true
+
+    // Enforce phone verification via OTP only when required
+    if (otpRequired) {
+      try {
+        const payload = (jwt as any).verify(verifiedMobileToken || "", getOtpJwtSecret() as jwt.Secret) as any
+        const sameNumber = digitsOnly(payload?.mobileNumber) === digitsOnly(mobileNumber)
+        if (payload?.purpose !== "phone_verification" || !sameNumber) {
+          if (process.env.NODE_ENV !== 'production') {
+            console.warn('[APPT][VERIFY][MISMATCH]', {
+              purpose: payload?.purpose,
+              payloadMobile: payload?.mobileNumber,
+              requestMobile: mobileNumber,
+              digitsPayload: digitsOnly(payload?.mobileNumber),
+              digitsRequest: digitsOnly(mobileNumber),
+            })
+          }
+          return res.status(403).json({ error: "Phone verification required" })
+        }
+      } catch (e: any) {
         if (process.env.NODE_ENV !== 'production') {
-          console.warn('[APPT][VERIFY][MISMATCH]', {
-            purpose: payload?.purpose,
-            payloadMobile: payload?.mobileNumber,
-            requestMobile: mobileNumber,
-            digitsPayload: digitsOnly(payload?.mobileNumber),
-            digitsRequest: digitsOnly(mobileNumber),
-          })
+          console.warn('[APPT][VERIFY][ERROR]', e?.message)
         }
         return res.status(403).json({ error: "Phone verification required" })
       }
-    } catch (e: any) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.warn('[APPT][VERIFY][ERROR]', e?.message)
-      }
-      return res.status(403).json({ error: "Phone verification required" })
     }
 
     // Validate outlet

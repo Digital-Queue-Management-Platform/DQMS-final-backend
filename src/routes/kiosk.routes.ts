@@ -192,27 +192,58 @@ router.post("/tokens", async (req: any, res: any) => {
       return res.status(400).json({ error: "billPaymentMethod must be 'cash', 'card', 'cheque', or 'bank_transfer'" })
     }
 
-    // Validate required fields
-    if (!name || !mobileNumber || !serviceTypes || !Array.isArray(serviceTypes) || serviceTypes.length === 0) {
+    // Check OTP requirement from admin setting (global switch)
+    const otpSettingRows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
+      SELECT "booleanValue" FROM "AppSetting" WHERE "key" = 'otp_verification_enabled' LIMIT 1
+    `
+    const globalOtpEnabled = otpSettingRows[0]?.booleanValue ?? true
+
+    // Check if any selected service requires OTP at the service level
+    let serviceRequiresOtp = false
+    if (!globalOtpEnabled && Array.isArray(serviceTypes) && serviceTypes.length > 0) {
+      const serviceOtpRows = await prisma.$queryRaw<{ requireOtp: boolean }[]>`
+        SELECT "requireOtp" FROM "Service"
+        WHERE "code" = ANY(${serviceTypes}::text[]) AND "requireOtp" = true
+        LIMIT 1
+      `
+      serviceRequiresOtp = serviceOtpRows.length > 0
+    }
+
+    const otpRequired = globalOtpEnabled || serviceRequiresOtp
+
+    // Validate required fields (mobileNumber only required when OTP is enabled)
+    if (!name || !serviceTypes || !Array.isArray(serviceTypes) || serviceTypes.length === 0) {
       return res.status(400).json({
-        error: "Name, mobile number, and at least one service type are required"
+        error: "Name and at least one service type are required"
       })
     }
 
-    // Validate mobile number format (Sri Lankan format)
-    const mobileRegex = /^(?:\+94|0)?[0-9]{9,10}$/
-    if (!mobileRegex.test(mobileNumber)) {
-      return res.status(400).json({
-        error: "Invalid mobile number format. Please enter a valid Sri Lankan mobile number."
-      })
+    if (otpRequired && !mobileNumber) {
+      return res.status(400).json({ error: "Mobile number is required" })
     }
 
-    // Normalize the mobile number
-    let normalizedMobile = mobileNumber.replace(/\s+/g, '')
-    if (normalizedMobile.startsWith('+94')) {
-      normalizedMobile = '0' + normalizedMobile.substring(3)
-    } else if (normalizedMobile.startsWith('94')) {
-      normalizedMobile = '0' + normalizedMobile.substring(2)
+    // Use placeholder mobile when OTP is disabled and no number provided
+    const effectiveMobile = mobileNumber || 'N/A'
+
+    // Validate mobile number format only when OTP is enabled (Sri Lankan format)
+    if (otpRequired && mobileNumber) {
+      const mobileRegex = /^(?:\+94|0)?[0-9]{9,10}$/
+      if (!mobileRegex.test(mobileNumber)) {
+        return res.status(400).json({
+          error: "Invalid mobile number format. Please enter a valid Sri Lankan mobile number."
+        })
+      }
+    }
+
+    // Normalize the mobile number (only when one is provided)
+    let normalizedMobile = effectiveMobile
+    if (mobileNumber) {
+      normalizedMobile = mobileNumber.replace(/\s+/g, '')
+      if (normalizedMobile.startsWith('+94')) {
+        normalizedMobile = '0' + normalizedMobile.substring(3)
+      } else if (normalizedMobile.startsWith('94')) {
+        normalizedMobile = '0' + normalizedMobile.substring(2)
+      }
     }
 
     // Always create a new customer record even if mobileNumber repeats
