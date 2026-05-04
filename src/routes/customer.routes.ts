@@ -366,7 +366,8 @@ router.post("/register", async (req, res) => {
       }
     }
 
-    const otpRequired = globalOtpEnabled && serviceRequiresOtp
+    // OTP logic: Only depend on the specific service configuration as per user request
+    const otpRequired = serviceRequiresOtp;
 
     // Enforce phone verification via OTP only when required
     if (otpRequired) {
