@@ -696,3 +696,15 @@ model DeviceLink {
   @@index([status, lastSeenAt])
   @@index([lastSeenAt])
 }
+
+model DailyActionTracker {
+  id           String   @id
+  mobileNumber String
+  date         String
+  count        Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime
+
+  @@unique([mobileNumber, date])
+  @@index([mobileNumber, date])
+}
