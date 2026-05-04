@@ -514,7 +514,7 @@ router.post("/register", async (req, res) => {
             : undefined,
           sltTelephoneNumber: sltTelephoneNumber?.trim() || null,
           billPaymentIntent: billPaymentIntent || null,
-          billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : null,
+          billPaymentAmount: billPaymentIntent === 'partial' && billPaymentAmount ? parseFloat(String(billPaymentAmount)) : null,
           billPaymentCustomAmounts: billPaymentIntent === 'partial' && billPaymentCustomAmounts ? billPaymentCustomAmounts : null,
           billPaymentMethod: billPaymentMethod || null,
         },
@@ -533,7 +533,7 @@ router.post("/register", async (req, res) => {
                 tokenId: newToken.id,
                 telephoneNumber: num.trim(),
                 billPaymentIntent: billPaymentIntent || 'full',
-                billPaymentAmount: billPaymentIntent === 'partial' ? billPaymentAmount : null
+                billPaymentAmount: billPaymentIntent === 'partial' && billPaymentAmount ? parseFloat(String(billPaymentAmount)) : null
               }
             });
           }
