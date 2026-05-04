@@ -285,8 +285,8 @@ router.get('/services', async (req, res) => {
   try {
     const showAll = req.query.all === 'true'
     const services = showAll
-      ? await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","createdAt" FROM "Service" ORDER BY "order" ASC, "createdAt" ASC`
-      : await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","createdAt" FROM "Service" WHERE "isActive" = true ORDER BY "order" ASC, "createdAt" ASC`
+      ? await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","requireOtp","createdAt" FROM "Service" ORDER BY "order" ASC, "createdAt" ASC`
+      : await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","requireOtp","createdAt" FROM "Service" WHERE "isActive" = true ORDER BY "order" ASC, "createdAt" ASC`
     res.set('Cache-Control', 'no-store')
     res.json(services)
   } catch (error) {
@@ -457,18 +457,19 @@ router.patch('/settings/otp-verification', async (req, res) => {
 // Create service
 router.post('/services', async (req, res) => {
   try {
-    const { code, title, description, order, isPriorityService } = req.body
+    const { code, title, description, order, isPriorityService, requireOtp } = req.body
     if (!code || !title) return res.status(400).json({ error: 'code and title are required' })
 
     const orderValue = order !== undefined ? order : 999
     const priorityValue = isPriorityService === true
+    const requireOtpValue = requireOtp === true
 
     const service = await prisma.$executeRaw`
-      INSERT INTO "Service" ("id","code","title","description","order","isActive","isPriorityService","createdAt")
-      VALUES (gen_random_uuid()::text, ${code}, ${title}, ${description || null}, ${orderValue}, true, ${priorityValue}, now())`
+      INSERT INTO "Service" ("id","code","title","description","order","isActive","isPriorityService","requireOtp","createdAt")
+      VALUES (gen_random_uuid()::text, ${code}, ${title}, ${description || null}, ${orderValue}, true, ${priorityValue}, ${requireOtpValue}, now())`
 
     // return created row
-    const created = await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","createdAt" FROM "Service" WHERE "code" = ${code} LIMIT 1` as any[]
+    const created = await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","requireOtp","createdAt" FROM "Service" WHERE "code" = ${code} LIMIT 1` as any[]
     res.json({ success: true, service: created[0] })
   } catch (error) {
     console.error('Create service error:', error)
@@ -481,7 +482,7 @@ router.post('/services', async (req, res) => {
 router.patch('/services/:id', async (req, res) => {
   try {
     const { id } = req.params
-    const { title, description, isActive, order, isPriorityService } = req.body
+    const { title, description, isActive, order, isPriorityService, requireOtp } = req.body
 
     // build update query dynamically
     const data: any = {}
@@ -490,6 +491,7 @@ router.patch('/services/:id', async (req, res) => {
     if (isActive !== undefined) data.isActive = isActive
     if (order !== undefined) data.order = order
     if (isPriorityService !== undefined) data.isPriorityService = isPriorityService
+    if (requireOtp !== undefined) data.requireOtp = requireOtp
 
     // use prisma.$executeRaw for simplicity
     const sets = Object.keys(data).map((k, idx) => `"${k}" = $${idx + 2}`).join(', ')

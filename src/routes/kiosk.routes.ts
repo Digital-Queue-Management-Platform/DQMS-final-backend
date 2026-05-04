@@ -192,11 +192,24 @@ router.post("/tokens", async (req: any, res: any) => {
       return res.status(400).json({ error: "billPaymentMethod must be 'cash', 'card', 'cheque', or 'bank_transfer'" })
     }
 
-    // Check OTP requirement from admin setting
+    // Check OTP requirement from admin setting (global switch)
     const otpSettingRows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
       SELECT "booleanValue" FROM "AppSetting" WHERE "key" = 'otp_verification_enabled' LIMIT 1
     `
-    const otpRequired = otpSettingRows[0]?.booleanValue ?? true
+    const globalOtpEnabled = otpSettingRows[0]?.booleanValue ?? true
+
+    // Check if any selected service requires OTP at the service level
+    let serviceRequiresOtp = false
+    if (!globalOtpEnabled && Array.isArray(serviceTypes) && serviceTypes.length > 0) {
+      const serviceOtpRows = await prisma.$queryRaw<{ requireOtp: boolean }[]>`
+        SELECT "requireOtp" FROM "Service"
+        WHERE "code" = ANY(${serviceTypes}::text[]) AND "requireOtp" = true
+        LIMIT 1
+      `
+      serviceRequiresOtp = serviceOtpRows.length > 0
+    }
+
+    const otpRequired = globalOtpEnabled || serviceRequiresOtp
 
     // Validate required fields (mobileNumber only required when OTP is enabled)
     if (!name || !serviceTypes || !Array.isArray(serviceTypes) || serviceTypes.length === 0) {

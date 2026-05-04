@@ -243,6 +243,7 @@ model Service {
   createdAt         DateTime           @default(now())
   order             Int                @default(999)
   isPriorityService Boolean            @default(false)
+  requireOtp        Boolean            @default(false)
   completedServices CompletedService[]
 
   @@index([order])
