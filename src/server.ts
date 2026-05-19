@@ -1134,6 +1134,14 @@ function scheduleDailyResetTick() {
 
 scheduleDailyResetTick()
 
+// Start WhatsApp Daily insights report scheduler (Monday to Saturday)
+try {
+  const { startWhatsAppReportScheduler } = require("./services/whatsappReportScheduler")
+  startWhatsAppReportScheduler()
+} catch (err) {
+  logger.error({ err }, "Failed to start WhatsApp report scheduler")
+}
+
 // Neon free-tier keep-alive: ping DB every 4 minutes to prevent auto-suspend (suspends after ~5 min idle)
 if (process.env.DISABLE_DB_KEEPALIVE !== "true") {
   setInterval(async () => {

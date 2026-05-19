@@ -3477,5 +3477,39 @@ router.post("/debug/fix-gm", async (req, res) => {
   }
 })
 
+// Trigger manual WhatsApp insights report
+router.post("/whatsapp-report/trigger", async (req, res) => {
+  try {
+    const { startDate, endDate, scope } = req.body
+    const { triggerDailyReport } = require("../services/whatsappReportScheduler")
+    
+    // Default to today if no dates provided
+    const defaultStart = new Date()
+    defaultStart.setHours(0, 0, 0, 0)
+    const defaultEnd = new Date()
+    defaultEnd.setHours(23, 59, 59, 999)
+    
+    const sDate = startDate ? new Date(startDate as string) : defaultStart
+    const eDate = endDate ? new Date(endDate as string) : defaultEnd
+    
+    if (isNaN(sDate.getTime()) || isNaN(eDate.getTime())) {
+      return res.status(400).json({ error: "Invalid date format provided" })
+    }
+    
+    const reportScope = scope as string || "Island-wide (All Outlets)"
+    
+    const result = await triggerDailyReport(sDate, eDate, reportScope)
+    
+    if (result.success) {
+      res.json({ success: true, message: result.message, filename: result.filename })
+    } else {
+      res.status(500).json({ error: result.message })
+    }
+  } catch (error: any) {
+    console.error("WhatsApp trigger route error:", error)
+    res.status(500).json({ error: error.message || "Failed to trigger WhatsApp report" })
+  }
+})
+
 export default router
 
