@@ -889,7 +889,7 @@ class SLTSmsService {
       refNumber: string
       paymentIntent: string   // 'full' | 'partial' | 'not_specified'
       paymentAmount?: number  // amount paid (due amount for full, custom for partial)
-      paymentMethod?: string  // 'cash' | 'card' | 'cheque' | 'bank_transfer'
+      paymentMethod?: string  // 'cash' | 'card' | 'cheque'
       trackingUrl?: string    // full URL for customer to track the service case
       feedbackUrl?: string    // full URL for customer to leave a review
     }
@@ -900,8 +900,7 @@ class SLTSmsService {
     const methodLabels: Record<string, string> = {
       cash: 'Cash',
       card: 'Card',
-      cheque: 'Cheque',
-      bank_transfer: 'Bank Transfer'
+      cheque: 'Cheque'
     }
     const methodLabel = details.paymentMethod ? (methodLabels[details.paymentMethod] || details.paymentMethod) : ''
 

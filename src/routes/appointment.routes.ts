@@ -72,6 +72,14 @@ router.post("/book", async (req, res) => {
       billPaymentMethod 
     } = req.body || {}
 
+    // Enforce strict double-value regex validation for billPaymentAmount
+    if (billPaymentAmount !== undefined && billPaymentAmount !== null && String(billPaymentAmount).trim() !== "") {
+      const amtStr = String(billPaymentAmount).trim();
+      if (!/^\d+(\.\d{1,2})?$/.test(amtStr)) {
+        return res.status(400).json({ error: "billPaymentAmount must be a strictly valid positive decimal value (up to 2 decimal places, no letters or symbols)" });
+      }
+    }
+
     const parsedAmount = billPaymentAmount ? parseFloat(String(billPaymentAmount)) : null
 
     if (!name || !outletId || !Array.isArray(serviceTypes) || serviceTypes.length === 0 || !appointmentAt) {
