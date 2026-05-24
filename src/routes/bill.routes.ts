@@ -35,6 +35,16 @@ router.post('/verify-multiple', async (req: Request, res: Response) => {
       });
     }
 
+    // Validate mobileNumber if provided
+    if (mobileNumber) {
+      const mobileRegex = /^\d{9,12}$/;
+      if (!mobileRegex.test(mobileNumber)) {
+        return res.status(400).json({
+          error: 'Invalid mobileNumber. Must be strictly 9 to 12 digits (numeric only).'
+        });
+      }
+    }
+
     const forceRefresh = req.query.force === 'true';
     const results: any[] = [];
     const smsNotifications: any[] = [];
@@ -510,6 +520,25 @@ router.post('/send-bill-notification', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'sltTelephoneNumbers array is required' });
     }
 
+    // Validate telephone numbers format to reject alphanumeric or special characters
+    const phoneRegex = /^\d{10}$/;
+    const invalidNumbers = sltTelephoneNumbers.filter(num => typeof num !== 'string' || !phoneRegex.test(num));
+    if (invalidNumbers.length > 0) {
+      return res.status(400).json({
+        error: `Invalid SLT telephone numbers. Must be strictly 10 digits: ${invalidNumbers.join(', ')}`
+      });
+    }
+
+    // Validate mobileNumber if provided to reject alphanumeric or special characters
+    if (mobileNumber) {
+      const mobileRegex = /^\d{9,12}$/;
+      if (!mobileRegex.test(mobileNumber)) {
+        return res.status(400).json({
+          error: 'Invalid mobileNumber. Must be strictly 9 to 12 digits (numeric only).'
+        });
+      }
+    }
+
     // Send notification for each telephone number
     const results = await Promise.all(
       sltTelephoneNumbers.map(async (sltNumber: string) => {
@@ -545,6 +574,47 @@ router.post('/send-notification', async (req: Request, res: Response) => {
 
     if (!mobileNumber || !accountName || billAmount === undefined) {
       return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Validate mobileNumber to reject alphanumeric or special characters
+    const mobileRegex = /^\d{9,12}$/;
+    if (typeof mobileNumber !== 'string' || !mobileRegex.test(mobileNumber)) {
+      return res.status(400).json({ error: 'Invalid mobileNumber. Must be strictly 9 to 12 digits (numeric only).' });
+    }
+
+    // Validate sltNumber (if provided) to be exactly 10 digits
+    if (sltNumber) {
+      const sltRegex = /^\d{10}$/;
+      if (typeof sltNumber !== 'string' || !sltRegex.test(sltNumber)) {
+        return res.status(400).json({ error: 'Invalid sltNumber. Must be strictly 10 digits (numeric only).' });
+      }
+    }
+
+    // Validate billAmount is strictly numeric to prevent alphanumeric injection
+    const amountStr = String(billAmount);
+    const amountRegex = /^\d+(\.\d{1,2})?$/;
+    if (!amountRegex.test(amountStr)) {
+      return res.status(400).json({ error: 'Invalid billAmount format. Must be strictly numeric.' });
+    }
+
+    // Validate dueDate if provided to prevent date/time string injection
+    if (dueDate) {
+      const dateStr = String(dueDate);
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$|^\d{1,2}\/\d{1,2}\/\d{4}$/;
+      if (!dateRegex.test(dateStr) && isNaN(Date.parse(dateStr))) {
+        return res.status(400).json({ error: 'Invalid dueDate format.' });
+      }
+    }
+
+    // Validate accountName strictly to reject script/HTML tags (prevent XSS / CSS injection)
+    if (typeof accountName !== 'string') {
+      return res.status(400).json({ error: 'accountName must be a string.' });
+    }
+    const safeNameRegex = /^[A-Za-z0-9\s.,/\-()&]+$/;
+    if (!safeNameRegex.test(accountName)) {
+      return res.status(400).json({
+        error: 'Invalid characters in accountName. Only alphanumeric and standard name characters are allowed to prevent injection.'
+      });
     }
 
     // Format bill amount and due date

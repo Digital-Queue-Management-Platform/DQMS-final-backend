@@ -15,6 +15,10 @@ router.post('/test', async (req, res) => {
     if (!to) {
       return res.status(400).json({ error: 'Missing required field: to' })
     }
+    const mobileRegex = /^\d{9,12}$/;
+    if (typeof to !== 'string' || !mobileRegex.test(to)) {
+      return res.status(400).json({ error: 'Invalid recipient phone number. Must be strictly 9 to 12 digits (numeric only).' });
+    }
 
     // Check if SLT SMS is configured
     if (!sltSmsService.isConfigured()) {
@@ -60,6 +64,14 @@ router.post('/send-otp', async (req, res) => {
     if (!to || !otpCode) {
       return res.status(400).json({ error: 'Missing required fields: to, otpCode' })
     }
+    const mobileRegex = /^\d{9,12}$/;
+    if (typeof to !== 'string' || !mobileRegex.test(to)) {
+      return res.status(400).json({ error: 'Invalid recipient phone number. Must be strictly 9 to 12 digits (numeric only).' });
+    }
+    const otpRegex = /^\d{4,6}$/;
+    if (typeof otpCode !== 'string' || !otpRegex.test(otpCode)) {
+      return res.status(400).json({ error: 'Invalid OTP code. Must be strictly a 4 to 6 digit numeric code.' });
+    }
 
     const result = await sltSmsService.sendOTP(to, otpCode, language)
 
@@ -95,6 +107,19 @@ router.post('/send-appointment', async (req, res) => {
     if (!to || !appointmentDetails) {
       return res.status(400).json({ error: 'Missing required fields: to, appointmentDetails' })
     }
+    const mobileRegex = /^\d{9,12}$/;
+    if (typeof to !== 'string' || !mobileRegex.test(to)) {
+      return res.status(400).json({ error: 'Invalid recipient phone number. Must be strictly 9 to 12 digits (numeric only).' });
+    }
+    
+    const { name, outletName, dateTime, services } = appointmentDetails;
+    if (!name || !outletName || !dateTime || !services) {
+      return res.status(400).json({ error: 'Missing appointment details fields.' });
+    }
+    const safeNameRegex = /^[A-Za-z0-9\s.,/\-()&]+$/;
+    if (!safeNameRegex.test(name) || !safeNameRegex.test(outletName) || !safeNameRegex.test(services)) {
+      return res.status(400).json({ error: 'Invalid characters in appointment details. Alphanumeric and standard name characters only.' });
+    }
 
     const result = await sltSmsService.sendAppointmentConfirmation(to, appointmentDetails, language)
 
@@ -129,6 +154,15 @@ router.post('/send-token-ready', async (req, res) => {
 
     if (!to || !tokenNumber || !counterNumber) {
       return res.status(400).json({ error: 'Missing required fields: to, tokenNumber, counterNumber' })
+    }
+    const mobileRegex = /^\d{9,12}$/;
+    if (typeof to !== 'string' || !mobileRegex.test(to)) {
+      return res.status(400).json({ error: 'Invalid recipient phone number. Must be strictly 9 to 12 digits (numeric only).' });
+    }
+    const tokenStr = String(tokenNumber);
+    const counterStr = String(counterNumber);
+    if (!/^\d+$/.test(tokenStr) || !/^\d+$/.test(counterStr)) {
+      return res.status(400).json({ error: 'tokenNumber and counterNumber must be positive integers.' });
     }
 
     const result = await sltSmsService.sendTokenReady(to, tokenNumber, counterNumber, language)
