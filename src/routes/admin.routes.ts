@@ -638,22 +638,16 @@ router.get("/analytics", async (req, res) => {
       feedbackCount: stats.ratings.length
     }))
 
-    const yesterdayStart = new Date()
-    yesterdayStart.setDate(yesterdayStart.getDate() - 1)
-    yesterdayStart.setHours(0, 0, 0, 0)
-
-    const yesterdayEnd = new Date()
-    yesterdayEnd.setDate(yesterdayEnd.getDate() - 1)
-    yesterdayEnd.setHours(23, 59, 59, 999)
-
+    // Determine outlet active status based on whether tokens were issued
+    // within the SELECTED date range (not hardcoded to yesterday)
     const outletsWithDynamicStatus = await Promise.all(
       allOutlets.map(async (o: any) => {
         const recentToken = await prisma.token.findFirst({
           where: {
             outletId: o.id,
             createdAt: {
-              gte: yesterdayStart,
-              lte: yesterdayEnd
+              gte: sDate,
+              lte: eDate
             }
           },
           select: { id: true }
@@ -747,8 +741,11 @@ router.get("/analytics", async (req, res) => {
 })
 
 // Get ALL outlets (active + inactive) for admin export/registry
+// Optional query params: startDate, endDate (ISO strings) to scope the isActive check to a date range
 router.get("/outlets/all", async (req, res) => {
   try {
+    const { startDate, endDate } = req.query
+
     const outlets = await prisma.outlet.findMany({
       select: {
         id: true,
@@ -764,23 +761,32 @@ router.get("/outlets/all", async (req, res) => {
       orderBy: [{ name: 'asc' }]
     })
 
-    const yesterdayStart = new Date()
-    yesterdayStart.setDate(yesterdayStart.getDate() - 1)
-    yesterdayStart.setHours(0, 0, 0, 0)
+    // If a date range is supplied (e.g. from an export), use it.
+    // Otherwise fall back to a rolling 2-day window (today + yesterday)
+    // so outlets active today are not wrongly shown as inactive.
+    let windowStart: Date
+    let windowEnd: Date
 
-    const yesterdayEnd = new Date()
-    yesterdayEnd.setDate(yesterdayEnd.getDate() - 1)
-    yesterdayEnd.setHours(23, 59, 59, 999)
+    if (startDate && endDate) {
+      windowStart = new Date(startDate as string)
+      windowEnd = new Date(endDate as string)
+      windowEnd.setHours(23, 59, 59, 999)
+    } else {
+      windowEnd = new Date()
+      windowStart = new Date()
+      windowStart.setDate(windowStart.getDate() - 1)
+      windowStart.setHours(0, 0, 0, 0)
+    }
 
     const outletsWithDynamicStatus = await Promise.all(
       outlets.map(async (outlet) => {
-        // Check if a token was issued on the calendar day before today for this outlet
+        // Active = had at least one token in the window
         const recentToken = await prisma.token.findFirst({
           where: {
             outletId: outlet.id,
             createdAt: {
-              gte: yesterdayStart,
-              lte: yesterdayEnd
+              gte: windowStart,
+              lte: windowEnd
             }
           },
           select: { id: true }
