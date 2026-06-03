@@ -7,6 +7,73 @@ import smsHelper from '../utils/smsHelper';
 const router = Router();
 const prisma = new PrismaClient();
 
+// ─── Daily Bill-Enquiry Rate Limit ────────────────────────────────────────────
+// To protect customer privacy, each mobile number may only request their
+// bill amount via SMS a maximum of BILL_SMS_DAILY_LIMIT times per calendar day.
+const BILL_SMS_DAILY_LIMIT = 3;
+const BILL_SMS_ACTION_KEY = 'bill_sms_enquiry';
+
+/**
+ * Returns the current count for a mobile number today (in Asia/Colombo time).
+ * Returns { allowed: true, count } when under the limit, or
+ *         { allowed: false, count, limit } when the limit is reached/exceeded.
+ *
+ * When `increment` is true the counter is atomically incremented BEFORE checking
+ * so the check and increment are a single atomic operation (upsert).
+ */
+async function checkAndIncrementBillSmsRateLimit(
+  mobileNumber: string,
+  increment = true
+): Promise<{ allowed: boolean; count: number; limit: number; remaining: number }> {
+  // Check if rate limiting is globally enabled in AppSettings
+  const setting = await prisma.appSetting.findUnique({
+    where: { key: 'bill_enquiry_rate_limit_enabled' }
+  });
+  const isRateLimitEnabled = setting?.booleanValue ?? true;
+
+  if (!isRateLimitEnabled) {
+    return { allowed: true, count: 0, limit: BILL_SMS_DAILY_LIMIT, remaining: BILL_SMS_DAILY_LIMIT };
+  }
+
+  // Calendar date in Sri Lanka (Asia/Colombo, UTC+5:30)
+  const now = new Date();
+  const slOffset = 5.5 * 60 * 60 * 1000; // 5 h 30 min in ms
+  const slNow = new Date(now.getTime() + slOffset);
+  const dateKey = slNow.toISOString().slice(0, 10); // "YYYY-MM-DD"
+
+  const trackerId = `${BILL_SMS_ACTION_KEY}:${mobileNumber}:${dateKey}`;
+
+  if (increment) {
+    // Atomically increment – if record doesn't exist, create with count = 1
+    const tracker = await prisma.dailyActionTracker.upsert({
+      where: { mobileNumber_date: { mobileNumber, date: dateKey } },
+      update: { count: { increment: 1 }, updatedAt: now },
+      create: {
+        id: trackerId,
+        mobileNumber,
+        date: dateKey,
+        count: 1,
+        updatedAt: now,
+      },
+      select: { count: true },
+    });
+
+    const count = tracker.count;
+    const allowed = count <= BILL_SMS_DAILY_LIMIT;
+    return { allowed, count, limit: BILL_SMS_DAILY_LIMIT, remaining: Math.max(0, BILL_SMS_DAILY_LIMIT - count) };
+  } else {
+    // Read-only check (no increment)
+    const tracker = await prisma.dailyActionTracker.findUnique({
+      where: { mobileNumber_date: { mobileNumber, date: dateKey } },
+      select: { count: true },
+    });
+    const count = tracker?.count ?? 0;
+    const allowed = count < BILL_SMS_DAILY_LIMIT;
+    return { allowed, count, limit: BILL_SMS_DAILY_LIMIT, remaining: Math.max(0, BILL_SMS_DAILY_LIMIT - count) };
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 // POST /api/bills/verify-multiple - Verify multiple SLT telephone numbers and get bill details
 router.post('/verify-multiple', async (req: Request, res: Response) => {
   try {
@@ -43,6 +110,21 @@ router.post('/verify-multiple', async (req: Request, res: Response) => {
           error: 'Invalid mobileNumber. Must be strictly 9 to 12 digits (numeric only).'
         });
       }
+
+      // ── Rate limit: max BILL_SMS_DAILY_LIMIT bill SMS enquiries per mobile per day ──
+      // Increment the counter first; if the resulting count exceeds the limit, reject.
+      const rateCheck = await checkAndIncrementBillSmsRateLimit(mobileNumber, true);
+      if (!rateCheck.allowed) {
+        console.warn(`[BILL][RATE-LIMIT] Mobile ${mobileNumber} exceeded daily bill SMS limit (${rateCheck.count}/${rateCheck.limit})`);
+        return res.status(429).json({
+          error: `Daily bill enquiry limit reached. For privacy protection, each mobile number can only request bill details ${BILL_SMS_DAILY_LIMIT} times per day. Please try again tomorrow.`,
+          rateLimited: true,
+          limit: rateCheck.limit,
+          count: rateCheck.count,
+          remaining: rateCheck.remaining,
+        });
+      }
+      console.log(`[BILL][RATE-LIMIT] Mobile ${mobileNumber}: ${rateCheck.count}/${rateCheck.limit} enquiries today`);
     }
 
     const forceRefresh = req.query.force === 'true';
@@ -232,6 +314,28 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
 
     try {
       const forceRefresh = req.query.force === 'true';
+
+      // ── Rate limit: max BILL_SMS_DAILY_LIMIT bill SMS enquiries per mobile per day ──
+      if (mobileNumber) {
+        const mobileRegex = /^\d{9,12}$/;
+        if (!mobileRegex.test(mobileNumber)) {
+          return res.status(400).json({
+            error: 'Invalid mobileNumber. Must be strictly 9 to 12 digits (numeric only).'
+          });
+        }
+        const rateCheck = await checkAndIncrementBillSmsRateLimit(mobileNumber, true);
+        if (!rateCheck.allowed) {
+          console.warn(`[BILL][RATE-LIMIT] Mobile ${mobileNumber} exceeded daily bill SMS limit (${rateCheck.count}/${rateCheck.limit})`);
+          return res.status(429).json({
+            error: `Daily bill enquiry limit reached. For privacy protection, each mobile number can only request bill details ${BILL_SMS_DAILY_LIMIT} times per day. Please try again tomorrow.`,
+            rateLimited: true,
+            limit: rateCheck.limit,
+            count: rateCheck.count,
+            remaining: rateCheck.remaining,
+          });
+        }
+        console.log(`[BILL][RATE-LIMIT] Mobile ${mobileNumber}: ${rateCheck.count}/${rateCheck.limit} enquiries today`);
+      }
 
       // Avoid excessive SLT API calls by checking cache first,
       // but ONLY if force refresh isn't requested AND no mobile number is provided
