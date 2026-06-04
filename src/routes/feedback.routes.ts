@@ -103,37 +103,9 @@ router.post("/submit", async (req, res) => {
       }
     }
 
-    // Create completed service records for all services in the token
-    if (token.serviceTypes && token.serviceTypes.length > 0) {
-      try {
-        for (const serviceCode of token.serviceTypes) {
-          // Find the service by code
-          const service = await prisma.service.findUnique({
-            where: { code: serviceCode }
-          })
-          
-          if (service && token.assignedTo) {
-            const durationSeconds =
-              (token as any).startedAt && (token as any).completedAt
-                ? Math.round(
-                    (new Date((token as any).completedAt).getTime() -
-                      new Date((token as any).startedAt).getTime()) /
-                      1000
-                  )
-                : undefined
-            await FeedbackService.createCompletedService(
-              tokenId,
-              service.id,
-              durationSeconds,
-              `Service completed for token ${token.tokenNumber}`
-            )
-          }
-        }
-      } catch (serviceError) {
-        console.error("Failed to create completed service records:", serviceError)
-        // Don't fail the entire request if service tracking fails
-      }
-    }
+    // Note: CompletedService records are now safely created automatically 
+    // at the time of token completion in officer.routes.ts. 
+    // This avoids duplicates and ensures all completed tokens show up.
 
     res.json({ success: true, feedback })
   } catch (error) {

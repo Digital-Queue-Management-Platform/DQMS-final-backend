@@ -2,6 +2,7 @@ import 'dotenv/config'
 import express from "express"
 import cors from "cors"
 import cookieParser from "cookie-parser"
+import helmet from "helmet"
 import fs from "fs"
 import path from "path"
 import { WebSocketServer } from "ws"
@@ -107,6 +108,12 @@ app.use(
       return callback(new Error(`CORS not allowed for origin: ${origin}`))
     },
     credentials: true,
+  })
+)
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" }
   })
 )
 app.use(compression({ threshold: Number(process.env.COMPRESS_THRESHOLD || 1024) }))

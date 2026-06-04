@@ -1239,6 +1239,44 @@ router.post("/complete-service", async (req, res) => {
       }
       completedRef = serviceCase.refNumber
 
+      // Automatically create CompletedService records for the completed token's services
+      const tokenServiceCodes = Array.isArray((token as any).serviceTypes) ? (token as any).serviceTypes : []
+      if (tokenServiceCodes.length > 0) {
+        try {
+          const tm = await prisma.teleshopManager.findFirst({
+            where: { branchId: token.outletId }
+          })
+          
+          const durationMinutes = token.startedAt && token.completedAt
+            ? Math.round((new Date(token.completedAt).getTime() - new Date(token.startedAt).getTime()) / 60000)
+            : 0
+
+          for (const serviceCode of tokenServiceCodes) {
+            const service = await prisma.service.findUnique({
+              where: { code: serviceCode }
+            })
+            
+            if (service) {
+              await (prisma as any).completedService.create({
+                data: {
+                  tokenId: token.id,
+                  serviceId: service.id,
+                  officerId: officerId,
+                  teleshopManagerId: tm?.id || null,
+                  customerId: token.customerId,
+                  outletId: token.outletId,
+                  duration: durationMinutes,
+                  notes: `Service completed by officer`
+                }
+              })
+            }
+          }
+          console.log(`✓ CompletedService records created successfully for token #${token.tokenNumber}`)
+        } catch (serviceError) {
+          console.error("Failed to create completed service records on complete-service:", serviceError)
+        }
+      }
+
       // Send SMS notification to customer with service completion and feedback link
       try {
         const firstName = token.customer.name.split(' ')[0]

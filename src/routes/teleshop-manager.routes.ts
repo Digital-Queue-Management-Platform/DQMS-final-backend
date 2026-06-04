@@ -1609,8 +1609,16 @@ router.get("/completed-services", async (req: any, res) => {
 
     if (startDate || endDate) {
       where.completedAt = {}
-      if (startDate) where.completedAt.gte = new Date(startDate as string)
-      if (endDate) where.completedAt.lte = new Date(endDate as string)
+      if (startDate) {
+        const start = new Date(startDate as string)
+        start.setHours(0, 0, 0, 0)
+        where.completedAt.gte = start
+      }
+      if (endDate) {
+        const end = new Date(endDate as string)
+        end.setHours(23, 59, 59, 999)
+        where.completedAt.lte = end
+      }
     }
 
     // Get completed services
@@ -1761,8 +1769,16 @@ router.get("/feedback", async (req: any, res) => {
 
     if (startDate || endDate) {
       where.createdAt = {}
-      if (startDate) where.createdAt.gte = new Date(startDate as string)
-      if (endDate) where.createdAt.lte = new Date(endDate as string)
+      if (startDate) {
+        const start = new Date(startDate as string)
+        start.setHours(0, 0, 0, 0)
+        where.createdAt.gte = start
+      }
+      if (endDate) {
+        const end = new Date(endDate as string)
+        end.setHours(23, 59, 59, 999)
+        where.createdAt.lte = end
+      }
     }
 
     // Get feedback

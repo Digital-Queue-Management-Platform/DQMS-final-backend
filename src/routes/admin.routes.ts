@@ -450,8 +450,8 @@ router.get("/analytics", async (req, res) => {
 
     // Run other aggregated queries with regional filtering
     const outletQuery: any = allowedOutletIds 
-      ? { where: { id: { in: allowedOutletIds } }, select: { id: true, name: true } }
-      : { select: { id: true, name: true } }
+      ? { where: { id: { in: allowedOutletIds } }, select: { id: true, name: true, location: true, isActive: true, counterCount: true } }
+      : { select: { id: true, name: true, location: true, isActive: true, counterCount: true } }
 
     const feedbackQuery = allowedOutletIds
       ? { 
@@ -638,8 +638,29 @@ router.get("/analytics", async (req, res) => {
       feedbackCount: stats.ratings.length
     }))
 
+    // Determine outlet active status based on whether tokens were issued
+    // within the SELECTED date range (not hardcoded to yesterday)
+    const outletsWithDynamicStatus = await Promise.all(
+      allOutlets.map(async (o: any) => {
+        const recentToken = await prisma.token.findFirst({
+          where: {
+            outletId: o.id,
+            createdAt: {
+              gte: sDate,
+              lte: eDate
+            }
+          },
+          select: { id: true }
+        })
+        return {
+          ...o,
+          isActive: !!recentToken
+        }
+      })
+    )
+
     // Branch Performance
-    const outletMap = new Map(allOutlets.map(o => [o.id, o.name]))
+    const outletMap = new Map(outletsWithDynamicStatus.map(o => [o.id, { name: o.name, isActive: o.isActive, location: o.location || '', counterCount: o.counterCount || 0 }]))
     
     const branchPerformanceMap = new Map<string, {
       totalTokens: number
@@ -676,15 +697,20 @@ router.get("/analytics", async (req, res) => {
       }
     })
 
-    const branchPerformance = Array.from(branchPerformanceMap.entries()).map(([id, stats]) => ({
-      id,
-      name: outletMap.get(id) || "Unknown Outlet",
-      totalTokens: stats.totalTokens,
-      avgWaitTime: Math.round((stats.waitCount > 0 ? stats.waitSum / stats.waitCount : 0) * 10) / 10,
-      avgServiceTime: Math.round((stats.serviceCount > 0 ? stats.serviceSum / stats.serviceCount : 0) * 10) / 10,
-      avgRating: Math.round((stats.feedbackCount > 0 ? stats.ratingSum / stats.feedbackCount : 0) * 10) / 10,
-      feedbackCount: stats.feedbackCount
-    }))
+    const branchPerformance = Array.from(branchPerformanceMap.entries()).map(([id, stats]) => {
+      const outletInfo = outletMap.get(id)
+      return {
+        id,
+        name: outletInfo?.name || "Unknown Outlet",
+        location: outletInfo?.location || '',
+        isActive: outletInfo?.isActive ?? true,
+        totalTokens: stats.totalTokens,
+        avgWaitTime: Math.round((stats.waitCount > 0 ? stats.waitSum / stats.waitCount : 0) * 10) / 10,
+        avgServiceTime: Math.round((stats.serviceCount > 0 ? stats.serviceSum / stats.serviceCount : 0) * 10) / 10,
+        avgRating: Math.round((stats.feedbackCount > 0 ? stats.ratingSum / stats.feedbackCount : 0) * 10) / 10,
+        feedbackCount: stats.feedbackCount
+      }
+    })
 
     res.json({
       totalTokens: totalIssued,
@@ -711,6 +737,78 @@ router.get("/analytics", async (req, res) => {
   } catch (error) {
     console.error("Analytics error:", error)
     res.status(500).json({ error: "Failed to fetch analytics" })
+  }
+})
+
+// Get ALL outlets (active + inactive) for admin export/registry
+// Optional query params: startDate, endDate (ISO strings) to scope the isActive check to a date range
+router.get("/outlets/all", async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query
+
+    const outlets = await prisma.outlet.findMany({
+      select: {
+        id: true,
+        name: true,
+        location: true,
+        isActive: true,
+        counterCount: true,
+        createdAt: true,
+        region: {
+          select: { id: true, name: true }
+        }
+      },
+      orderBy: [{ name: 'asc' }]
+    })
+
+    // If a date range is supplied (e.g. from an export), use it.
+    // Otherwise fall back to a rolling 2-day window (today + yesterday)
+    // so outlets active today are not wrongly shown as inactive.
+    let windowStart: Date
+    let windowEnd: Date
+
+    if (startDate && endDate) {
+      windowStart = new Date(startDate as string)
+      windowEnd = new Date(endDate as string)
+      windowEnd.setHours(23, 59, 59, 999)
+    } else {
+      windowEnd = new Date()
+      windowStart = new Date()
+      windowStart.setDate(windowStart.getDate() - 1)
+      windowStart.setHours(0, 0, 0, 0)
+    }
+
+    const outletsWithDynamicStatus = await Promise.all(
+      outlets.map(async (outlet) => {
+        // Active = had at least one token in the window
+        const recentToken = await prisma.token.findFirst({
+          where: {
+            outletId: outlet.id,
+            createdAt: {
+              gte: windowStart,
+              lte: windowEnd
+            }
+          },
+          select: { id: true }
+        })
+        return {
+          ...outlet,
+          isActive: !!recentToken
+        }
+      })
+    )
+
+    // Sort by isActive desc, name asc
+    outletsWithDynamicStatus.sort((a, b) => {
+      if (a.isActive && !b.isActive) return -1
+      if (!a.isActive && b.isActive) return 1
+      return a.name.localeCompare(b.name)
+    })
+
+    res.json(outletsWithDynamicStatus)
+  } catch (error) {
+    console.error("All outlets fetch error:", error)
+    res.status(500).json({ error: "Failed to fetch outlets" })
   }
 })
 

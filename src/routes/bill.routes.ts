@@ -7,6 +7,73 @@ import smsHelper from '../utils/smsHelper';
 const router = Router();
 const prisma = new PrismaClient();
 
+// ─── Daily Bill-Enquiry Rate Limit ────────────────────────────────────────────
+// To protect customer privacy, each mobile number may only request their
+// bill amount via SMS a maximum of BILL_SMS_DAILY_LIMIT times per calendar day.
+const BILL_SMS_DAILY_LIMIT = 3;
+const BILL_SMS_ACTION_KEY = 'bill_sms_enquiry';
+
+/**
+ * Returns the current count for a mobile number today (in Asia/Colombo time).
+ * Returns { allowed: true, count } when under the limit, or
+ *         { allowed: false, count, limit } when the limit is reached/exceeded.
+ *
+ * When `increment` is true the counter is atomically incremented BEFORE checking
+ * so the check and increment are a single atomic operation (upsert).
+ */
+async function checkAndIncrementBillSmsRateLimit(
+  mobileNumber: string,
+  increment = true
+): Promise<{ allowed: boolean; count: number; limit: number; remaining: number }> {
+  // Check if rate limiting is globally enabled in AppSettings
+  const setting = await prisma.appSetting.findUnique({
+    where: { key: 'bill_enquiry_rate_limit_enabled' }
+  });
+  const isRateLimitEnabled = setting?.booleanValue ?? true;
+
+  if (!isRateLimitEnabled) {
+    return { allowed: true, count: 0, limit: BILL_SMS_DAILY_LIMIT, remaining: BILL_SMS_DAILY_LIMIT };
+  }
+
+  // Calendar date in Sri Lanka (Asia/Colombo, UTC+5:30)
+  const now = new Date();
+  const slOffset = 5.5 * 60 * 60 * 1000; // 5 h 30 min in ms
+  const slNow = new Date(now.getTime() + slOffset);
+  const dateKey = slNow.toISOString().slice(0, 10); // "YYYY-MM-DD"
+
+  const trackerId = `${BILL_SMS_ACTION_KEY}:${mobileNumber}:${dateKey}`;
+
+  if (increment) {
+    // Atomically increment – if record doesn't exist, create with count = 1
+    const tracker = await prisma.dailyActionTracker.upsert({
+      where: { mobileNumber_date: { mobileNumber, date: dateKey } },
+      update: { count: { increment: 1 }, updatedAt: now },
+      create: {
+        id: trackerId,
+        mobileNumber,
+        date: dateKey,
+        count: 1,
+        updatedAt: now,
+      },
+      select: { count: true },
+    });
+
+    const count = tracker.count;
+    const allowed = count <= BILL_SMS_DAILY_LIMIT;
+    return { allowed, count, limit: BILL_SMS_DAILY_LIMIT, remaining: Math.max(0, BILL_SMS_DAILY_LIMIT - count) };
+  } else {
+    // Read-only check (no increment)
+    const tracker = await prisma.dailyActionTracker.findUnique({
+      where: { mobileNumber_date: { mobileNumber, date: dateKey } },
+      select: { count: true },
+    });
+    const count = tracker?.count ?? 0;
+    const allowed = count < BILL_SMS_DAILY_LIMIT;
+    return { allowed, count, limit: BILL_SMS_DAILY_LIMIT, remaining: Math.max(0, BILL_SMS_DAILY_LIMIT - count) };
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 // POST /api/bills/verify-multiple - Verify multiple SLT telephone numbers and get bill details
 router.post('/verify-multiple', async (req: Request, res: Response) => {
   try {
@@ -33,6 +100,31 @@ router.post('/verify-multiple', async (req: Request, res: Response) => {
       return res.status(400).json({
         error: `Invalid telephone numbers. Must be 10 digits: ${invalidNumbers.join(', ')}`
       });
+    }
+
+    // Validate mobileNumber if provided
+    if (mobileNumber) {
+      const mobileRegex = /^\d{9,12}$/;
+      if (!mobileRegex.test(mobileNumber)) {
+        return res.status(400).json({
+          error: 'Invalid mobileNumber. Must be strictly 9 to 12 digits (numeric only).'
+        });
+      }
+
+      // ── Rate limit: max BILL_SMS_DAILY_LIMIT bill SMS enquiries per mobile per day ──
+      // Increment the counter first; if the resulting count exceeds the limit, reject.
+      const rateCheck = await checkAndIncrementBillSmsRateLimit(mobileNumber, true);
+      if (!rateCheck.allowed) {
+        console.warn(`[BILL][RATE-LIMIT] Mobile ${mobileNumber} exceeded daily bill SMS limit (${rateCheck.count}/${rateCheck.limit})`);
+        return res.status(429).json({
+          error: `Daily bill enquiry limit reached. For privacy protection, each mobile number can only request bill details ${BILL_SMS_DAILY_LIMIT} times per day. Please try again tomorrow.`,
+          rateLimited: true,
+          limit: rateCheck.limit,
+          count: rateCheck.count,
+          remaining: rateCheck.remaining,
+        });
+      }
+      console.log(`[BILL][RATE-LIMIT] Mobile ${mobileNumber}: ${rateCheck.count}/${rateCheck.limit} enquiries today`);
     }
 
     const forceRefresh = req.query.force === 'true';
@@ -222,6 +314,28 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
 
     try {
       const forceRefresh = req.query.force === 'true';
+
+      // ── Rate limit: max BILL_SMS_DAILY_LIMIT bill SMS enquiries per mobile per day ──
+      if (mobileNumber) {
+        const mobileRegex = /^\d{9,12}$/;
+        if (!mobileRegex.test(mobileNumber)) {
+          return res.status(400).json({
+            error: 'Invalid mobileNumber. Must be strictly 9 to 12 digits (numeric only).'
+          });
+        }
+        const rateCheck = await checkAndIncrementBillSmsRateLimit(mobileNumber, true);
+        if (!rateCheck.allowed) {
+          console.warn(`[BILL][RATE-LIMIT] Mobile ${mobileNumber} exceeded daily bill SMS limit (${rateCheck.count}/${rateCheck.limit})`);
+          return res.status(429).json({
+            error: `Daily bill enquiry limit reached. For privacy protection, each mobile number can only request bill details ${BILL_SMS_DAILY_LIMIT} times per day. Please try again tomorrow.`,
+            rateLimited: true,
+            limit: rateCheck.limit,
+            count: rateCheck.count,
+            remaining: rateCheck.remaining,
+          });
+        }
+        console.log(`[BILL][RATE-LIMIT] Mobile ${mobileNumber}: ${rateCheck.count}/${rateCheck.limit} enquiries today`);
+      }
 
       // Avoid excessive SLT API calls by checking cache first,
       // but ONLY if force refresh isn't requested AND no mobile number is provided
@@ -510,6 +624,25 @@ router.post('/send-bill-notification', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'sltTelephoneNumbers array is required' });
     }
 
+    // Validate telephone numbers format to reject alphanumeric or special characters
+    const phoneRegex = /^\d{10}$/;
+    const invalidNumbers = sltTelephoneNumbers.filter(num => typeof num !== 'string' || !phoneRegex.test(num));
+    if (invalidNumbers.length > 0) {
+      return res.status(400).json({
+        error: `Invalid SLT telephone numbers. Must be strictly 10 digits: ${invalidNumbers.join(', ')}`
+      });
+    }
+
+    // Validate mobileNumber if provided to reject alphanumeric or special characters
+    if (mobileNumber) {
+      const mobileRegex = /^\d{9,12}$/;
+      if (!mobileRegex.test(mobileNumber)) {
+        return res.status(400).json({
+          error: 'Invalid mobileNumber. Must be strictly 9 to 12 digits (numeric only).'
+        });
+      }
+    }
+
     // Send notification for each telephone number
     const results = await Promise.all(
       sltTelephoneNumbers.map(async (sltNumber: string) => {
@@ -545,6 +678,47 @@ router.post('/send-notification', async (req: Request, res: Response) => {
 
     if (!mobileNumber || !accountName || billAmount === undefined) {
       return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Validate mobileNumber to reject alphanumeric or special characters
+    const mobileRegex = /^\d{9,12}$/;
+    if (typeof mobileNumber !== 'string' || !mobileRegex.test(mobileNumber)) {
+      return res.status(400).json({ error: 'Invalid mobileNumber. Must be strictly 9 to 12 digits (numeric only).' });
+    }
+
+    // Validate sltNumber (if provided) to be exactly 10 digits
+    if (sltNumber) {
+      const sltRegex = /^\d{10}$/;
+      if (typeof sltNumber !== 'string' || !sltRegex.test(sltNumber)) {
+        return res.status(400).json({ error: 'Invalid sltNumber. Must be strictly 10 digits (numeric only).' });
+      }
+    }
+
+    // Validate billAmount is strictly numeric to prevent alphanumeric injection
+    const amountStr = String(billAmount);
+    const amountRegex = /^\d+(\.\d{1,2})?$/;
+    if (!amountRegex.test(amountStr)) {
+      return res.status(400).json({ error: 'Invalid billAmount format. Must be strictly numeric.' });
+    }
+
+    // Validate dueDate if provided to prevent date/time string injection
+    if (dueDate) {
+      const dateStr = String(dueDate);
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$|^\d{1,2}\/\d{1,2}\/\d{4}$/;
+      if (!dateRegex.test(dateStr) && isNaN(Date.parse(dateStr))) {
+        return res.status(400).json({ error: 'Invalid dueDate format.' });
+      }
+    }
+
+    // Validate accountName strictly to reject script/HTML tags (prevent XSS / CSS injection)
+    if (typeof accountName !== 'string') {
+      return res.status(400).json({ error: 'accountName must be a string.' });
+    }
+    const safeNameRegex = /^[A-Za-z0-9\s.,/\-()&]+$/;
+    if (!safeNameRegex.test(accountName)) {
+      return res.status(400).json({
+        error: 'Invalid characters in accountName. Only alphanumeric and standard name characters are allowed to prevent injection.'
+      });
     }
 
     // Format bill amount and due date

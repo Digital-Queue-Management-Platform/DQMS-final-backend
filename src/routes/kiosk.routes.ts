@@ -182,6 +182,12 @@ router.post("/tokens", async (req: any, res: any) => {
     }
 
     // Validate bill payment intent if provided
+    if (billPaymentAmount !== undefined && billPaymentAmount !== null && String(billPaymentAmount).trim() !== "") {
+      const amtStr = String(billPaymentAmount).trim();
+      if (!/^\d+(\.\d{1,2})?$/.test(amtStr)) {
+        return res.status(400).json({ error: "billPaymentAmount must be a strictly valid positive decimal value (up to 2 decimal places, no letters or symbols)" });
+      }
+    }
     const parsedAmount = billPaymentAmount ? parseFloat(String(billPaymentAmount)) : null
     if (billPaymentIntent && !['full', 'partial'].includes(billPaymentIntent)) {
       return res.status(400).json({ error: "billPaymentIntent must be 'full' or 'partial'" })
@@ -189,8 +195,8 @@ router.post("/tokens", async (req: any, res: any) => {
     if (billPaymentIntent === 'partial' && (!parsedAmount || parsedAmount <= 0)) {
       return res.status(400).json({ error: "billPaymentAmount must be a positive number for partial payments" })
     }
-    if (billPaymentMethod && !['cash', 'card', 'cheque', 'bank_transfer'].includes(billPaymentMethod)) {
-      return res.status(400).json({ error: "billPaymentMethod must be 'cash', 'card', 'cheque', or 'bank_transfer'" })
+    if (billPaymentMethod && !['cash', 'card', 'cheque'].includes(billPaymentMethod)) {
+      return res.status(400).json({ error: "billPaymentMethod must be 'cash', 'card', or 'cheque'" })
     }
 
     // Check OTP requirement from admin setting (global switch)
