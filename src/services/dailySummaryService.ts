@@ -64,25 +64,32 @@ export async function upsertNotificationSetting(key: string, value: string): Pro
 // ─────────────────────────────────────────────────────────────────────────────
 
 function getSriLankaToday(): { start: Date; end: Date; label: string } {
-  // UTC+5:30
   const now = new Date()
-  const offsetMs = 5.5 * 60 * 60 * 1000
-  const slNow = new Date(now.getTime() + offsetMs)
 
-  const slToday = new Date(slNow)
-
-  // Build day boundaries in SL time, then convert back to UTC
-  const startLocal = new Date(slToday)
-  startLocal.setHours(0, 0, 0, 0)
-  const endLocal = new Date(slToday)
-  endLocal.setHours(23, 59, 59, 999)
-
-  const startUTC = new Date(startLocal.getTime() - offsetMs)
-  const endUTC = new Date(endLocal.getTime() - offsetMs)
-
-  const label = slToday.toLocaleDateString('en-GB', {
-    day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Asia/Colombo',
+  // 1. Get the current date string in Colombo (YYYY-MM-DD)
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Colombo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
   })
+  const parts = formatter.format(now) // e.g., "2026-06-04"
+
+  // 2. Treat that date as UTC midnight to build a base timestamp
+  const colomboMidnightUTC = new Date(`${parts}T00:00:00Z`)
+
+  // 3. Colombo is UTC+5:30. So midnight in Colombo actually happens 5.5 hours BEFORE UTC midnight.
+  const offsetMs = 5.5 * 60 * 60 * 1000
+  const startUTC = new Date(colomboMidnightUTC.getTime() - offsetMs)
+  const endUTC = new Date(startUTC.getTime() + 24 * 60 * 60 * 1000 - 1)
+
+  // 4. Format the human-readable label
+  const label = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Colombo',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(now)
 
   return { start: startUTC, end: endUTC, label }
 }
