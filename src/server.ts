@@ -40,6 +40,8 @@ import { healthTracker } from "./services/healthTracker"
 import { systemLogger, requestLoggerMiddleware, errorLoggerMiddleware } from "./services/systemLogger"
 import { wsManager, OUTLET_DEVICES_ROOM, MANAGER_DEVICES_ROOM } from "./services/wsManager"
 import { resolveUploadDir } from "./utils/uploadDir"
+import notificationSettingsRoutes from "./routes/notification-settings.routes"
+import { sendDailySummaries, getNotificationSettings } from "./services/dailySummaryService"
 // NOTE: qrSessionService and deviceLinkService disabled - using ManagerQRToken table instead
 // import { qrSessionService } from "./services/qrSessionService"
 // import { deviceLinkService } from "./services/deviceLinkService"
@@ -465,6 +467,7 @@ app.use("/api/dgm", dgmRoutes)
 app.use("/api/utils", utilsRoutes)
 app.use("/api/outlet", outletRoutes)
 app.use("/api/app", appUpdateRoutes)
+app.use("/api/admin/notification-settings", notificationSettingsRoutes)
 
 // Helper: parse "HH:MM" string to total minutes
 function parseTimeToMinutes(t: string): number {
@@ -1140,6 +1143,45 @@ function scheduleDailyResetTick() {
 }
 
 scheduleDailyResetTick()
+
+// ─── Daily Summary Notification Scheduler ────────────────────────────────────
+// Checks every minute if it's time to send the daily summary to teleshop managers
+let dailySummaryLastSentDate = '' // tracks which calendar date we already sent for
+
+if (process.env.DISABLE_DAILY_SUMMARY_JOB !== 'true') {
+  setInterval(async () => {
+    try {
+      const settings = await getNotificationSettings()
+      const smsEnabled = settings['daily_summary_sms_enabled'] === 'true'
+      const emailEnabled = settings['daily_summary_email_enabled'] === 'true'
+
+      if (!smsEnabled && !emailEnabled) return // both disabled — skip
+
+      const configHour = parseInt(settings['daily_summary_hour'] ?? '19', 10)
+      const configMinute = parseInt(settings['daily_summary_minute'] ?? '0', 10)
+
+      // Use Sri Lanka time (UTC+5:30)
+      const now = new Date()
+      const slNow = new Date(now.getTime() + 5.5 * 60 * 60 * 1000)
+      const slHour = slNow.getUTCHours()
+      const slMinute = slNow.getUTCMinutes()
+      const slDateStr = slNow.toISOString().split('T')[0]
+
+      if (slHour === configHour && slMinute === configMinute && dailySummaryLastSentDate !== slDateStr) {
+        dailySummaryLastSentDate = slDateStr
+        logger.info('[DailySummary] Sending scheduled daily summaries to all teleshop managers...')
+        const results = await sendDailySummaries()
+        const sent = results.filter(r => r.smsStatus === 'sent' || r.emailStatus === 'sent').length
+        const failed = results.filter(r => r.smsStatus === 'failed' || r.emailStatus === 'failed').length
+        logger.info(`[DailySummary] Completed: ${sent} sent, ${failed} failed out of ${results.length} managers`)
+      }
+    } catch (err) {
+      logger.error({ err }, '[DailySummary] Scheduler error')
+    }
+  }, 60 * 1000) // check every minute
+
+  logger.info('[DailySummary] Daily summary scheduler started (checks every minute)')
+}
 
 // Neon free-tier keep-alive: ping DB every 4 minutes to prevent auto-suspend (suspends after ~5 min idle)
 if (process.env.DISABLE_DB_KEEPALIVE !== "true") {
