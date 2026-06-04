@@ -498,5 +498,13 @@ export async function sendDailySummaries(): Promise<DailySummaryResult[]> {
     results.push(result)
   }
 
+  try {
+    if (results.length > 0) {
+      await upsertNotificationSetting('daily_summary_last_sent', new Date().toISOString())
+    }
+  } catch (err) {
+    console.error('[DailySummary] Failed to save last sent timestamp:', err)
+  }
+
   return results
 }

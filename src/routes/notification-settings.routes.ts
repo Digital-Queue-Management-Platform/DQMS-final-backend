@@ -38,11 +38,15 @@ router.get('/', async (_req, res) => {
   try {
     const raw = await getNotificationSettings()
 
-    const settings = {
+    const settings: any = {
       daily_summary_sms_enabled: raw['daily_summary_sms_enabled'] ?? 'false',
       daily_summary_email_enabled: raw['daily_summary_email_enabled'] ?? 'false',
       daily_summary_hour: raw['daily_summary_hour'] ?? '19',
       daily_summary_minute: raw['daily_summary_minute'] ?? '0',
+    }
+    
+    if (raw['daily_summary_last_sent']) {
+      settings.daily_summary_last_sent = raw['daily_summary_last_sent']
     }
 
     res.json({ success: true, settings })
