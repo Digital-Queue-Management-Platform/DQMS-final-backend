@@ -88,7 +88,6 @@ router.post("/login", async (req, res) => {
       },
       include: {
         region: true,
-        Outlet: true,
         teleshopManagers: {
           include: {
             branch: {
@@ -100,7 +99,6 @@ router.post("/login", async (req, res) => {
         }
       }
     })
-
 
     if (!rtom) {
       return res.status(401).json({ error: "RTOM not found with this mobile number" })
@@ -125,12 +123,8 @@ router.post("/login", async (req, res) => {
       mobileNumber: rtom.mobileNumber,
       regionId: rtom.regionId,
       regionName: rtom.region?.name,
-      outlets: [
-        ...rtom.teleshopManagers.map(tm => tm.branch).filter(Boolean),
-        ...rtom.Outlet
-      ].filter((v, i, a) => a.findIndex(t => t?.id === v?.id) === i)
+      outlets: rtom.teleshopManagers.map(tm => tm.branch).filter(Boolean)
     }
-
 
     // Create JWT token for RTOM authentication (no expiration)
     const tokenOptions: any = {
@@ -237,7 +231,6 @@ router.get("/me", async (req, res) => {
       where: { mobileNumber: managerMobile },
       include: {
         region: true,
-        Outlet: true,
         teleshopManagers: {
           include: {
             branch: {
@@ -250,24 +243,20 @@ router.get("/me", async (req, res) => {
       }
     })
 
-
     if (!rtom) {
       return res.status(404).json({ error: "RTOM not found" })
     }
 
-    // Get outlets assigned to this RTOM (both direct and through TeleshopManager)
-    const assignedOutletIds = [
-      ...rtom.teleshopManagers.filter(tm => tm.branch?.id).map(tm => tm.branch!.id),
-      ...rtom.Outlet.map(o => o.id)
-    ]
-    const uniqueOutletIds = [...new Set(assignedOutletIds)]
+    // Get only outlets assigned to this RTOM through TeleshopManager relationships
+    const assignedOutletIds = rtom.teleshopManagers
+      .filter(tm => tm.branch?.id) // Only include managers with valid branch assignments
+      .map(tm => tm.branch!.id)
     
     const outlets = assignedOutletIds.length > 0 ? await prisma.outlet.findMany({
       where: {
-        id: { in: uniqueOutletIds },
+        id: { in: assignedOutletIds },
         isActive: true
       },
-
       include: {
         officers: true,
         teleshopManagers: true
@@ -341,7 +330,6 @@ router.get("/feedback", async (req, res) => {
     const rtom = await prisma.rTOM.findFirst({
       where: { mobileNumber: payload.mobileNumber },
       include: { 
-        Outlet: true,
         teleshopManagers: {
           include: {
             branch: true
@@ -350,17 +338,14 @@ router.get("/feedback", async (req, res) => {
       }
     })
 
-
     if (!rtom) {
       return res.status(404).json({ error: "RTOM not found" })
     }
 
     // Get assigned outlet IDs
-    const assignedOutletIds = [
-      ...rtom.teleshopManagers.filter(tm => tm.branch?.id).map(tm => tm.branch!.id),
-      ...rtom.Outlet.map(o => o.id)
-    ]
-    const uniqueOutletIds = [...new Set(assignedOutletIds)]
+    const assignedOutletIds = rtom.teleshopManagers
+      .filter(tm => tm.branch?.id)
+      .map(tm => tm.branch!.id)
 
     if (assignedOutletIds.length === 0) {
       return res.json({ 
@@ -378,9 +363,8 @@ router.get("/feedback", async (req, res) => {
     const where: any = {
       rating: rating ? parseInt(rating as string) : { lte: 2 }, // Default to 2-star and below
       token: {
-        outletId: { in: uniqueOutletIds }
+        outletId: { in: assignedOutletIds }
       }
-
     }
 
     if (resolved === "true") {
@@ -437,10 +421,9 @@ router.get("/feedback", async (req, res) => {
     // Calculate stats
     const statsWhere = {
       token: {
-        outletId: { in: uniqueOutletIds }
+        outletId: { in: assignedOutletIds }
       }
     }
-
 
     const [totalFeedback, resolvedFeedback, avgRatingResult] = await Promise.all([
       prisma.feedback.count({ where: statsWhere }),
@@ -534,15 +517,8 @@ router.get("/service-case/*", async (req, res) => {
     try { payload = (jwt as any).verify(token, JWT_SECRET) } catch { return res.status(401).json({ error: "Invalid token" }) }
 
     const refNumber = decodeURIComponent((req.params as any)[0])
-    const scList: any[] = await (prisma as any).serviceCase.findMany({
-      where: {
-        OR: [
-          { refNumber },
-          { customer: { mobileNumber: refNumber } },
-          { customer: { email: refNumber } },
-          { customer: { name: { contains: refNumber, mode: 'insensitive' } } },
-        ]
-      },
+    const sc: any = await (prisma as any).serviceCase.findUnique({
+      where: { refNumber },
       include: {
         customer: true,
         officer: true,
@@ -562,109 +538,101 @@ router.get("/service-case/*", async (req, res) => {
       }
     })
 
-    if (!scList || scList.length === 0) return res.status(404).json({ error: 'No matching service record found for the provided details' })
+    if (!sc) return res.status(404).json({ error: 'Reference not found' })
 
     // Resolve service titles from codes
-    const allServiceCodes = new Set<string>()
-    scList.forEach(sc => {
-      (sc.serviceTypes || []).forEach((c: string) => allServiceCodes.add(c))
-    })
-
-    const serviceRecords = allServiceCodes.size > 0
+    const serviceCodes: string[] = sc.serviceTypes || []
+    const serviceRecords = serviceCodes.length > 0
       ? await prisma.service.findMany({
-          where: { code: { in: Array.from(allServiceCodes) } },
+          where: { code: { in: serviceCodes } },
           select: { code: true, title: true }
         })
       : []
     const serviceTitleMap: Record<string, string> = {}
     for (const s of serviceRecords) serviceTitleMap[s.code] = s.title
 
-    const responseData = scList.map(sc => {
-      const tok = sc.token
-      const feedback = tok?.feedback || null
+    const tok = sc.token
+    const feedback = tok?.feedback || null
 
-      const waitDurationMs = tok?.calledAt && tok?.createdAt
-        ? new Date(tok.calledAt).getTime() - new Date(tok.createdAt).getTime()
-        : null
-      const serviceDurationMs = tok?.completedAt && tok?.startedAt
-        ? new Date(tok.completedAt).getTime() - new Date(tok.startedAt).getTime()
-        : null
-      const totalDurationMs = tok?.completedAt && tok?.createdAt
-        ? new Date(tok.completedAt).getTime() - new Date(tok.createdAt).getTime()
-        : null
+    const waitDurationMs = tok?.calledAt && tok?.createdAt
+      ? new Date(tok.calledAt).getTime() - new Date(tok.createdAt).getTime()
+      : null
+    const serviceDurationMs = tok?.completedAt && tok?.startedAt
+      ? new Date(tok.completedAt).getTime() - new Date(tok.startedAt).getTime()
+      : null
+    const totalDurationMs = tok?.completedAt && tok?.createdAt
+      ? new Date(tok.completedAt).getTime() - new Date(tok.createdAt).getTime()
+      : null
 
-      return {
-        refNumber: sc.refNumber,
-        status: sc.status,
-        serviceTypes: sc.serviceTypes,
-        services: (sc.serviceTypes || []).map((code: string) => ({
-          code,
-          title: serviceTitleMap[code] || code
-        })),
-        createdAt: sc.createdAt,
-        completedAt: sc.completedAt,
-        lastUpdatedAt: sc.lastUpdatedAt,
-        outlet: { id: sc.outlet.id, name: sc.outlet.name, location: sc.outlet.location },
-        customer: {
-          id: sc.customer.id,
-          name: sc.customer.name,
-          mobileNumber: sc.customer.mobileNumber,
-          nicNumber: sc.customer.nicNumber || null,
-          email: sc.customer.email || null,
-          sltMobileNumber: sc.customer.sltMobileNumber || null,
-        },
-        officer: {
-          id: sc.officer.id,
-          name: sc.officer.name,
-          mobileNumber: sc.officer.mobileNumber,
-          counterNumber: sc.officer.counterNumber || null,
-        },
-        token: tok ? {
-          id: tok.id,
-          tokenNumber: tok.tokenNumber,
-          isPriority: tok.isPriority,
-          isTransferred: tok.isTransferred,
-          preferredLanguages: tok.preferredLanguages,
-          accountRef: tok.accountRef || null,
-          sltTelephoneNumber: tok.sltTelephoneNumber || null,
-          billPaymentIntent: tok.billPaymentIntent || null,
-          billPaymentAmount: tok.billPaymentAmount ?? null,
-          billPaymentMethod: tok.billPaymentMethod || null,
-          createdAt: tok.createdAt,
-          calledAt: tok.calledAt || null,
-          startedAt: tok.startedAt || null,
-          completedAt: tok.completedAt || null,
-        } : null,
-        timeSpans: { waitDurationMs, serviceDurationMs, totalDurationMs },
-        transferLogs: (tok?.transferLogs || []).map((tl: any) => ({
-          id: tl.id,
-          fromOfficer: tl.fromOfficer,
-          fromCounterNumber: tl.fromCounterNumber,
-          toCounterNumber: tl.toCounterNumber,
-          previousServiceTypes: tl.previousServiceTypes,
-          newServiceTypes: tl.newServiceTypes,
-          notes: tl.notes,
-          createdAt: tl.createdAt,
-        })),
-        feedback: feedback ? {
-          rating: feedback.rating,
-          comment: feedback.comment || null,
-          createdAt: feedback.createdAt,
-          isResolved: (feedback as any).isResolved || false,
-          resolutionComment: (feedback as any).resolutionComment || null,
-        } : null,
-        updates: (sc.updates || []).map((u: any) => ({
-          id: u.id,
-          actorRole: u.actorRole,
-          actorId: u.actorId,
-          status: u.status,
-          note: u.note,
-          createdAt: u.createdAt,
-        }))
-      }
+    res.json({
+      refNumber: sc.refNumber,
+      status: sc.status,
+      serviceTypes: sc.serviceTypes,
+      services: (sc.serviceTypes || []).map((code: string) => ({
+        code,
+        title: serviceTitleMap[code] || code
+      })),
+      createdAt: sc.createdAt,
+      completedAt: sc.completedAt,
+      lastUpdatedAt: sc.lastUpdatedAt,
+      outlet: { id: sc.outlet.id, name: sc.outlet.name, location: sc.outlet.location },
+      customer: {
+        id: sc.customer.id,
+        name: sc.customer.name,
+        mobileNumber: sc.customer.mobileNumber,
+        nicNumber: sc.customer.nicNumber || null,
+        email: sc.customer.email || null,
+        sltMobileNumber: sc.customer.sltMobileNumber || null,
+      },
+      officer: {
+        id: sc.officer.id,
+        name: sc.officer.name,
+        mobileNumber: sc.officer.mobileNumber,
+        counterNumber: sc.officer.counterNumber || null,
+      },
+      token: tok ? {
+        id: tok.id,
+        tokenNumber: tok.tokenNumber,
+        isPriority: tok.isPriority,
+        isTransferred: tok.isTransferred,
+        preferredLanguages: tok.preferredLanguages,
+        accountRef: tok.accountRef || null,
+        sltTelephoneNumber: tok.sltTelephoneNumber || null,
+        billPaymentIntent: tok.billPaymentIntent || null,
+        billPaymentAmount: tok.billPaymentAmount ?? null,
+        billPaymentMethod: tok.billPaymentMethod || null,
+        createdAt: tok.createdAt,
+        calledAt: tok.calledAt || null,
+        startedAt: tok.startedAt || null,
+        completedAt: tok.completedAt || null,
+      } : null,
+      timeSpans: { waitDurationMs, serviceDurationMs, totalDurationMs },
+      transferLogs: (tok?.transferLogs || []).map((tl: any) => ({
+        id: tl.id,
+        fromOfficer: tl.fromOfficer,
+        fromCounterNumber: tl.fromCounterNumber,
+        toCounterNumber: tl.toCounterNumber,
+        previousServiceTypes: tl.previousServiceTypes,
+        newServiceTypes: tl.newServiceTypes,
+        notes: tl.notes,
+        createdAt: tl.createdAt,
+      })),
+      feedback: feedback ? {
+        rating: feedback.rating,
+        comment: feedback.comment || null,
+        createdAt: feedback.createdAt,
+        isResolved: (feedback as any).isResolved || false,
+        resolutionComment: (feedback as any).resolutionComment || null,
+      } : null,
+      updates: (sc.updates || []).map((u: any) => ({
+        id: u.id,
+        actorRole: u.actorRole,
+        actorId: u.actorId,
+        status: u.status,
+        note: u.note,
+        createdAt: u.createdAt,
+      }))
     })
-
-    res.json(responseData)
   } catch (e) {
     console.error('Manager service-case get error:', e)
     res.status(500).json({ error: 'Failed to fetch service case' })
@@ -881,7 +849,6 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
       where: { mobileNumber: payload.mobileNumber },
       include: { 
         region: true,
-        Outlet: true,
         teleshopManagers: {
           include: {
             branch: true
@@ -890,21 +857,17 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
       }
     })
 
-
     if (!rtom || !rtom.region) {
       return res.status(404).json({ error: "RTOM not found or not assigned to region" })
     }
 
     // Get assigned outlet IDs for this RTOM
-    const assignedOutletIds = [
-      ...rtom.teleshopManagers.filter(tm => tm.branch?.id).map(tm => tm.branch!.id),
-      ...rtom.Outlet.map(o => o.id)
-    ]
-    const uniqueOutletIds = [...new Set(assignedOutletIds)]
+    const assignedOutletIds = rtom.teleshopManagers
+      .filter(tm => tm.branch?.id)
+      .map(tm => tm.branch!.id)
 
     // Verify the outlet is assigned to this RTOM
-    if (!uniqueOutletIds.includes(outletId)) {
-
+    if (!assignedOutletIds.includes(outletId)) {
       return res.status(403).json({ error: "You are not assigned to manage this outlet" })
     }
 
@@ -919,52 +882,29 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
       return res.status(404).json({ error: "Outlet not found" })
     }
 
-    const baseWhere: any = { outletId: outletId }
-    if (startDate && endDate) {
-      baseWhere.createdAt = {
-        gte: new Date(startDate as string),
-        lte: new Date(endDate as string),
-      }
-    }
-
-    const totalIssuedTokens = await prisma.token.count({ where: baseWhere })
-
-    const whereCompleted: any = {
+    const where: any = {
       status: "completed",
       outletId: outletId,
     }
-    const whereDropped: any = {
-      status: "dropped",
-      outletId: outletId,
-    }
 
     if (startDate && endDate) {
-      whereCompleted.completedAt = {
-        gte: new Date(startDate as string),
-        lte: new Date(endDate as string),
-      }
-      whereDropped.completedAt = {
+      where.completedAt = {
         gte: new Date(startDate as string),
         lte: new Date(endDate as string),
       }
     }
 
     // Get analytics for the specific outlet
-    const totalTokens = await prisma.token.count({ where: whereCompleted })
-    const totalDropped = await prisma.token.count({ where: whereDropped })
+    const totalTokens = await prisma.token.count({ where })
 
-    const allTokensInRange = await prisma.token.findMany({
-      where: baseWhere,
+    const completedTokens = await prisma.token.findMany({
+      where,
       select: {
         createdAt: true,
         startedAt: true,
         completedAt: true,
-        status: true,
-        assignedTo: true,
       }
     })
-    
-    const completedTokens = allTokensInRange.filter(t => t.status === "completed")
 
     // Calculate average waiting and service times
     let totalWaitTime = 0
@@ -1079,74 +1019,38 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
       customerSatisfaction: Math.round(avgRating * 10) / 10,
       activeOfficers,
       totalOfficers: outletDetails?.officers.length || 0,
-      totalIssued: totalIssuedTokens,
-      totalCompleted: totalTokens,
-      totalDropOffs: totalDropped,
-      completionRate: totalIssuedTokens > 0 ? Math.round((totalTokens / totalIssuedTokens) * 1000) / 10 : 0,
+      totalIssued: totalTokens, // For completion rate calculation
+      totalCompleted: totalTokens, // All tokens in query are completed
+      totalDropOffs: 0, // Would need additional tracking for this
+      completionRate: totalTokens > 0 ? 100 : 0, // All queried tokens are completed
       changePercents: {
-        customers: 0,
+        customers: 0, // Would need historical comparison
         waitTime: 0,
         serviceTime: 0,
         satisfaction: 0
       },
-      hourlyData: (() => {
-        const hourlyMap = new Map<number, any>();
-        for (let i = 8; i <= 19; i++) {
-          hourlyMap.set(i, {
-            hour: `${i}:00`,
-            waitTime: 0,
-            serviceTime: 0,
-            issued: 0,
-            completed: 0,
-            dropOffs: 0,
-            activeCounters: 0,
-            _totalWait: 0,
-            _totalService: 0,
-            _waitCount: 0,
-            _serviceCount: 0,
-            _activeOfficers: new Set()
-          });
-        }
+      hourlyData: completedTokens.filter(token => token.completedAt).map((token, index) => {
+        const hour = new Date(token.completedAt!).getHours()
+        const waitTime = token.startedAt && token.createdAt ? 
+          (new Date(token.startedAt).getTime() - new Date(token.createdAt).getTime()) / (1000 * 60) : 0
+        const serviceTime = token.completedAt && token.startedAt ? 
+          (new Date(token.completedAt).getTime() - new Date(token.startedAt).getTime()) / (1000 * 60) : 0
         
-        allTokensInRange.forEach((token: any) => {
-          if (!token.createdAt) return;
-          const hour = new Date(token.createdAt).getHours();
-          if (!hourlyMap.has(hour)) return;
-          
-          const entry = hourlyMap.get(hour);
-          entry.issued++;
-          
-          if (token.assignedTo) {
-            entry._activeOfficers.add(token.assignedTo);
-          }
-          
-          if (token.status === 'completed' && token.completedAt && token.startedAt) {
-            entry.completed++;
-            entry._totalWait += (new Date(token.startedAt).getTime() - new Date(token.createdAt).getTime()) / (1000 * 60);
-            entry._waitCount++;
-            entry._totalService += (new Date(token.completedAt).getTime() - new Date(token.startedAt).getTime()) / (1000 * 60);
-            entry._serviceCount++;
-          } else if (token.status === 'dropped') {
-            entry.dropOffs++;
-          }
-        });
-        
-        return Array.from(hourlyMap.values()).map(entry => {
-          const { _totalWait, _totalService, _waitCount, _serviceCount, _activeOfficers, ...rest } = entry;
-          rest.waitTime = _waitCount > 0 ? Math.round((_totalWait / _waitCount) * 10) / 10 : 0;
-          rest.serviceTime = _serviceCount > 0 ? Math.round((_totalService / _serviceCount) * 10) / 10 : 0;
-          rest.activeCounters = _activeOfficers.size;
-          return rest;
-        });
-      })(),
-      ratingDistribution: [1, 2, 3, 4, 5].map(rating => {
-        const stat = feedbackStats.find(s => s.rating === rating);
         return {
-          rating,
-          count: stat ? stat._count : 0
-        };
+          hour: `${hour}:00`,
+          waitTime: Math.round(waitTime * 10) / 10,
+          serviceTime: Math.round(serviceTime * 10) / 10,
+          issued: 1,
+          completed: 1,
+          dropOffs: 0,
+          activeCounters: 1
+        }
       }),
-      officers: officerPerformance.sort((a, b) => b.tokensServed - a.tokensServed),
+      ratingDistribution: feedbackStats.map(stat => ({
+        rating: stat.rating,
+        count: stat._count
+      })),
+      officers: officerPerformance,
       teleshopManager: teleshopManager ? {
         id: teleshopManager.id,
         name: teleshopManager.name,
@@ -1189,7 +1093,6 @@ router.get("/officers", async (req, res) => {
       where: { mobileNumber: payload.mobileNumber },
       include: { 
         region: true,
-        Outlet: true,
         teleshopManagers: {
           include: {
             branch: true
@@ -1198,26 +1101,22 @@ router.get("/officers", async (req, res) => {
       }
     })
 
-
     if (!rtom) {
       return res.status(404).json({ error: "RTOM not found" })
     }
 
     // Get assigned outlet IDs for this RTOM
-    const assignedOutletIds = [
-      ...rtom.teleshopManagers.filter(tm => tm.branch?.id).map(tm => tm.branch!.id),
-      ...rtom.Outlet.map(o => o.id)
-    ]
-    const uniqueOutletIds = [...new Set(assignedOutletIds)]
+    const assignedOutletIds = rtom.teleshopManagers
+      .filter(tm => tm.branch?.id)
+      .map(tm => tm.branch!.id)
 
-    console.log(`RTOM ${rtom.name} fetching officers for assigned outlets:`, uniqueOutletIds);
+    console.log(`RTOM ${rtom.name} fetching officers for assigned outlets:`, assignedOutletIds);
 
     // Get officers only in this RTOM's assigned outlets
-    const officers = uniqueOutletIds.length > 0 ? await prisma.officer.findMany({
+    const officers = assignedOutletIds.length > 0 ? await prisma.officer.findMany({
       where: {
-        outletId: { in: uniqueOutletIds }
+        outletId: { in: assignedOutletIds }
       },
-
       include: {
         outlet: true
       }
@@ -2011,7 +1910,6 @@ router.get("/outlets", async (req, res) => {
       where: { mobileNumber: payload.mobileNumber },
       include: { 
         region: true,
-        Outlet: true,
         teleshopManagers: {
           include: {
             branch: true
@@ -2019,7 +1917,6 @@ router.get("/outlets", async (req, res) => {
         }
       }
     })
-
 
     console.log('Found RTOM:', rtom ? {name: rtom.name, mobile: rtom.mobileNumber, regionId: rtom.regionId} : 'null');
 
@@ -2030,21 +1927,18 @@ router.get("/outlets", async (req, res) => {
 
     console.log(`Fetching outlets for RTOM: ${rtom.name} (${rtom.mobileNumber}) in region: ${rtom.region.name} (ID: ${rtom.region.id})`)
 
-    // Get assigned outlet IDs
-    const assignedOutletIds = [
-      ...rtom.teleshopManagers.filter(tm => tm.branch?.id).map(tm => tm.branch!.id),
-      ...rtom.Outlet.map(o => o.id)
-    ]
-    const uniqueOutletIds = [...new Set(assignedOutletIds)]
+    // Get only outlets assigned to this RTOM through TeleshopManager relationships
+    const assignedOutletIds = rtom.teleshopManagers
+      .filter(tm => tm.branch?.id) // Only include managers with valid branch assignments
+      .map(tm => tm.branch!.id)
 
-    console.log(`RTOM ${rtom.name} is assigned to outlets:`, uniqueOutletIds);
+    console.log(`RTOM ${rtom.name} is assigned to outlets:`, assignedOutletIds);
 
-    const outlets = uniqueOutletIds.length > 0 ? await prisma.outlet.findMany({
+    const outlets = assignedOutletIds.length > 0 ? await prisma.outlet.findMany({
       where: {
-        id: { in: uniqueOutletIds },
+        id: { in: assignedOutletIds },
         isActive: true,
       },
-
       include: {
         officers: {
           select: {
@@ -2400,7 +2294,6 @@ router.get("/analytics/breaks/:regionId", async (req, res) => {
     const rtom = await prisma.rTOM.findFirst({
       where: { mobileNumber: payload.mobileNumber },
       include: { 
-        Outlet: true,
         teleshopManagers: {
           include: {
             branch: true
@@ -2409,22 +2302,18 @@ router.get("/analytics/breaks/:regionId", async (req, res) => {
       }
     })
 
-
     if (!rtom) {
       return res.status(404).json({ error: "RTOM not found" })
     }
 
     // Get assigned outlet IDs
-    const assignedOutletIds = [
-      ...rtom.teleshopManagers.filter(tm => tm.branch?.id).map(tm => tm.branch!.id),
-      ...rtom.Outlet.map(o => o.id)
-    ]
-    const uniqueOutletIds = [...new Set(assignedOutletIds)]
+    const assignedOutletIds = rtom.teleshopManagers
+      .filter(tm => tm.branch?.id)
+      .map(tm => tm.branch!.id)
 
-    console.log(`RTOM ${rtom.name} accessing break oversight for assigned outlets:`, uniqueOutletIds);
+    console.log(`RTOM ${rtom.name} accessing break oversight for assigned outlets:`, assignedOutletIds);
 
-    if (uniqueOutletIds.length === 0) {
-
+    if (assignedOutletIds.length === 0) {
       return res.json({
         timeframe,
         startDate: new Date().toISOString(),
@@ -2466,10 +2355,9 @@ router.get("/analytics/breaks/:regionId", async (req, res) => {
     // Get only outlets assigned to this RTOM
     const outlets = await prisma.outlet.findMany({
       where: { 
-        id: { in: uniqueOutletIds },
+        id: { in: assignedOutletIds },
         isActive: true
       },
-
       include: {
         officers: {
           include: {
@@ -2589,7 +2477,6 @@ router.get("/breaks/officer/:officerId", async (req, res) => {
     const rtom = await prisma.rTOM.findFirst({
       where: { mobileNumber: payload.mobileNumber },
       include: { 
-        Outlet: true,
         teleshopManagers: {
           include: {
             branch: true
@@ -2598,18 +2485,14 @@ router.get("/breaks/officer/:officerId", async (req, res) => {
       }
     })
 
-
     if (!rtom) {
       return res.status(404).json({ error: "RTOM not found" })
     }
 
     // Get assigned outlet IDs
-    const assignedOutletIds = [
-      ...rtom.teleshopManagers.filter(tm => tm.branch?.id).map(tm => tm.branch!.id),
-      ...rtom.Outlet.map(o => o.id)
-    ]
-    const uniqueOutletIds = [...new Set(assignedOutletIds)]
-
+    const assignedOutletIds = rtom.teleshopManagers
+      .filter(tm => tm.branch?.id)
+      .map(tm => tm.branch!.id)
 
     const start = startDate ? new Date(startDate as string) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // 7 days ago
     const end = endDate ? new Date(endDate as string) : new Date()
@@ -2635,8 +2518,7 @@ router.get("/breaks/officer/:officerId", async (req, res) => {
     }
 
     // Verify the officer belongs to an outlet assigned to this RTOM
-    if (!uniqueOutletIds.includes(officer.outletId)) {
-
+    if (!assignedOutletIds.includes(officer.outletId)) {
       return res.status(403).json({ error: "You are not authorized to view this officer's data" })
     }
 
@@ -3210,36 +3092,45 @@ router.get("/branch/:branchId/officers", async (req, res) => {
     }
 
     let managerEmail: string | undefined
+    let managerMobile: string | undefined
 
     if (token) {
       try {
         const payload = (jwt as any).verify(token, JWT_SECRET)
         managerEmail = payload.email
+        managerMobile = payload.mobileNumber
       } catch (e) {
         return res.status(401).json({ error: "Invalid token" })
       }
     } else {
       managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
+      managerMobile = (req.query.mobileNumber as string)
 
-      if (!managerEmail) {
+      if (!managerEmail && !managerMobile) {
         return res.status(401).json({ error: "Manager authentication required" })
       }
     }
 
     // Try to find manager as Region manager first
-    let region = await prisma.region.findFirst({
-      where: { managerEmail: managerEmail },
-      include: { outlets: true }
-    })
+    let region = null
+    if (managerEmail) {
+      region = await prisma.region.findFirst({
+        where: { managerEmail: managerEmail },
+        include: { outlets: true }
+      })
+    }
 
-    // If not a region manager, check if RTOM
-    if (!region) {
+    let hasAccess = false;
+
+    if (region) {
+      const branch = region.outlets.find((o: any) => o.id === branchId)
+      if (branch) hasAccess = true;
+    } else {
+      // Check if RTOM
       const rtom = await prisma.rTOM.findFirst({
-        where: { email: managerEmail },
+        where: managerMobile ? { mobileNumber: managerMobile } : { email: managerEmail },
         include: {
-          region: {
-            include: { outlets: true }
-          },
+          Outlet: true,
           teleshopManagers: {
             include: { branch: true }
           }
@@ -3247,18 +3138,18 @@ router.get("/branch/:branchId/officers", async (req, res) => {
       })
 
       if (rtom) {
-        region = rtom.region
+        const assignedOutletIds = [
+          ...rtom.teleshopManagers.filter((tm: any) => tm.branch?.id).map((tm: any) => tm.branch!.id),
+          ...rtom.Outlet.map((o: any) => o.id)
+        ]
+        if (assignedOutletIds.includes(branchId)) {
+          hasAccess = true;
+        }
       }
     }
 
-    if (!region) {
-      return res.status(404).json({ error: "Manager not found" })
-    }
-
-    // Verify the branch belongs to this manager's region
-    const branch = region.outlets.find(o => o.id === branchId)
-    if (!branch) {
-      return res.status(403).json({ error: "Branch not found in your region" })
+    if (!hasAccess) {
+      return res.status(403).json({ error: "Branch not found in your assigned outlets or region" })
     }
 
     // Get officers for this branch
@@ -3342,61 +3233,73 @@ router.patch("/officers/:officerId/assign-counter", async (req, res) => {
     }
 
     let managerEmail: string | undefined
+    let managerMobile: string | undefined
 
     if (token) {
       try {
         const payload = (jwt as any).verify(token, JWT_SECRET)
         managerEmail = payload.email
+        managerMobile = payload.mobileNumber
       } catch (e) {
         return res.status(401).json({ error: "Invalid token" })
       }
     } else {
       managerEmail = (req.query.email as string) || (req.headers['x-manager-email'] as string)
+      managerMobile = (req.query.mobileNumber as string)
 
-      if (!managerEmail) {
+      if (!managerEmail && !managerMobile) {
         return res.status(401).json({ error: "Manager authentication required" })
       }
     }
 
     // Try to find manager as Region manager first
-    let region = await prisma.region.findFirst({
-      where: { managerEmail: managerEmail },
-      include: { outlets: true }
-    })
+    let region = null
+    if (managerEmail) {
+      region = await prisma.region.findFirst({
+        where: { managerEmail: managerEmail },
+        include: { outlets: true }
+      })
+    }
 
-    // If not a region manager, check if RTOM
-    if (!region) {
+    let allowedOutletIds: string[] = []
+
+    if (region) {
+      allowedOutletIds = region.outlets.map(o => o.id)
+    } else {
+      // Check if RTOM
       const rtom = await prisma.rTOM.findFirst({
-        where: { email: managerEmail },
+        where: managerMobile ? { mobileNumber: managerMobile } : { email: managerEmail },
         include: {
-          region: {
-            include: { outlets: true }
+          Outlet: true,
+          teleshopManagers: {
+            include: { branch: true }
           }
         }
       })
 
       if (rtom) {
-        region = rtom.region
+        allowedOutletIds = [
+          ...rtom.teleshopManagers.filter((tm: any) => tm.branch?.id).map((tm: any) => tm.branch!.id),
+          ...rtom.Outlet.map((o: any) => o.id)
+        ]
       }
     }
 
-    if (!region) {
-      return res.status(404).json({ error: "Manager not found" })
+    if (allowedOutletIds.length === 0) {
+      return res.status(403).json({ error: "Manager not found or has no assigned outlets" })
     }
 
-    const outletIds = region.outlets.map(outlet => outlet.id)
-
-    // Verify officer belongs to this manager's region
+    // Verify officer belongs to this manager's assigned outlets
     const officer = await prisma.officer.findFirst({
       where: {
         id: officerId,
-        outletId: { in: outletIds }
+        outletId: { in: allowedOutletIds }
       },
       include: { outlet: true }
     })
 
     if (!officer) {
-      return res.status(403).json({ error: "Officer not found in your region" })
+      return res.status(403).json({ error: "Officer not found in your assigned outlets" })
     }
 
     // If assigning a counter (not null), validate it
