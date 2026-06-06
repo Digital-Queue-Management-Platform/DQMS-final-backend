@@ -919,29 +919,52 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
       return res.status(404).json({ error: "Outlet not found" })
     }
 
-    const where: any = {
+    const baseWhere: any = { outletId: outletId }
+    if (startDate && endDate) {
+      baseWhere.createdAt = {
+        gte: new Date(startDate as string),
+        lte: new Date(endDate as string),
+      }
+    }
+
+    const totalIssuedTokens = await prisma.token.count({ where: baseWhere })
+
+    const whereCompleted: any = {
       status: "completed",
+      outletId: outletId,
+    }
+    const whereDropped: any = {
+      status: "dropped",
       outletId: outletId,
     }
 
     if (startDate && endDate) {
-      where.completedAt = {
+      whereCompleted.completedAt = {
+        gte: new Date(startDate as string),
+        lte: new Date(endDate as string),
+      }
+      whereDropped.completedAt = {
         gte: new Date(startDate as string),
         lte: new Date(endDate as string),
       }
     }
 
     // Get analytics for the specific outlet
-    const totalTokens = await prisma.token.count({ where })
+    const totalTokens = await prisma.token.count({ where: whereCompleted })
+    const totalDropped = await prisma.token.count({ where: whereDropped })
 
-    const completedTokens = await prisma.token.findMany({
-      where,
+    const allTokensInRange = await prisma.token.findMany({
+      where: baseWhere,
       select: {
         createdAt: true,
         startedAt: true,
         completedAt: true,
+        status: true,
+        assignedTo: true,
       }
     })
+    
+    const completedTokens = allTokensInRange.filter(t => t.status === "completed")
 
     // Calculate average waiting and service times
     let totalWaitTime = 0
@@ -1056,38 +1079,74 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
       customerSatisfaction: Math.round(avgRating * 10) / 10,
       activeOfficers,
       totalOfficers: outletDetails?.officers.length || 0,
-      totalIssued: totalTokens, // For completion rate calculation
-      totalCompleted: totalTokens, // All tokens in query are completed
-      totalDropOffs: 0, // Would need additional tracking for this
-      completionRate: totalTokens > 0 ? 100 : 0, // All queried tokens are completed
+      totalIssued: totalIssuedTokens,
+      totalCompleted: totalTokens,
+      totalDropOffs: totalDropped,
+      completionRate: totalIssuedTokens > 0 ? Math.round((totalTokens / totalIssuedTokens) * 1000) / 10 : 0,
       changePercents: {
-        customers: 0, // Would need historical comparison
+        customers: 0,
         waitTime: 0,
         serviceTime: 0,
         satisfaction: 0
       },
-      hourlyData: completedTokens.filter(token => token.completedAt).map((token, index) => {
-        const hour = new Date(token.completedAt!).getHours()
-        const waitTime = token.startedAt && token.createdAt ? 
-          (new Date(token.startedAt).getTime() - new Date(token.createdAt).getTime()) / (1000 * 60) : 0
-        const serviceTime = token.completedAt && token.startedAt ? 
-          (new Date(token.completedAt).getTime() - new Date(token.startedAt).getTime()) / (1000 * 60) : 0
-        
-        return {
-          hour: `${hour}:00`,
-          waitTime: Math.round(waitTime * 10) / 10,
-          serviceTime: Math.round(serviceTime * 10) / 10,
-          issued: 1,
-          completed: 1,
-          dropOffs: 0,
-          activeCounters: 1
+      hourlyData: (() => {
+        const hourlyMap = new Map<number, any>();
+        for (let i = 8; i <= 19; i++) {
+          hourlyMap.set(i, {
+            hour: `${i}:00`,
+            waitTime: 0,
+            serviceTime: 0,
+            issued: 0,
+            completed: 0,
+            dropOffs: 0,
+            activeCounters: 0,
+            _totalWait: 0,
+            _totalService: 0,
+            _waitCount: 0,
+            _serviceCount: 0,
+            _activeOfficers: new Set()
+          });
         }
+        
+        allTokensInRange.forEach((token: any) => {
+          if (!token.createdAt) return;
+          const hour = new Date(token.createdAt).getHours();
+          if (!hourlyMap.has(hour)) return;
+          
+          const entry = hourlyMap.get(hour);
+          entry.issued++;
+          
+          if (token.assignedTo) {
+            entry._activeOfficers.add(token.assignedTo);
+          }
+          
+          if (token.status === 'completed' && token.completedAt && token.startedAt) {
+            entry.completed++;
+            entry._totalWait += (new Date(token.startedAt).getTime() - new Date(token.createdAt).getTime()) / (1000 * 60);
+            entry._waitCount++;
+            entry._totalService += (new Date(token.completedAt).getTime() - new Date(token.startedAt).getTime()) / (1000 * 60);
+            entry._serviceCount++;
+          } else if (token.status === 'dropped') {
+            entry.dropOffs++;
+          }
+        });
+        
+        return Array.from(hourlyMap.values()).map(entry => {
+          const { _totalWait, _totalService, _waitCount, _serviceCount, _activeOfficers, ...rest } = entry;
+          rest.waitTime = _waitCount > 0 ? Math.round((_totalWait / _waitCount) * 10) / 10 : 0;
+          rest.serviceTime = _serviceCount > 0 ? Math.round((_totalService / _serviceCount) * 10) / 10 : 0;
+          rest.activeCounters = _activeOfficers.size;
+          return rest;
+        });
+      })(),
+      ratingDistribution: [1, 2, 3, 4, 5].map(rating => {
+        const stat = feedbackStats.find(s => s.rating === rating);
+        return {
+          rating,
+          count: stat ? stat._count : 0
+        };
       }),
-      ratingDistribution: feedbackStats.map(stat => ({
-        rating: stat.rating,
-        count: stat._count
-      })),
-      officers: officerPerformance,
+      officers: officerPerformance.sort((a, b) => b.tokensServed - a.tokensServed),
       teleshopManager: teleshopManager ? {
         id: teleshopManager.id,
         name: teleshopManager.name,
