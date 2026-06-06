@@ -884,7 +884,8 @@ router.get("/kiosk-settings", async (req: any, res) => {
         id: true,
         name: true,
         location: true,
-        kioskPassword: true
+        kioskPassword: true,
+        displaySettings: true
       }
     })
 
@@ -899,36 +900,58 @@ router.get("/kiosk-settings", async (req: any, res) => {
   }
 })
 
-// Set/Update kiosk password for teleshop manager's outlet
+// Set/Update kiosk settings for teleshop manager's outlet
 router.post("/kiosk-settings", async (req: any, res) => {
   try {
     const teleshopManager = req.teleshopManager
-    const { kioskPassword } = req.body
+    const { kioskPassword, promoVideoUrl } = req.body
 
     if (!teleshopManager.branchId) {
       return res.status(400).json({ error: "You are not assigned to any outlet" })
     }
 
-    if (!kioskPassword || kioskPassword.length < 8) {
-      return res.status(400).json({ error: "Password must be at least 8 characters long" })
+    const updateData: any = {}
+
+    if (kioskPassword !== undefined) {
+      if (kioskPassword.length < 8) {
+        return res.status(400).json({ error: "Password must be at least 8 characters long" })
+      }
+      updateData.kioskPassword = kioskPassword
+    }
+
+    if (promoVideoUrl !== undefined) {
+      const current = await prisma.outlet.findUnique({ where: { id: teleshopManager.branchId } })
+      const displaySettings = (current?.displaySettings as any) || {}
+      if (promoVideoUrl === null) {
+        delete displaySettings.promoVideoUrl;
+      } else {
+        displaySettings.promoVideoUrl = promoVideoUrl
+      }
+      updateData.displaySettings = displaySettings
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: "No fields to update" })
     }
 
     const outlet = await prisma.outlet.update({
       where: { id: teleshopManager.branchId },
-      data: { kioskPassword }
+      data: updateData
     })
 
-    auditLog(teleshopManager.id, "KIOSK_PASSWORD_UPDATED", "outlet", outlet.id, {
+    auditLog(teleshopManager.id, "KIOSK_SETTINGS_UPDATED", "outlet", outlet.id, {
       outletName: outlet.name,
+      updatedFields: Object.keys(updateData)
     })
 
     res.json({
       success: true,
-      message: "Kiosk password updated successfully",
+      message: "Kiosk settings updated successfully",
       outlet: {
         id: outlet.id,
         name: outlet.name,
-        kioskPassword: outlet.kioskPassword
+        kioskPassword: outlet.kioskPassword,
+        displaySettings: outlet.displaySettings
       }
     })
   } catch (error) {
@@ -4332,6 +4355,14 @@ router.post("/generate-qr", async (req: any, res) => {
         generatedAt: generatedAt.toISOString()
       }
     )
+
+    wsManager.broadcastToAll({
+      type: "QR_UPDATED",
+      data: {
+        outletId: teleshopManager.branchId,
+        token: token
+      }
+    })
 
     res.json({
       success: true,

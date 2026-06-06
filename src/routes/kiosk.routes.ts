@@ -106,6 +106,32 @@ router.post("/login", async (req, res) => {
 // Apply authentication middleware to protected routes
 router.use(authenticateKiosk)
 
+// Get outlet settings (including promo video)
+router.get("/outlet-settings", async (req: any, res: any) => {
+  try {
+    const { outletId } = req.kiosk
+    const outlet = await prisma.outlet.findUnique({
+      where: { id: outletId },
+      select: {
+        id: true,
+        name: true,
+        location: true,
+        displaySettings: true
+      }
+    })
+
+    const qrTokenRecord = await prisma.managerQRToken.findFirst({
+      where: { outletId: outletId },
+      orderBy: { createdAt: 'desc' }
+    })
+
+    res.json({ success: true, outlet, qrToken: qrTokenRecord?.token || null })
+  } catch (error) {
+    console.error("Outlet settings error:", error)
+    res.status(500).json({ error: "Failed to fetch outlet settings" })
+  }
+})
+
 // Get available services
 router.get("/services", async (req, res) => {
   try {
