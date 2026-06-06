@@ -317,9 +317,32 @@ router.patch('/settings/bill-enquiry-rate-limit', async (req, res) => {
 router.get('/services', async (req, res) => {
   try {
     const showAll = req.query.all === 'true'
-    const services = showAll
-      ? await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","requireOtp","createdAt" FROM "Service" ORDER BY "order" ASC, "createdAt" ASC`
-      : await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","requireOtp","createdAt" FROM "Service" WHERE "isActive" = true ORDER BY "order" ASC, "createdAt" ASC`
+    const outletId = req.query.outletId as string | undefined
+
+    let services = showAll
+      ? await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","requireOtp","createdAt" FROM "Service" ORDER BY "order" ASC, "createdAt" ASC` as any[]
+      : await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","requireOtp","createdAt" FROM "Service" WHERE "isActive" = true ORDER BY "order" ASC, "createdAt" ASC` as any[]
+
+    if (outletId) {
+      const overrides = await prisma.outletServiceSetting.findMany({
+        where: { outletId }
+      })
+      const overridesMap = new Map(overrides.map(o => [o.serviceId, o.requireOtp]))
+      services = services.map(service => {
+        const tmOtp = overridesMap.has(service.id) ? overridesMap.get(service.id) : false
+        return { 
+          ...service, 
+          requireOtp: service.requireOtp,
+          collectMobile: service.requireOtp || tmOtp 
+        }
+      })
+    } else {
+      services = services.map(service => ({
+        ...service,
+        collectMobile: service.requireOtp
+      }))
+    }
+
     res.set('Cache-Control', 'no-store')
     res.json(services)
   } catch (error) {

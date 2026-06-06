@@ -4573,6 +4573,87 @@ router.get("/officer-analytics", async (req: any, res) => {
   }
 })
 
+// --- SERVICES ROUTES ---
+router.get("/services", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+    if (!teleshopManager.branchId) {
+      return res.status(400).json({ error: "No branch assigned to this manager" })
+    }
 
+    const services = await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","requireOtp","createdAt" FROM "Service" WHERE "isActive" = true ORDER BY "order" ASC, "createdAt" ASC` as any[]
+    
+    const overrides = await prisma.outletServiceSetting.findMany({
+      where: { outletId: teleshopManager.branchId }
+    })
+    
+    const overridesMap = new Map(overrides.map(o => [o.serviceId, o.requireOtp]))
+    
+    const mappedServices = services.map(service => {
+      const isOverridden = overridesMap.has(service.id)
+      return {
+        ...service,
+        requireOtp: isOverridden ? overridesMap.get(service.id) : service.requireOtp,
+        isCustomized: isOverridden
+      }
+    })
+
+    res.json(mappedServices)
+  } catch (error) {
+    console.error("Fetch services error:", error)
+    res.status(500).json({ error: "Failed to fetch services" })
+  }
+})
+
+router.put("/services/:serviceId", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+    const { serviceId } = req.params
+    const { requireOtp } = req.body
+
+    if (!teleshopManager.branchId) {
+      return res.status(400).json({ error: "No branch assigned to this manager" })
+    }
+
+    const service = await prisma.service.findUnique({ where: { id: serviceId } })
+    if (!service) {
+      return res.status(404).json({ error: "Service not found" })
+    }
+
+    const setting = await prisma.outletServiceSetting.upsert({
+      where: {
+        outletId_serviceId: {
+          outletId: teleshopManager.branchId,
+          serviceId: serviceId
+        }
+      },
+      update: {
+        requireOtp: requireOtp
+      },
+      create: {
+        outletId: teleshopManager.branchId,
+        serviceId: serviceId,
+        requireOtp: requireOtp
+      }
+    })
+
+    auditLog(
+      teleshopManager.id,
+      "UPDATE_SERVICE_OTP_SETTING",
+      "service",
+      serviceId,
+      {
+        branchId: teleshopManager.branchId,
+        serviceCode: service.code,
+        requireOtp
+      }
+    )
+
+    res.json({ success: true, setting })
+  } catch (error) {
+    console.error("Update service setting error:", error)
+    res.status(500).json({ error: "Failed to update service setting" })
+  }
+})
 
 export default router
