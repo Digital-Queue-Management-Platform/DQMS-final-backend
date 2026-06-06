@@ -990,6 +990,7 @@ router.get("/officers", async (req: any, res) => {
         name: officer.name,
         mobileNumber: officer.mobileNumber,
         counterNumber: officer.counterNumber,
+        isActive: officer.isActive,
         status,
         outlet: officer.outlet,
         assignedServices: officer.assignedServices || [],
@@ -1257,6 +1258,69 @@ router.patch("/officers/:officerId/assign-counter", async (req: any, res) => {
   } catch (error: any) {
     console.error("Assign counter error:", error)
     res.status(500).json({ error: "Failed to assign counter" })
+  }
+})
+
+// Suspend or activate officer
+router.patch("/officers/:officerId/active", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+    const { officerId } = req.params
+    const { isActive } = req.body
+
+    // Verify officer belongs to this teleshop manager's outlet
+    if (!teleshopManager.branchId) {
+      return res.status(403).json({ error: "Manager is not assigned to a branch" })
+    }
+
+    const existingOfficer = await prisma.officer.findFirst({
+      where: {
+        id: officerId,
+        outletId: teleshopManager.branchId,
+      },
+    })
+
+    if (!existingOfficer) {
+      return res.status(404).json({ error: "Officer not found or unauthorized" })
+    }
+
+    // If suspending, we should mark as offline and remove from counter
+    const dataToUpdate: any = { isActive }
+    if (!isActive) {
+      dataToUpdate.status = "offline"
+      dataToUpdate.counterNumber = null
+    }
+
+    const updatedOfficer = await prisma.officer.update({
+      where: { id: officerId },
+      data: dataToUpdate,
+    })
+
+    // broadcast update
+    broadcast({
+      type: "OFFICER_UPDATED",
+      data: updatedOfficer
+    })
+
+    if (!isActive) {
+      broadcast({
+        type: "OFFICER_STATUS_CHANGE",
+        data: {
+          officerId: updatedOfficer.id,
+          status: "offline",
+          timestamp: new Date().toISOString()
+        }
+      })
+    }
+
+    auditLog(teleshopManager.id, isActive ? "ACTIVATE_OFFICER" : "SUSPEND_OFFICER", "officer", officerId, {
+      officerName: updatedOfficer.name,
+    })
+
+    res.json({ success: true, officer: updatedOfficer })
+  } catch (error: any) {
+    console.error("Toggle officer active error:", error)
+    res.status(500).json({ error: "Failed to update officer status" })
   }
 })
 

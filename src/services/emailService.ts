@@ -169,7 +169,34 @@ class EmailService {
     }
   }
 
+  // Generic raw email sender — used by the daily summary service
+  async sendRawEmail(options: {
+    to: string
+    subject: string
+    html: string
+    text: string
+  }): Promise<boolean> {
+    try {
+      const result = await this.transporter.sendMail({
+        from: {
+          name: 'SLT-MOBITEL DQMS',
+          address: process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@dqms.com'
+        },
+        to: options.to,
+        subject: options.subject,
+        text: options.text,
+        html: options.html
+      })
+      console.log('[EmailService] Raw email sent:', result.messageId)
+      return true
+    } catch (error) {
+      console.error('[EmailService] Failed to send raw email:', error)
+      return false
+    }
+  }
+
   private createManagerWelcomeTemplate(credentials: ManagerCredentials): string {
+
     return `
     <!DOCTYPE html>
     <html>

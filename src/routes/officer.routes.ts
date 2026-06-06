@@ -59,11 +59,15 @@ router.post("/request-otp", async (req, res) => {
     // Check if officer exists
     const officer = await prisma.officer.findUnique({
       where: { mobileNumber },
-      select: { id: true, name: true }
+      select: { id: true, name: true, isActive: true }
     })
 
     if (!officer) {
       return res.status(404).json({ error: "Officer not found with this mobile number" })
+    }
+
+    if (!officer.isActive) {
+      return res.status(403).json({ error: "Your account has been suspended. Please contact your manager." })
     }
 
     // Generate and send OTP
@@ -108,6 +112,10 @@ router.post("/login", async (req, res) => {
 
     if (!officer) {
       return res.status(404).json({ error: "Officer not found" })
+    }
+
+    if (!officer.isActive) {
+      return res.status(403).json({ error: "Your account has been suspended. Please contact your manager." })
     }
 
     // Update last login
