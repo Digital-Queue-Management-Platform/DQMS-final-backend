@@ -394,12 +394,19 @@ router.get("/analytics", async (req, res) => {
     // If not GM authenticated, assume admin access (original behavior)
     // TODO: Add proper admin authentication in the future
 
-    const { startDate, endDate, outletId } = req.query
+    const { startDate, endDate, outletId, outletIds } = req.query
     const sDate = startDate ? new Date(startDate as string) : new Date()
     const eDate = endDate ? new Date(endDate as string) : new Date()
 
     if (isNaN(sDate.getTime()) || isNaN(eDate.getTime())) {
       return res.status(400).json({ error: "Invalid date format provided" })
+    }
+
+    let requestedOutletIds: string[] | null = null
+    if (outletIds) {
+      requestedOutletIds = (outletIds as string).split(',').filter(Boolean)
+    } else if (outletId) {
+      requestedOutletIds = [outletId as string]
     }
 
     // Base query for all tokens in the date range (issued)
@@ -412,10 +419,11 @@ router.get("/analytics", async (req, res) => {
     
     // Apply regional filtering for GMs
     if (allowedOutletIds) {
-      if (outletId) {
-        // If specific outlet requested, check if it's in GM's region
-        if (allowedOutletIds.includes(outletId as string)) {
-          baseWhere.outletId = outletId as string
+      if (requestedOutletIds && requestedOutletIds.length > 0) {
+        // Check if ALL requested outlets are in GM's region
+        const allValid = requestedOutletIds.every(id => allowedOutletIds!.includes(id))
+        if (allValid) {
+          baseWhere.outletId = { in: requestedOutletIds }
         } else {
           return res.status(403).json({ error: "Access denied to outlet outside your region" })
         }
@@ -424,8 +432,10 @@ router.get("/analytics", async (req, res) => {
         baseWhere.outletId = { in: allowedOutletIds }
       }
     } else {
-      // Admin access - original behavior
-      if (outletId) baseWhere.outletId = outletId as string
+      // Admin access
+      if (requestedOutletIds && requestedOutletIds.length > 0) {
+        baseWhere.outletId = { in: requestedOutletIds }
+      }
     }
 
     // Fetch all tokens for the range once
@@ -471,9 +481,9 @@ router.get("/analytics", async (req, res) => {
 
     let officerQuery: any
     if (allowedOutletIds) {
-      if (outletId) {
+      if (requestedOutletIds && requestedOutletIds.length > 0) {
         officerQuery = { 
-          where: { outletId: outletId as string }, 
+          where: { outletId: { in: requestedOutletIds } }, 
           include: { outlet: true } 
         }
       } else {
@@ -483,9 +493,9 @@ router.get("/analytics", async (req, res) => {
         }
       }
     } else {
-      if (outletId) {
+      if (requestedOutletIds && requestedOutletIds.length > 0) {
         officerQuery = { 
-          where: { outletId: outletId as string }, 
+          where: { outletId: { in: requestedOutletIds } }, 
           include: { outlet: true } 
         }
       } else {
@@ -720,7 +730,7 @@ router.get("/analytics", async (req, res) => {
       feedbackStats: ratingDistribution,
       serviceTypes: serviceTypesFormatted,
       officerPerformance,
-      branchPerformance: !outletId ? branchPerformance : undefined,
+      branchPerformance: (!requestedOutletIds || requestedOutletIds.length !== 1) ? branchPerformance : undefined,
       hourlyWaitingTimes: hourlyStats.map(h => ({ hour: h.hour, value: h.waitTime })),
       staffUtilizationTrend: hourlyStats.map(h => ({ 
         time: h.hour, 
