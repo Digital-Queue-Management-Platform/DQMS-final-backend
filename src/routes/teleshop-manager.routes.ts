@@ -2186,8 +2186,15 @@ router.get('/service-case/*', async (req: any, res) => {
     const tm = req.teleshopManager
     const refNumber = decodeURIComponent((req.params as any)[0])
 
-    const sc: any = await (prisma as any).serviceCase.findUnique({
-      where: { refNumber },
+    let scList: any[] = await (prisma as any).serviceCase.findMany({
+      where: {
+        OR: [
+          { refNumber },
+          { customer: { mobileNumber: refNumber } },
+          { customer: { email: refNumber } },
+          { customer: { name: { contains: refNumber, mode: 'insensitive' } } },
+        ]
+      },
       include: {
         customer: true,
         officer: true,
@@ -2207,111 +2214,123 @@ router.get('/service-case/*', async (req: any, res) => {
       }
     })
 
-    if (!sc) return res.status(404).json({ error: 'Reference not found' })
+    if (!scList || scList.length === 0) return res.status(404).json({ error: 'No matching service record found for the provided details' })
 
     // Authorization: case must belong to teleshop manager's outlet
-    if (tm.branchId && sc.outletId !== tm.branchId) {
+    if (tm.branchId) {
+      scList = scList.filter(sc => sc.outletId === tm.branchId)
+    }
+
+    if (scList.length === 0) {
       return res.status(403).json({ error: 'Access denied: case not from your assigned outlet' })
     }
 
     // Resolve service titles from codes
-    const serviceCodes: string[] = sc.serviceTypes || []
-    const serviceRecords = serviceCodes.length > 0
+    const allServiceCodes = new Set<string>()
+    scList.forEach(sc => {
+      (sc.serviceTypes || []).forEach((c: string) => allServiceCodes.add(c))
+    })
+
+    const serviceRecords = allServiceCodes.size > 0
       ? await prisma.service.findMany({
-        where: { code: { in: serviceCodes } },
+        where: { code: { in: Array.from(allServiceCodes) } },
         select: { code: true, title: true }
       })
       : []
     const serviceTitleMap: Record<string, string> = {}
     for (const s of serviceRecords) serviceTitleMap[s.code] = s.title
 
-    const token = sc.token
-    const feedback = token?.feedback || null
+    const responseData = scList.map(sc => {
+      const token = sc.token
+      const feedback = token?.feedback || null
 
-    // Compute time spans
-    const waitDurationMs = token?.calledAt && token?.createdAt
-      ? new Date(token.calledAt).getTime() - new Date(token.createdAt).getTime()
-      : null
-    const serviceDurationMs = token?.completedAt && token?.startedAt
-      ? new Date(token.completedAt).getTime() - new Date(token.startedAt).getTime()
-      : null
-    const totalDurationMs = token?.completedAt && token?.createdAt
-      ? new Date(token.completedAt).getTime() - new Date(token.createdAt).getTime()
-      : null
+      // Compute time spans
+      const waitDurationMs = token?.calledAt && token?.createdAt
+        ? new Date(token.calledAt).getTime() - new Date(token.createdAt).getTime()
+        : null
+      const serviceDurationMs = token?.completedAt && token?.startedAt
+        ? new Date(token.completedAt).getTime() - new Date(token.startedAt).getTime()
+        : null
+      const totalDurationMs = token?.completedAt && token?.createdAt
+        ? new Date(token.completedAt).getTime() - new Date(token.createdAt).getTime()
+        : null
 
-    res.json({
-      refNumber: sc.refNumber,
-      status: sc.status,
-      serviceTypes: sc.serviceTypes,
-      services: (sc.serviceTypes || []).map((code: string) => ({
-        code,
-        title: serviceTitleMap[code] || code
-      })),
-      createdAt: sc.createdAt,
-      completedAt: sc.completedAt,
-      lastUpdatedAt: sc.lastUpdatedAt,
-      outlet: { id: sc.outlet.id, name: sc.outlet.name, location: sc.outlet.location },
-      customer: {
-        id: sc.customer.id,
-        name: sc.customer.name,
-        mobileNumber: sc.customer.mobileNumber,
-        nicNumber: sc.customer.nicNumber || null,
-        email: sc.customer.email || null,
-        sltMobileNumber: sc.customer.sltMobileNumber || null,
-      },
-      officer: {
-        id: sc.officer.id,
-        name: sc.officer.name,
-        mobileNumber: sc.officer.mobileNumber,
-        counterNumber: sc.officer.counterNumber || null,
-      },
-      token: token ? {
-        id: token.id,
-        tokenNumber: token.tokenNumber,
-        isPriority: token.isPriority,
-        isTransferred: token.isTransferred,
-        preferredLanguages: token.preferredLanguages,
-        accountRef: token.accountRef || null,
-        sltTelephoneNumber: token.sltTelephoneNumber || null,
-        billPaymentIntent: token.billPaymentIntent || null,
-        billPaymentAmount: token.billPaymentAmount ?? null,
-        billPaymentMethod: token.billPaymentMethod || null,
-        createdAt: token.createdAt,
-        calledAt: token.calledAt || null,
-        startedAt: token.startedAt || null,
-        completedAt: token.completedAt || null,
-      } : null,
-      timeSpans: {
-        waitDurationMs,
-        serviceDurationMs,
-        totalDurationMs,
-      },
-      transferLogs: (token?.transferLogs || []).map((tl: any) => ({
-        id: tl.id,
-        fromOfficer: tl.fromOfficer,
-        fromCounterNumber: tl.fromCounterNumber,
-        toCounterNumber: tl.toCounterNumber,
-        previousServiceTypes: tl.previousServiceTypes,
-        newServiceTypes: tl.newServiceTypes,
-        notes: tl.notes,
-        createdAt: tl.createdAt,
-      })),
-      feedback: feedback ? {
-        rating: feedback.rating,
-        comment: feedback.comment || null,
-        createdAt: feedback.createdAt,
-        isResolved: (feedback as any).isResolved || false,
-        resolutionComment: (feedback as any).resolutionComment || null,
-      } : null,
-      updates: (sc.updates || []).map((u: any) => ({
-        id: u.id,
-        actorRole: u.actorRole,
-        actorId: u.actorId,
-        status: u.status,
-        note: u.note,
-        createdAt: u.createdAt,
-      }))
+      return {
+        refNumber: sc.refNumber,
+        status: sc.status,
+        serviceTypes: sc.serviceTypes,
+        services: (sc.serviceTypes || []).map((code: string) => ({
+          code,
+          title: serviceTitleMap[code] || code
+        })),
+        createdAt: sc.createdAt,
+        completedAt: sc.completedAt,
+        lastUpdatedAt: sc.lastUpdatedAt,
+        outlet: { id: sc.outlet.id, name: sc.outlet.name, location: sc.outlet.location },
+        customer: {
+          id: sc.customer.id,
+          name: sc.customer.name,
+          mobileNumber: sc.customer.mobileNumber,
+          nicNumber: sc.customer.nicNumber || null,
+          email: sc.customer.email || null,
+          sltMobileNumber: sc.customer.sltMobileNumber || null,
+        },
+        officer: {
+          id: sc.officer.id,
+          name: sc.officer.name,
+          mobileNumber: sc.officer.mobileNumber,
+          counterNumber: sc.officer.counterNumber || null,
+        },
+        token: token ? {
+          id: token.id,
+          tokenNumber: token.tokenNumber,
+          isPriority: token.isPriority,
+          isTransferred: token.isTransferred,
+          preferredLanguages: token.preferredLanguages,
+          accountRef: token.accountRef || null,
+          sltTelephoneNumber: token.sltTelephoneNumber || null,
+          billPaymentIntent: token.billPaymentIntent || null,
+          billPaymentAmount: token.billPaymentAmount ?? null,
+          billPaymentMethod: token.billPaymentMethod || null,
+          createdAt: token.createdAt,
+          calledAt: token.calledAt || null,
+          startedAt: token.startedAt || null,
+          completedAt: token.completedAt || null,
+        } : null,
+        timeSpans: {
+          waitDurationMs,
+          serviceDurationMs,
+          totalDurationMs,
+        },
+        transferLogs: (token?.transferLogs || []).map((tl: any) => ({
+          id: tl.id,
+          fromOfficer: tl.fromOfficer,
+          fromCounterNumber: tl.fromCounterNumber,
+          toCounterNumber: tl.toCounterNumber,
+          previousServiceTypes: tl.previousServiceTypes,
+          newServiceTypes: tl.newServiceTypes,
+          notes: tl.notes,
+          createdAt: tl.createdAt,
+        })),
+        feedback: feedback ? {
+          rating: feedback.rating,
+          comment: feedback.comment || null,
+          createdAt: feedback.createdAt,
+          isResolved: (feedback as any).isResolved || false,
+          resolutionComment: (feedback as any).resolutionComment || null,
+        } : null,
+        updates: (sc.updates || []).map((u: any) => ({
+          id: u.id,
+          actorRole: u.actorRole,
+          actorId: u.actorId,
+          status: u.status,
+          note: u.note,
+          createdAt: u.createdAt,
+        }))
+      }
     })
+
+    res.json(responseData)
   } catch (e) {
     console.error('Teleshop manager service-case get error:', e)
     res.status(500).json({ error: 'Failed to fetch service case' })

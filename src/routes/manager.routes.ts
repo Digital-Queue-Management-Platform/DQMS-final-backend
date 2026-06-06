@@ -534,8 +534,15 @@ router.get("/service-case/*", async (req, res) => {
     try { payload = (jwt as any).verify(token, JWT_SECRET) } catch { return res.status(401).json({ error: "Invalid token" }) }
 
     const refNumber = decodeURIComponent((req.params as any)[0])
-    const sc: any = await (prisma as any).serviceCase.findUnique({
-      where: { refNumber },
+    const scList: any[] = await (prisma as any).serviceCase.findMany({
+      where: {
+        OR: [
+          { refNumber },
+          { customer: { mobileNumber: refNumber } },
+          { customer: { email: refNumber } },
+          { customer: { name: { contains: refNumber, mode: 'insensitive' } } },
+        ]
+      },
       include: {
         customer: true,
         officer: true,
@@ -555,101 +562,109 @@ router.get("/service-case/*", async (req, res) => {
       }
     })
 
-    if (!sc) return res.status(404).json({ error: 'Reference not found' })
+    if (!scList || scList.length === 0) return res.status(404).json({ error: 'No matching service record found for the provided details' })
 
     // Resolve service titles from codes
-    const serviceCodes: string[] = sc.serviceTypes || []
-    const serviceRecords = serviceCodes.length > 0
+    const allServiceCodes = new Set<string>()
+    scList.forEach(sc => {
+      (sc.serviceTypes || []).forEach((c: string) => allServiceCodes.add(c))
+    })
+
+    const serviceRecords = allServiceCodes.size > 0
       ? await prisma.service.findMany({
-          where: { code: { in: serviceCodes } },
+          where: { code: { in: Array.from(allServiceCodes) } },
           select: { code: true, title: true }
         })
       : []
     const serviceTitleMap: Record<string, string> = {}
     for (const s of serviceRecords) serviceTitleMap[s.code] = s.title
 
-    const tok = sc.token
-    const feedback = tok?.feedback || null
+    const responseData = scList.map(sc => {
+      const tok = sc.token
+      const feedback = tok?.feedback || null
 
-    const waitDurationMs = tok?.calledAt && tok?.createdAt
-      ? new Date(tok.calledAt).getTime() - new Date(tok.createdAt).getTime()
-      : null
-    const serviceDurationMs = tok?.completedAt && tok?.startedAt
-      ? new Date(tok.completedAt).getTime() - new Date(tok.startedAt).getTime()
-      : null
-    const totalDurationMs = tok?.completedAt && tok?.createdAt
-      ? new Date(tok.completedAt).getTime() - new Date(tok.createdAt).getTime()
-      : null
+      const waitDurationMs = tok?.calledAt && tok?.createdAt
+        ? new Date(tok.calledAt).getTime() - new Date(tok.createdAt).getTime()
+        : null
+      const serviceDurationMs = tok?.completedAt && tok?.startedAt
+        ? new Date(tok.completedAt).getTime() - new Date(tok.startedAt).getTime()
+        : null
+      const totalDurationMs = tok?.completedAt && tok?.createdAt
+        ? new Date(tok.completedAt).getTime() - new Date(tok.createdAt).getTime()
+        : null
 
-    res.json({
-      refNumber: sc.refNumber,
-      status: sc.status,
-      serviceTypes: sc.serviceTypes,
-      services: (sc.serviceTypes || []).map((code: string) => ({
-        code,
-        title: serviceTitleMap[code] || code
-      })),
-      createdAt: sc.createdAt,
-      completedAt: sc.completedAt,
-      lastUpdatedAt: sc.lastUpdatedAt,
-      outlet: { id: sc.outlet.id, name: sc.outlet.name, location: sc.outlet.location },
-      customer: {
-        id: sc.customer.id,
-        name: sc.customer.name,
-        mobileNumber: sc.customer.mobileNumber,
-        nicNumber: sc.customer.nicNumber || null,
-        email: sc.customer.email || null,
-        sltMobileNumber: sc.customer.sltMobileNumber || null,
-      },
-      officer: {
-        id: sc.officer.id,
-        name: sc.officer.name,
-        mobileNumber: sc.officer.mobileNumber,
-        counterNumber: sc.officer.counterNumber || null,
-      },
-      token: tok ? {
-        id: tok.id,
-        tokenNumber: tok.tokenNumber,
-        isPriority: tok.isPriority,
-        isTransferred: tok.isTransferred,
-        preferredLanguages: tok.preferredLanguages,
-        accountRef: tok.accountRef || null,
-        sltTelephoneNumber: tok.sltTelephoneNumber || null,
-        billPaymentIntent: tok.billPaymentIntent || null,
-        billPaymentAmount: tok.billPaymentAmount ?? null,
-        billPaymentMethod: tok.billPaymentMethod || null,
-        createdAt: tok.createdAt,
-        calledAt: tok.calledAt || null,
-        startedAt: tok.startedAt || null,
-        completedAt: tok.completedAt || null,
-      } : null,
-      timeSpans: { waitDurationMs, serviceDurationMs, totalDurationMs },
-      transferLogs: (tok?.transferLogs || []).map((tl: any) => ({
-        id: tl.id,
-        fromOfficer: tl.fromOfficer,
-        fromCounterNumber: tl.fromCounterNumber,
-        toCounterNumber: tl.toCounterNumber,
-        previousServiceTypes: tl.previousServiceTypes,
-        newServiceTypes: tl.newServiceTypes,
-        notes: tl.notes,
-        createdAt: tl.createdAt,
-      })),
-      feedback: feedback ? {
-        rating: feedback.rating,
-        comment: feedback.comment || null,
-        createdAt: feedback.createdAt,
-        isResolved: (feedback as any).isResolved || false,
-        resolutionComment: (feedback as any).resolutionComment || null,
-      } : null,
-      updates: (sc.updates || []).map((u: any) => ({
-        id: u.id,
-        actorRole: u.actorRole,
-        actorId: u.actorId,
-        status: u.status,
-        note: u.note,
-        createdAt: u.createdAt,
-      }))
+      return {
+        refNumber: sc.refNumber,
+        status: sc.status,
+        serviceTypes: sc.serviceTypes,
+        services: (sc.serviceTypes || []).map((code: string) => ({
+          code,
+          title: serviceTitleMap[code] || code
+        })),
+        createdAt: sc.createdAt,
+        completedAt: sc.completedAt,
+        lastUpdatedAt: sc.lastUpdatedAt,
+        outlet: { id: sc.outlet.id, name: sc.outlet.name, location: sc.outlet.location },
+        customer: {
+          id: sc.customer.id,
+          name: sc.customer.name,
+          mobileNumber: sc.customer.mobileNumber,
+          nicNumber: sc.customer.nicNumber || null,
+          email: sc.customer.email || null,
+          sltMobileNumber: sc.customer.sltMobileNumber || null,
+        },
+        officer: {
+          id: sc.officer.id,
+          name: sc.officer.name,
+          mobileNumber: sc.officer.mobileNumber,
+          counterNumber: sc.officer.counterNumber || null,
+        },
+        token: tok ? {
+          id: tok.id,
+          tokenNumber: tok.tokenNumber,
+          isPriority: tok.isPriority,
+          isTransferred: tok.isTransferred,
+          preferredLanguages: tok.preferredLanguages,
+          accountRef: tok.accountRef || null,
+          sltTelephoneNumber: tok.sltTelephoneNumber || null,
+          billPaymentIntent: tok.billPaymentIntent || null,
+          billPaymentAmount: tok.billPaymentAmount ?? null,
+          billPaymentMethod: tok.billPaymentMethod || null,
+          createdAt: tok.createdAt,
+          calledAt: tok.calledAt || null,
+          startedAt: tok.startedAt || null,
+          completedAt: tok.completedAt || null,
+        } : null,
+        timeSpans: { waitDurationMs, serviceDurationMs, totalDurationMs },
+        transferLogs: (tok?.transferLogs || []).map((tl: any) => ({
+          id: tl.id,
+          fromOfficer: tl.fromOfficer,
+          fromCounterNumber: tl.fromCounterNumber,
+          toCounterNumber: tl.toCounterNumber,
+          previousServiceTypes: tl.previousServiceTypes,
+          newServiceTypes: tl.newServiceTypes,
+          notes: tl.notes,
+          createdAt: tl.createdAt,
+        })),
+        feedback: feedback ? {
+          rating: feedback.rating,
+          comment: feedback.comment || null,
+          createdAt: feedback.createdAt,
+          isResolved: (feedback as any).isResolved || false,
+          resolutionComment: (feedback as any).resolutionComment || null,
+        } : null,
+        updates: (sc.updates || []).map((u: any) => ({
+          id: u.id,
+          actorRole: u.actorRole,
+          actorId: u.actorId,
+          status: u.status,
+          note: u.note,
+          createdAt: u.createdAt,
+        }))
+      }
     })
+
+    res.json(responseData)
   } catch (e) {
     console.error('Manager service-case get error:', e)
     res.status(500).json({ error: 'Failed to fetch service case' })
