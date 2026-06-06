@@ -1165,7 +1165,11 @@ if (process.env.DISABLE_DAILY_SUMMARY_JOB !== 'true') {
       const slNow = new Date(now.getTime() + 5.5 * 60 * 60 * 1000)
       const slHour = slNow.getUTCHours()
       const slMinute = slNow.getUTCMinutes()
+      const slDay = slNow.getUTCDay() // 0 = Sunday
       const slDateStr = slNow.toISOString().split('T')[0]
+
+      // Skip sending daily summary on Sundays
+      if (slDay === 0) return
 
       if (slHour === configHour && slMinute === configMinute && dailySummaryLastSentDate !== slDateStr) {
         dailySummaryLastSentDate = slDateStr
