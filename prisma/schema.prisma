@@ -136,6 +136,7 @@ model Outlet {
   systemLogs        SystemLog[]
   teleshopManagers  TeleshopManager[]
   tokens            Token[]
+  serviceSettings   OutletServiceSetting[]
 
   @@index([rtomId])
 }
@@ -246,8 +247,22 @@ model Service {
   isPriorityService Boolean            @default(false)
   requireOtp        Boolean            @default(false)
   completedServices CompletedService[]
+  outletSettings    OutletServiceSetting[]
 
   @@index([order])
+}
+
+model OutletServiceSetting {
+  id         String   @id @default(uuid())
+  outletId   String
+  serviceId  String
+  requireOtp Boolean  @default(false)
+  updatedAt  DateTime @updatedAt
+
+  outlet     Outlet   @relation(fields: [outletId], references: [id], onDelete: Cascade)
+  service    Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([outletId, serviceId])
 }
 
 model AppSetting {

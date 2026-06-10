@@ -884,7 +884,8 @@ router.get("/kiosk-settings", async (req: any, res) => {
         id: true,
         name: true,
         location: true,
-        kioskPassword: true
+        kioskPassword: true,
+        displaySettings: true
       }
     })
 
@@ -899,36 +900,58 @@ router.get("/kiosk-settings", async (req: any, res) => {
   }
 })
 
-// Set/Update kiosk password for teleshop manager's outlet
+// Set/Update kiosk settings for teleshop manager's outlet
 router.post("/kiosk-settings", async (req: any, res) => {
   try {
     const teleshopManager = req.teleshopManager
-    const { kioskPassword } = req.body
+    const { kioskPassword, promoVideoUrl } = req.body
 
     if (!teleshopManager.branchId) {
       return res.status(400).json({ error: "You are not assigned to any outlet" })
     }
 
-    if (!kioskPassword || kioskPassword.length < 8) {
-      return res.status(400).json({ error: "Password must be at least 8 characters long" })
+    const updateData: any = {}
+
+    if (kioskPassword !== undefined) {
+      if (kioskPassword.length < 8) {
+        return res.status(400).json({ error: "Password must be at least 8 characters long" })
+      }
+      updateData.kioskPassword = kioskPassword
+    }
+
+    if (promoVideoUrl !== undefined) {
+      const current = await prisma.outlet.findUnique({ where: { id: teleshopManager.branchId } })
+      const displaySettings = (current?.displaySettings as any) || {}
+      if (promoVideoUrl === null) {
+        delete displaySettings.promoVideoUrl;
+      } else {
+        displaySettings.promoVideoUrl = promoVideoUrl
+      }
+      updateData.displaySettings = displaySettings
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: "No fields to update" })
     }
 
     const outlet = await prisma.outlet.update({
       where: { id: teleshopManager.branchId },
-      data: { kioskPassword }
+      data: updateData
     })
 
-    auditLog(teleshopManager.id, "KIOSK_PASSWORD_UPDATED", "outlet", outlet.id, {
+    auditLog(teleshopManager.id, "KIOSK_SETTINGS_UPDATED", "outlet", outlet.id, {
       outletName: outlet.name,
+      updatedFields: Object.keys(updateData)
     })
 
     res.json({
       success: true,
-      message: "Kiosk password updated successfully",
+      message: "Kiosk settings updated successfully",
       outlet: {
         id: outlet.id,
         name: outlet.name,
-        kioskPassword: outlet.kioskPassword
+        kioskPassword: outlet.kioskPassword,
+        displaySettings: outlet.displaySettings
       }
     })
   } catch (error) {
@@ -2186,8 +2209,15 @@ router.get('/service-case/*', async (req: any, res) => {
     const tm = req.teleshopManager
     const refNumber = decodeURIComponent((req.params as any)[0])
 
-    const sc: any = await (prisma as any).serviceCase.findUnique({
-      where: { refNumber },
+    let scList: any[] = await (prisma as any).serviceCase.findMany({
+      where: {
+        OR: [
+          { refNumber },
+          { customer: { mobileNumber: refNumber } },
+          { customer: { email: refNumber } },
+          { customer: { name: { contains: refNumber, mode: 'insensitive' } } },
+        ]
+      },
       include: {
         customer: true,
         officer: true,
@@ -2207,111 +2237,123 @@ router.get('/service-case/*', async (req: any, res) => {
       }
     })
 
-    if (!sc) return res.status(404).json({ error: 'Reference not found' })
+    if (!scList || scList.length === 0) return res.status(404).json({ error: 'No matching service record found for the provided details' })
 
     // Authorization: case must belong to teleshop manager's outlet
-    if (tm.branchId && sc.outletId !== tm.branchId) {
+    if (tm.branchId) {
+      scList = scList.filter(sc => sc.outletId === tm.branchId)
+    }
+
+    if (scList.length === 0) {
       return res.status(403).json({ error: 'Access denied: case not from your assigned outlet' })
     }
 
     // Resolve service titles from codes
-    const serviceCodes: string[] = sc.serviceTypes || []
-    const serviceRecords = serviceCodes.length > 0
+    const allServiceCodes = new Set<string>()
+    scList.forEach(sc => {
+      (sc.serviceTypes || []).forEach((c: string) => allServiceCodes.add(c))
+    })
+
+    const serviceRecords = allServiceCodes.size > 0
       ? await prisma.service.findMany({
-        where: { code: { in: serviceCodes } },
+        where: { code: { in: Array.from(allServiceCodes) } },
         select: { code: true, title: true }
       })
       : []
     const serviceTitleMap: Record<string, string> = {}
     for (const s of serviceRecords) serviceTitleMap[s.code] = s.title
 
-    const token = sc.token
-    const feedback = token?.feedback || null
+    const responseData = scList.map(sc => {
+      const token = sc.token
+      const feedback = token?.feedback || null
 
-    // Compute time spans
-    const waitDurationMs = token?.calledAt && token?.createdAt
-      ? new Date(token.calledAt).getTime() - new Date(token.createdAt).getTime()
-      : null
-    const serviceDurationMs = token?.completedAt && token?.startedAt
-      ? new Date(token.completedAt).getTime() - new Date(token.startedAt).getTime()
-      : null
-    const totalDurationMs = token?.completedAt && token?.createdAt
-      ? new Date(token.completedAt).getTime() - new Date(token.createdAt).getTime()
-      : null
+      // Compute time spans
+      const waitDurationMs = token?.calledAt && token?.createdAt
+        ? new Date(token.calledAt).getTime() - new Date(token.createdAt).getTime()
+        : null
+      const serviceDurationMs = token?.completedAt && token?.startedAt
+        ? new Date(token.completedAt).getTime() - new Date(token.startedAt).getTime()
+        : null
+      const totalDurationMs = token?.completedAt && token?.createdAt
+        ? new Date(token.completedAt).getTime() - new Date(token.createdAt).getTime()
+        : null
 
-    res.json({
-      refNumber: sc.refNumber,
-      status: sc.status,
-      serviceTypes: sc.serviceTypes,
-      services: (sc.serviceTypes || []).map((code: string) => ({
-        code,
-        title: serviceTitleMap[code] || code
-      })),
-      createdAt: sc.createdAt,
-      completedAt: sc.completedAt,
-      lastUpdatedAt: sc.lastUpdatedAt,
-      outlet: { id: sc.outlet.id, name: sc.outlet.name, location: sc.outlet.location },
-      customer: {
-        id: sc.customer.id,
-        name: sc.customer.name,
-        mobileNumber: sc.customer.mobileNumber,
-        nicNumber: sc.customer.nicNumber || null,
-        email: sc.customer.email || null,
-        sltMobileNumber: sc.customer.sltMobileNumber || null,
-      },
-      officer: {
-        id: sc.officer.id,
-        name: sc.officer.name,
-        mobileNumber: sc.officer.mobileNumber,
-        counterNumber: sc.officer.counterNumber || null,
-      },
-      token: token ? {
-        id: token.id,
-        tokenNumber: token.tokenNumber,
-        isPriority: token.isPriority,
-        isTransferred: token.isTransferred,
-        preferredLanguages: token.preferredLanguages,
-        accountRef: token.accountRef || null,
-        sltTelephoneNumber: token.sltTelephoneNumber || null,
-        billPaymentIntent: token.billPaymentIntent || null,
-        billPaymentAmount: token.billPaymentAmount ?? null,
-        billPaymentMethod: token.billPaymentMethod || null,
-        createdAt: token.createdAt,
-        calledAt: token.calledAt || null,
-        startedAt: token.startedAt || null,
-        completedAt: token.completedAt || null,
-      } : null,
-      timeSpans: {
-        waitDurationMs,
-        serviceDurationMs,
-        totalDurationMs,
-      },
-      transferLogs: (token?.transferLogs || []).map((tl: any) => ({
-        id: tl.id,
-        fromOfficer: tl.fromOfficer,
-        fromCounterNumber: tl.fromCounterNumber,
-        toCounterNumber: tl.toCounterNumber,
-        previousServiceTypes: tl.previousServiceTypes,
-        newServiceTypes: tl.newServiceTypes,
-        notes: tl.notes,
-        createdAt: tl.createdAt,
-      })),
-      feedback: feedback ? {
-        rating: feedback.rating,
-        comment: feedback.comment || null,
-        createdAt: feedback.createdAt,
-        isResolved: (feedback as any).isResolved || false,
-        resolutionComment: (feedback as any).resolutionComment || null,
-      } : null,
-      updates: (sc.updates || []).map((u: any) => ({
-        id: u.id,
-        actorRole: u.actorRole,
-        actorId: u.actorId,
-        status: u.status,
-        note: u.note,
-        createdAt: u.createdAt,
-      }))
+      return {
+        refNumber: sc.refNumber,
+        status: sc.status,
+        serviceTypes: sc.serviceTypes,
+        services: (sc.serviceTypes || []).map((code: string) => ({
+          code,
+          title: serviceTitleMap[code] || code
+        })),
+        createdAt: sc.createdAt,
+        completedAt: sc.completedAt,
+        lastUpdatedAt: sc.lastUpdatedAt,
+        outlet: { id: sc.outlet.id, name: sc.outlet.name, location: sc.outlet.location },
+        customer: {
+          id: sc.customer.id,
+          name: sc.customer.name,
+          mobileNumber: sc.customer.mobileNumber,
+          nicNumber: sc.customer.nicNumber || null,
+          email: sc.customer.email || null,
+          sltMobileNumber: sc.customer.sltMobileNumber || null,
+        },
+        officer: {
+          id: sc.officer.id,
+          name: sc.officer.name,
+          mobileNumber: sc.officer.mobileNumber,
+          counterNumber: sc.officer.counterNumber || null,
+        },
+        token: token ? {
+          id: token.id,
+          tokenNumber: token.tokenNumber,
+          isPriority: token.isPriority,
+          isTransferred: token.isTransferred,
+          preferredLanguages: token.preferredLanguages,
+          accountRef: token.accountRef || null,
+          sltTelephoneNumber: token.sltTelephoneNumber || null,
+          billPaymentIntent: token.billPaymentIntent || null,
+          billPaymentAmount: token.billPaymentAmount ?? null,
+          billPaymentMethod: token.billPaymentMethod || null,
+          createdAt: token.createdAt,
+          calledAt: token.calledAt || null,
+          startedAt: token.startedAt || null,
+          completedAt: token.completedAt || null,
+        } : null,
+        timeSpans: {
+          waitDurationMs,
+          serviceDurationMs,
+          totalDurationMs,
+        },
+        transferLogs: (token?.transferLogs || []).map((tl: any) => ({
+          id: tl.id,
+          fromOfficer: tl.fromOfficer,
+          fromCounterNumber: tl.fromCounterNumber,
+          toCounterNumber: tl.toCounterNumber,
+          previousServiceTypes: tl.previousServiceTypes,
+          newServiceTypes: tl.newServiceTypes,
+          notes: tl.notes,
+          createdAt: tl.createdAt,
+        })),
+        feedback: feedback ? {
+          rating: feedback.rating,
+          comment: feedback.comment || null,
+          createdAt: feedback.createdAt,
+          isResolved: (feedback as any).isResolved || false,
+          resolutionComment: (feedback as any).resolutionComment || null,
+        } : null,
+        updates: (sc.updates || []).map((u: any) => ({
+          id: u.id,
+          actorRole: u.actorRole,
+          actorId: u.actorId,
+          status: u.status,
+          note: u.note,
+          createdAt: u.createdAt,
+        }))
+      }
     })
+
+    res.json(responseData)
   } catch (e) {
     console.error('Teleshop manager service-case get error:', e)
     res.status(500).json({ error: 'Failed to fetch service case' })
@@ -4314,6 +4356,14 @@ router.post("/generate-qr", async (req: any, res) => {
       }
     )
 
+    wsManager.broadcastToAll({
+      type: "QR_UPDATED",
+      data: {
+        outletId: teleshopManager.branchId,
+        token: token
+      }
+    })
+
     res.json({
       success: true,
       qrCode,
@@ -4523,6 +4573,87 @@ router.get("/officer-analytics", async (req: any, res) => {
   }
 })
 
+// --- SERVICES ROUTES ---
+router.get("/services", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+    if (!teleshopManager.branchId) {
+      return res.status(400).json({ error: "No branch assigned to this manager" })
+    }
 
+    const services = await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","requireOtp","createdAt" FROM "Service" WHERE "isActive" = true ORDER BY "order" ASC, "createdAt" ASC` as any[]
+    
+    const overrides = await prisma.outletServiceSetting.findMany({
+      where: { outletId: teleshopManager.branchId }
+    })
+    
+    const overridesMap = new Map(overrides.map(o => [o.serviceId, o.requireOtp]))
+    
+    const mappedServices = services.map(service => {
+      const isOverridden = overridesMap.has(service.id)
+      return {
+        ...service,
+        requireOtp: isOverridden ? overridesMap.get(service.id) : service.requireOtp,
+        isCustomized: isOverridden
+      }
+    })
+
+    res.json(mappedServices)
+  } catch (error) {
+    console.error("Fetch services error:", error)
+    res.status(500).json({ error: "Failed to fetch services" })
+  }
+})
+
+router.put("/services/:serviceId", async (req: any, res) => {
+  try {
+    const teleshopManager = req.teleshopManager
+    const { serviceId } = req.params
+    const { requireOtp } = req.body
+
+    if (!teleshopManager.branchId) {
+      return res.status(400).json({ error: "No branch assigned to this manager" })
+    }
+
+    const service = await prisma.service.findUnique({ where: { id: serviceId } })
+    if (!service) {
+      return res.status(404).json({ error: "Service not found" })
+    }
+
+    const setting = await prisma.outletServiceSetting.upsert({
+      where: {
+        outletId_serviceId: {
+          outletId: teleshopManager.branchId,
+          serviceId: serviceId
+        }
+      },
+      update: {
+        requireOtp: requireOtp
+      },
+      create: {
+        outletId: teleshopManager.branchId,
+        serviceId: serviceId,
+        requireOtp: requireOtp
+      }
+    })
+
+    auditLog(
+      teleshopManager.id,
+      "UPDATE_SERVICE_OTP_SETTING",
+      "service",
+      serviceId,
+      {
+        branchId: teleshopManager.branchId,
+        serviceCode: service.code,
+        requireOtp
+      }
+    )
+
+    res.json({ success: true, setting })
+  } catch (error) {
+    console.error("Update service setting error:", error)
+    res.status(500).json({ error: "Failed to update service setting" })
+  }
+})
 
 export default router
