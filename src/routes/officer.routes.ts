@@ -1732,7 +1732,19 @@ router.post("/break/start", async (req, res) => {
     })
 
     if (activeBreak) {
-      return res.status(400).json({ error: "Break already in progress" })
+      if (officer.status === 'on_break') {
+        // Genuinely on break — block the new request
+        return res.status(400).json({ error: "Break already in progress" })
+      } else {
+        // Orphaned break (officer status is not on_break but BreakLog was never closed).
+        // This can happen due to a previous stale-state bug. Auto-close it so the
+        // officer is not permanently blocked from taking breaks.
+        console.warn(`[break/start] Closing orphaned break ${activeBreak.id} for officer ${officerId} (status: ${officer.status})`)
+        await prisma.breakLog.update({
+          where: { id: activeBreak.id },
+          data: { endedAt: new Date() }
+        })
+      }
     }
 
     // Validate break limits (same as in status endpoint)

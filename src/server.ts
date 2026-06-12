@@ -1116,20 +1116,17 @@ function scheduleDailyResetTick() {
       const ts = new Date()
       logger.info(`Daily reset boundary reached: ${ts.toLocaleString()}`)
 
-      // Reset all officer counter assignments
+      // Reset officer statuses to offline for new day — counter assignments are PERMANENT
+      // (Managers assign officers to counters once; they do not need to re-assign every day)
       await prisma.officer.updateMany({
         where: {
-          OR: [
-            { counterNumber: { not: null } },
-            { status: { not: "offline" } }
-          ]
+          status: { not: "offline" }
         },
         data: {
-          counterNumber: null,
           status: "offline"
         }
       })
-      logger.info('All officer counter assignments reset')
+      logger.info('All officer statuses reset to offline (counter assignments preserved)')
 
       // Broadcast a lightweight signal; clients may optionally refresh views
       broadcast({ type: "DAILY_RESET", data: { timestamp: ts.toISOString() } })

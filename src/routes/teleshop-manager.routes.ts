@@ -1307,11 +1307,12 @@ router.patch("/officers/:officerId/active", async (req: any, res) => {
       return res.status(404).json({ error: "Officer not found or unauthorized" })
     }
 
-    // If suspending, we should mark as offline and remove from counter
+    // If suspending, mark as offline (counter assignment is preserved — permanent assignment)
     const dataToUpdate: any = { isActive }
     if (!isActive) {
       dataToUpdate.status = "offline"
-      dataToUpdate.counterNumber = null
+      // Note: counterNumber is intentionally NOT cleared on suspension.
+      // Counter assignments are permanent and can only be changed explicitly.
     }
 
     const updatedOfficer = await prisma.officer.update({
