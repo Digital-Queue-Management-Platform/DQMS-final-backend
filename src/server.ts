@@ -449,6 +449,20 @@ if (process.env.DISABLE_APPOINTMENT_JOB !== 'true') {
   setInterval(processAppointments, APPOINTMENT_POLL_MS)
 }
 
+// VM -> Neon Auto Backup Checker
+// Runs every 5 minutes, replacing the need for Windows Task Scheduler
+import { exec } from "child_process"
+
+setInterval(() => {
+  exec("npx tsx scripts/backup/sync_to_neon.ts", (error, stdout, stderr) => {
+    if (error) {
+      logger.error({ err: error, stderr }, "Auto backup check failed")
+    } else if (stdout && !stdout.includes("No sync needed right now")) {
+      logger.info({ stdout }, "Auto backup check executed successfully")
+    }
+  })
+}, 5 * 60 * 1000)
+
 function scheduleDailyResetTick() {
   const next = getNextDailyReset()
   const ms = Math.max(0, next.getTime() - Date.now())

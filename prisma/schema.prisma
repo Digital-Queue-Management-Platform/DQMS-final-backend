@@ -85,6 +85,7 @@ model Officer {
   name              String
   mobileNumber      String             @unique
   outletId          String
+  isActive          Boolean            @default(true)
   status            String             @default("offline")
   counterNumber     Int?
   isTraining        Boolean            @default(false)
