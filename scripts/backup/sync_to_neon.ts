@@ -237,24 +237,24 @@ async function runSync() {
     await neonPrisma.$executeRaw`
       INSERT INTO "BackupRestoreHistory"
       ("id", "action", "status", "filename", "totalRecords", "tableCounts", "createdByRole", "createdAt")
-      VALUES (${backupHistoryId}, 'backup', 'success', ${filename}, ${totalRecords}, ${tableCountsJson}::jsonb, 'vm-script', ${nowTime})
+      VALUES (${backupHistoryId}, 'backup', 'success', ${filename}, ${totalRecords}, ${tableCountsJson}::jsonb, 'vm-script', (NOW() AT TIME ZONE 'UTC'))
     `
     await prisma.$executeRaw`
       INSERT INTO "BackupRestoreHistory"
       ("id", "action", "status", "filename", "totalRecords", "tableCounts", "createdByRole", "createdAt")
-      VALUES (${backupHistoryId}, 'backup', 'success', ${filename}, ${totalRecords}, ${tableCountsJson}::jsonb, 'vm-script', ${nowTime})
+      VALUES (${backupHistoryId}, 'backup', 'success', ${filename}, ${totalRecords}, ${tableCountsJson}::jsonb, 'vm-script', (NOW() AT TIME ZONE 'UTC'))
     `
 
     // Log the RESTORE action to BOTH databases
     await neonPrisma.$executeRaw`
       INSERT INTO "BackupRestoreHistory"
       ("id", "action", "status", "filename", "totalRecords", "tableCounts", "createdByRole", "createdAt")
-      VALUES (${historyId}, 'restore', 'success', ${filename}, ${totalRestored}, ${tableCountsJson}::jsonb, 'vm-script', ${nowTime})
+      VALUES (${historyId}, 'restore', 'success', ${filename}, ${totalRestored}, ${tableCountsJson}::jsonb, 'vm-script', (NOW() AT TIME ZONE 'UTC'))
     `
     await prisma.$executeRaw`
       INSERT INTO "BackupRestoreHistory"
       ("id", "action", "status", "filename", "totalRecords", "tableCounts", "createdByRole", "createdAt")
-      VALUES (${historyId}, 'restore', 'success', ${filename}, ${totalRestored}, ${tableCountsJson}::jsonb, 'vm-script', ${nowTime})
+      VALUES (${historyId}, 'restore', 'success', ${filename}, ${totalRestored}, ${tableCountsJson}::jsonb, 'vm-script', (NOW() AT TIME ZONE 'UTC'))
     `
     
     console.log("Successfully logged sync to BackupRestoreHistory.")
