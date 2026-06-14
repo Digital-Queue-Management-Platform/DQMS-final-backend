@@ -35,7 +35,7 @@ async function checkScheduleAndRun() {
 
   let scheduleTime = "00:00"
   try {
-    const res = await axios.get(`${NEON_BACKEND_URL}/admin/backup-schedule`)
+    const res = await axios.get(`${NEON_BACKEND_URL}/api/admin/backup-schedule`)
     if (res.data?.time) {
       scheduleTime = res.data.time
     }
@@ -151,7 +151,7 @@ async function runSync() {
     }
 
     // Post to Neon Backend
-    const restoreEndpoint = `${NEON_BACKEND_URL}/admin/restore`
+    const restoreEndpoint = `${NEON_BACKEND_URL}/api/admin/restore`
     console.log(`Posting backup to Neon Backend at ${restoreEndpoint}`)
     
     const payload = { ...backup, _meta: { filename } }
