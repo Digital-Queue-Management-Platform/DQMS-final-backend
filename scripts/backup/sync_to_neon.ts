@@ -246,6 +246,24 @@ async function runSync() {
         NOW()
       )
     `
+    
+    // Also log it locally to the VM database so the VM dashboard updates!
+    await prisma.$executeRaw`
+      INSERT INTO "BackupRestoreHistory"
+      ("id", "action", "status", "filename", "totalRecords", "tableCounts", "createdByRole", "createdAt")
+      VALUES
+      (
+        ${historyId},
+        'restore',
+        'success',
+        ${filename},
+        ${totalRestored},
+        ${tableCountsJson}::jsonb,
+        'vm-script',
+        NOW()
+      )
+    `
+    
     console.log("Successfully logged sync to BackupRestoreHistory.")
 
     try {
