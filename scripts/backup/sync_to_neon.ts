@@ -3,7 +3,7 @@ import * as fs from "fs"
 import * as path from "path"
 import dotenv from "dotenv"
 import { randomUUID } from "crypto"
-
+import sltSmsService from "../../src/services/sltSmsService"
 // Load environment variables from .env
 dotenv.config()
 
@@ -246,6 +246,16 @@ async function runSync() {
       )
     `
     console.log("Successfully logged sync to BackupRestoreHistory.")
+
+    try {
+      await sltSmsService.sendSMS({
+        to: "0775878565",
+        message: `DQMP Auto-Sync: Successfully synced ${totalRestored} new records from VM to Neon Cloud at ${new Date().toLocaleTimeString()}.`
+      })
+      console.log("Confirmation SMS sent successfully.")
+    } catch (smsError) {
+      console.error("Failed to send confirmation SMS:", smsError)
+    }
 
   } catch (error: any) {
     console.error("Direct sync failed:")
