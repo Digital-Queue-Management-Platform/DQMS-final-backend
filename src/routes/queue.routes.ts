@@ -1,5 +1,5 @@
 import { Router } from "express"
-import { prisma } from "../server"
+import { prisma, broadcast } from "../server"
 import { getLastDailyReset } from "../utils/resetWindow"
 import * as jwt from "jsonwebtoken"
 
@@ -526,6 +526,10 @@ router.post('/services', async (req, res) => {
 
     // return created row
     const created = await prisma.$queryRaw`SELECT "id","code","title","description","isActive","order","isPriorityService","requireOtp","createdAt" FROM "Service" WHERE "code" = ${code} LIMIT 1` as any[]
+    
+    // Broadcast updates to clients
+    broadcast({ type: "SERVICES_UPDATED", data: created[0] })
+
     res.json({ success: true, service: created[0] })
   } catch (error) {
     console.error('Create service error:', error)
@@ -559,6 +563,10 @@ router.patch('/services/:id', async (req, res) => {
     // Build parameterized raw query
     const query = `UPDATE "Service" SET ${sets} WHERE "id" = $1 RETURNING *`
     const updated: any = await prisma.$queryRawUnsafe(query, ...params)
+    
+    // Broadcast updates to clients
+    broadcast({ type: "SERVICES_UPDATED", data: updated[0] })
+
     res.json({ success: true, service: updated[0] })
   } catch (error) {
     console.error('Update service error:', error)
@@ -572,6 +580,10 @@ router.delete('/services/:id', async (req, res) => {
     const { id } = req.params
     const deleted: any = await prisma.$queryRaw`
       DELETE FROM "Service" WHERE "id" = ${id} RETURNING *`
+      
+    // Broadcast updates to clients
+    broadcast({ type: "SERVICES_UPDATED", data: deleted[0] })
+
     res.json({ success: true, service: deleted[0] })
   } catch (error) {
     console.error('Delete service error:', error)

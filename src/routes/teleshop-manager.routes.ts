@@ -4650,6 +4650,9 @@ router.put("/services/:serviceId", async (req: any, res) => {
       }
     )
 
+    // Broadcast updates to clients
+    broadcast({ type: "SERVICES_UPDATED" })
+
     res.json({ success: true, setting })
   } catch (error) {
     console.error("Update service setting error:", error)
