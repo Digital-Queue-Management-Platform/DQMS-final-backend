@@ -124,6 +124,15 @@ const fetchRegionsForStaffStatus = async () => {
 
 // Admin authentication middleware
 const authenticateAdmin = (req: any, res: any, next: any) => {
+  // Allow internal restore/sync endpoint to bypass JWT if secret is valid
+  if (req.path === '/restore') {
+    const secret = req.headers['x-internal-backup-secret']
+    if (secret && secret === process.env.INTERNAL_BACKUP_SECRET) {
+      req.user = { role: 'vm-script', email: 'vm-auto-sync' }
+      return next()
+    }
+  }
+
   try {
     const authHeader = req.headers.authorization
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -2707,6 +2716,32 @@ router.get("/backup-history", async (req, res) => {
 
     console.error('Backup history fetch error:', error)
     res.status(500).json({ error: 'Failed to fetch backup history' })
+  }
+})
+
+// GET /admin/vm-sync-status — get persistent backup and restore history specifically for VM syncs
+router.get("/vm-sync-status", async (req, res) => {
+  try {
+    const historyDelegate = getBackupRestoreHistoryDelegate()
+    if (!historyDelegate) {
+      return res.json({ history: [], warning: 'History model is not available in the running backend yet.' })
+    }
+
+    const history = historyDelegate
+      ? await historyDelegate.findMany({
+        where: { createdByRole: 'vm-script' },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+      })
+      : []
+
+    res.json({ history })
+  } catch (error) {
+    if (isHistoryTableMissingError(error)) {
+      return res.json({ history: [], warning: 'History table is not available in this database yet.' })
+    }
+    console.error('VM sync history fetch error:', error)
+    res.status(500).json({ error: 'Failed to fetch VM sync history' })
   }
 })
 
