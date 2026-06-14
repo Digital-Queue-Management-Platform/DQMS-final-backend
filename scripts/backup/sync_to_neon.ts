@@ -227,41 +227,34 @@ async function runSync() {
     const totalRestored = Object.values(results).reduce((a, b) => a + b, 0)
     console.log(`Successfully synced ${totalRestored} new rows across all tables directly to Neon.`)
 
-    // Log the sync history to the Neon database so it appears on the dashboard
+    const nowTime = new Date()
+    const backupHistoryId = randomUUID()
     const historyId = randomUUID()
     const tableCountsJson = JSON.stringify(results)
-    
+    const totalRecords = Object.values(backupData).reduce((sum: number, records: any) => sum + (Array.isArray(records) ? records.length : 0), 0)
+
+    // Log the BACKUP action to BOTH databases
     await neonPrisma.$executeRaw`
       INSERT INTO "BackupRestoreHistory"
       ("id", "action", "status", "filename", "totalRecords", "tableCounts", "createdByRole", "createdAt")
-      VALUES
-      (
-        ${historyId},
-        'restore',
-        'success',
-        ${filename},
-        ${totalRestored},
-        ${tableCountsJson}::jsonb,
-        'vm-script',
-        NOW()
-      )
+      VALUES (${backupHistoryId}, 'backup', 'success', ${filename}, ${totalRecords}, ${tableCountsJson}::jsonb, 'vm-script', ${nowTime})
     `
-    
-    // Also log it locally to the VM database so the VM dashboard updates!
     await prisma.$executeRaw`
       INSERT INTO "BackupRestoreHistory"
       ("id", "action", "status", "filename", "totalRecords", "tableCounts", "createdByRole", "createdAt")
-      VALUES
-      (
-        ${historyId},
-        'restore',
-        'success',
-        ${filename},
-        ${totalRestored},
-        ${tableCountsJson}::jsonb,
-        'vm-script',
-        NOW()
-      )
+      VALUES (${backupHistoryId}, 'backup', 'success', ${filename}, ${totalRecords}, ${tableCountsJson}::jsonb, 'vm-script', ${nowTime})
+    `
+
+    // Log the RESTORE action to BOTH databases
+    await neonPrisma.$executeRaw`
+      INSERT INTO "BackupRestoreHistory"
+      ("id", "action", "status", "filename", "totalRecords", "tableCounts", "createdByRole", "createdAt")
+      VALUES (${historyId}, 'restore', 'success', ${filename}, ${totalRestored}, ${tableCountsJson}::jsonb, 'vm-script', ${nowTime})
+    `
+    await prisma.$executeRaw`
+      INSERT INTO "BackupRestoreHistory"
+      ("id", "action", "status", "filename", "totalRecords", "tableCounts", "createdByRole", "createdAt")
+      VALUES (${historyId}, 'restore', 'success', ${filename}, ${totalRestored}, ${tableCountsJson}::jsonb, 'vm-script', ${nowTime})
     `
     
     console.log("Successfully logged sync to BackupRestoreHistory.")
