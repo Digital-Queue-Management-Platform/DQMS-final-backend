@@ -46,12 +46,12 @@ async function checkScheduleAndRun() {
 
   let scheduleTime = "00:00"
   try {
-    const setting: any[] = await neonPrisma.$queryRaw`SELECT value FROM "SystemSetting" WHERE key = 'backup_time'`
+    const setting: any[] = await prisma.$queryRaw`SELECT value FROM "SystemSetting" WHERE key = 'backup_time'`
     if (setting && setting.length > 0) {
       scheduleTime = setting[0].value
     }
   } catch (error) {
-    console.error("Failed to fetch schedule from Neon DB. Defaulting to 00:00.", error)
+    console.error("Failed to read local schedule from VM DB. Defaulting to 00:00.", error)
   }
 
   const [schedHour, schedMin] = scheduleTime.split(":").map(Number)
