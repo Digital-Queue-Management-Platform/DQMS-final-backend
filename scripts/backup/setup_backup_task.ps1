@@ -49,8 +49,8 @@ $action  = New-ScheduledTaskAction `
     -Execute "powershell.exe" `
     -Argument "-NonInteractive -NoProfile -ExecutionPolicy Bypass -File `"$SCRIPT_PATH`""
 
-# Trigger: daily at 00:00 (midnight)
-$trigger = New-ScheduledTaskTrigger -Daily -At "00:00"
+# Trigger: runs every 5 minutes indefinitely
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
 
 # Principal: run as SYSTEM so it works even when no user is logged in
 $principal = New-ScheduledTaskPrincipal `
@@ -76,7 +76,7 @@ Register-ScheduledTask `
 
 Write-Host "[OK] Scheduled task '$TASK_NAME' registered successfully." -ForegroundColor Green
 Write-Host ""
-Write-Host "  Schedule  : Every day at 00:00 (midnight)" -ForegroundColor White
+Write-Host "  Schedule  : Every 5 minutes (checks dashboard config)" -ForegroundColor White
 Write-Host "  Script    : $SCRIPT_PATH" -ForegroundColor White
 Write-Host "  Backups   : $BACKUP_ROOT" -ForegroundColor White
 Write-Host "  Log file  : $LOG_FILE" -ForegroundColor White

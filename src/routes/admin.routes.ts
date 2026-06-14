@@ -2685,6 +2685,46 @@ router.get("/backup", async (req, res) => {
   }
 })
 
+// GET /admin/backup-schedule — get the auto-sync time
+router.get("/backup-schedule", async (req, res) => {
+  try {
+    const delegate = (prisma as any).systemSetting
+    if (!delegate) return res.json({ time: "00:00" })
+
+    const setting = await delegate.findUnique({ where: { key: "backup_time" } })
+    res.json({ time: setting?.value || "00:00" })
+  } catch (error) {
+    console.error("Fetch schedule error:", error)
+    res.json({ time: "00:00" })
+  }
+})
+
+// POST /admin/backup-schedule — update the auto-sync time
+router.post("/backup-schedule", authenticateAdmin, async (req, res) => {
+  try {
+    const { time } = req.body
+    if (!time || !/^\d{2}:\d{2}$/.test(time)) {
+      return res.status(400).json({ error: "Invalid time format (HH:mm required)" })
+    }
+
+    const delegate = (prisma as any).systemSetting
+    if (!delegate) {
+      return res.status(500).json({ error: "SystemSetting model not ready. Did you run prisma db push?" })
+    }
+
+    await delegate.upsert({
+      where: { key: "backup_time" },
+      update: { value: time },
+      create: { key: "backup_time", value: time },
+    })
+
+    res.json({ success: true, time })
+  } catch (error) {
+    console.error("Update schedule error:", error)
+    res.status(500).json({ error: "Failed to update schedule" })
+  }
+})
+
 // GET /admin/backup-history — get persistent backup and restore history
 router.get("/backup-history", async (req, res) => {
   try {

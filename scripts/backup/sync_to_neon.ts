@@ -26,14 +26,50 @@ const INTERNAL_SECRET = process.env.INTERNAL_BACKUP_SECRET || "dqmp-vm-internal-
 
 const BACKUP_DIR = "C:\\backup"
 
-async function runSync() {
-  console.log("Starting VM to Neon sync...")
+async function checkScheduleAndRun() {
+  console.log("Checking VM to Neon sync schedule...")
   
   if (!fs.existsSync(BACKUP_DIR)) {
-    console.log(`Creating directory ${BACKUP_DIR}`)
     fs.mkdirSync(BACKUP_DIR, { recursive: true })
   }
 
+  let scheduleTime = "00:00"
+  try {
+    const res = await axios.get(`${NEON_BACKEND_URL}/admin/backup-schedule`)
+    if (res.data?.time) {
+      scheduleTime = res.data.time
+    }
+  } catch (error) {
+    console.error("Failed to fetch schedule from Neon backend. Defaulting to 00:00.")
+  }
+
+  const [schedHour, schedMin] = scheduleTime.split(":").map(Number)
+  const now = new Date()
+  const currentHour = now.getHours()
+  const currentMin = now.getMinutes()
+
+  // Task scheduler runs every 5 mins. Check if we are in the 5 min window of the schedule.
+  const isTimeMatch = currentHour === schedHour && currentMin >= schedMin && currentMin < schedMin + 5
+
+  const todayStr = now.toISOString().split("T")[0]
+  const lastSyncFile = path.join(BACKUP_DIR, "last_sync_date.txt")
+  let lastSyncDate = ""
+  if (fs.existsSync(lastSyncFile)) {
+    lastSyncDate = fs.readFileSync(lastSyncFile, "utf-8").trim()
+  }
+
+  if (isTimeMatch && lastSyncDate !== todayStr) {
+    console.log(`Time match! Schedule is ${scheduleTime}. Executing backup...`)
+    await runSync()
+    fs.writeFileSync(lastSyncFile, todayStr)
+  } else {
+    console.log(`No sync needed right now. (Schedule: ${scheduleTime}, Last Sync: ${lastSyncDate || "Never"})`)
+    process.exit(0)
+  }
+}
+
+async function runSync() {
+  console.log("Starting VM to Neon sync...")
   try {
     console.log(`Connecting to local DB at ${LOCAL_DB_URL}`)
     
@@ -141,4 +177,4 @@ async function runSync() {
   }
 }
 
-runSync()
+checkScheduleAndRun()
