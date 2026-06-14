@@ -73,6 +73,7 @@ async function checkScheduleAndRun() {
     console.log(`Time match! Schedule is ${scheduleTime}. Executing direct database sync...`)
     await runSync()
     fs.writeFileSync(lastSyncFile, todayStr)
+    process.exit(0)
   } else {
     console.log(`No sync needed right now. (Schedule: ${scheduleTime}, Last Sync: ${lastSyncDate || "Never"})`)
     process.exit(0)
@@ -250,7 +251,7 @@ async function runSync() {
     try {
       await sltSmsService.sendSMS({
         to: "0775878565",
-        message: `DQMP Auto-Sync: Successfully synced ${totalRestored} new records from VM to Neon Cloud at ${new Date().toLocaleTimeString()}.`
+        message: `DQMP Auto-Sync: Successfully synced ${totalRestored} new records from VM to Neon Cloud on ${new Date().toLocaleString()}.`
       })
       console.log("Confirmation SMS sent successfully.")
     } catch (smsError) {
