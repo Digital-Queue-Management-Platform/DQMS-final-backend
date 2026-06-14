@@ -231,7 +231,7 @@ async function runSync() {
     const backupHistoryId = randomUUID()
     const historyId = randomUUID()
     const tableCountsJson = JSON.stringify(results)
-    const totalRecords = Object.values(backupData).reduce((sum: number, records: any) => sum + (Array.isArray(records) ? records.length : 0), 0)
+    const totalRecords = Object.values(backup.counts).reduce((sum: number, count: number) => sum + count, 0)
 
     // Log the BACKUP action to BOTH databases
     await neonPrisma.$executeRaw`
