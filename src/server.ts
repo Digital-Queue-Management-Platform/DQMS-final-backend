@@ -1200,3 +1200,16 @@ process.on("SIGINT", async () => {
   await prisma.$disconnect()
   process.exit(0)
 })
+
+// VM -> Neon Auto Backup Checker
+import { exec } from "child_process"
+setInterval(() => {
+  exec("npx tsx scripts/backup/sync_to_neon.ts", (error, stdout, stderr) => {
+    if (error) {
+      console.error("Auto backup check failed", error, stderr)
+    } else if (stdout && !stdout.includes("No sync needed right now")) {
+      console.log("Auto backup check executed successfully", stdout)
+    }
+  })
+}, 5 * 60 * 1000)
+
