@@ -124,8 +124,8 @@ const fetchRegionsForStaffStatus = async () => {
 
 // Admin authentication middleware
 const authenticateAdmin = (req: any, res: any, next: any) => {
-  // Allow internal restore/sync endpoint to bypass JWT if secret is valid
-  if (req.path === '/restore') {
+  // Allow internal restore/sync endpoints to bypass JWT if secret is valid
+  if (req.path === '/restore' || req.path === '/backup-schedule') {
     const secret = req.headers['x-internal-backup-secret']
     if (secret && secret === process.env.INTERNAL_BACKUP_SECRET) {
       req.user = { role: 'vm-script', email: 'vm-auto-sync' }
@@ -2763,17 +2763,19 @@ router.get("/backup-history", async (req, res) => {
 router.get("/vm-sync-status", async (req, res) => {
   try {
     const historyDelegate = getBackupRestoreHistoryDelegate()
-    if (!historyDelegate) {
-      return res.json({ history: [], warning: 'History model is not available in the running backend yet.' })
-    }
-
+    
     const history = historyDelegate
       ? await historyDelegate.findMany({
         where: { createdByRole: 'vm-script' },
         orderBy: { createdAt: 'desc' },
         take: 50,
       })
-      : []
+      : await prisma.$queryRawUnsafe(`
+          SELECT * FROM "BackupRestoreHistory"
+          WHERE "createdByRole" = $1
+          ORDER BY "createdAt" DESC
+          LIMIT $2
+        `, 'vm-script', 50)
 
     res.json({ history })
   } catch (error) {

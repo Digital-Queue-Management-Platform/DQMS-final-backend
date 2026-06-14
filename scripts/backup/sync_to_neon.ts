@@ -35,7 +35,9 @@ async function checkScheduleAndRun() {
 
   let scheduleTime = "00:00"
   try {
-    const res = await axios.get(`${NEON_BACKEND_URL}/api/admin/backup-schedule`)
+    const res = await axios.get(`${NEON_BACKEND_URL}/api/admin/backup-schedule`, {
+      headers: { "x-internal-backup-secret": INTERNAL_SECRET }
+    })
     if (res.data?.time) {
       scheduleTime = res.data.time
     }
