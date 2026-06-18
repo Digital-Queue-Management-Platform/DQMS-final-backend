@@ -2908,6 +2908,178 @@ router.post("/restore", authenticateAdmin, async (req: any, res) => {
   }
 })
 
+// POST /admin/neon-sync-now — manually trigger an immediate VM → NeonDB backup sync
+router.post("/neon-sync-now", authenticateAdmin, async (req: any, res) => {
+  const NEON_DATABASE_URL = process.env.NEON_DATABASE_URL
+  if (!NEON_DATABASE_URL) {
+    return res.status(503).json({
+      error: "NEON_DATABASE_URL is not configured in the server environment. Add it to .env and restart the server.",
+    })
+  }
+
+  // Dynamically import PrismaClient to create a short-lived connection to the backup NeonDB
+  const { PrismaClient } = await import("@prisma/client")
+  const neonPrisma = new PrismaClient({ datasources: { db: { url: NEON_DATABASE_URL } } })
+
+  try {
+    console.log("[neon-sync-now] Starting manual VM → NeonDB sync...")
+
+    // ── 1. Read all tables from local production DB ────────────────────────────
+    const [
+      regions, provinces, rtoms, outlets, officers, customers, tokens, feedback,
+      completedServices, services, appointments, breakLogs, transferLogs,
+      serviceCases, serviceCaseUpdates, closureNotices, managerQRTokens,
+      teleshopManagers, gms, dgms, otps, sltBills, mercantileHolidays,
+      documents, alerts,
+    ] = await Promise.all([
+      prisma.region.findMany(),
+      prisma.province.findMany(),
+      (prisma as any).rTOM ? (prisma as any).rTOM.findMany() : Promise.resolve([]),
+      prisma.outlet.findMany(),
+      prisma.officer.findMany(),
+      prisma.customer.findMany(),
+      prisma.token.findMany(),
+      prisma.feedback.findMany(),
+      prisma.completedService.findMany(),
+      prisma.service.findMany(),
+      prisma.appointment.findMany(),
+      prisma.breakLog.findMany(),
+      prisma.transferLog.findMany(),
+      prisma.serviceCase.findMany(),
+      prisma.serviceCaseUpdate.findMany(),
+      prisma.closureNotice.findMany(),
+      prisma.managerQRToken.findMany(),
+      prisma.teleshopManager.findMany(),
+      (prisma as any).gM.findMany(),
+      (prisma as any).dGM.findMany(),
+      (prisma as any).oTP.findMany(),
+      (prisma as any).sltBill.findMany(),
+      (prisma as any).mercantileHoliday.findMany(),
+      prisma.document.findMany(),
+      prisma.alert.findMany(),
+    ])
+
+    const sourceCounts = {
+      regions: regions.length, provinces: provinces.length, rtoms: rtoms.length,
+      outlets: outlets.length, officers: officers.length,
+      customers: customers.length, tokens: tokens.length, feedback: feedback.length,
+      completedServices: completedServices.length, services: services.length,
+      appointments: appointments.length, breakLogs: breakLogs.length,
+      transferLogs: transferLogs.length, serviceCases: serviceCases.length,
+      serviceCaseUpdates: serviceCaseUpdates.length, closureNotices: closureNotices.length,
+      managerQRTokens: managerQRTokens.length, teleshopManagers: teleshopManagers.length,
+      gms: gms.length, dgms: dgms.length, otps: otps.length,
+      sltBills: sltBills.length, mercantileHolidays: mercantileHolidays.length,
+      documents: documents.length, alerts: alerts.length,
+    }
+    const totalSource = Object.values(sourceCounts).reduce((a, b) => a + b, 0)
+    console.log(`[neon-sync-now] Read ${totalSource} total records from local DB.`)
+
+    // ── 2. Push records to NeonDB (skipDuplicates + column-fallback) ───────────
+    const results: Record<string, number> = {}
+
+    const ins = async (
+      tableName: string,
+      data: any[],
+      prismaCall: (safeRows: any[]) => Promise<any>
+    ) => {
+      if (!Array.isArray(data) || data.length === 0) { results[tableName] = 0; return }
+      let safeRows = data
+      for (let i = 0; i < 10; i++) {
+        try {
+          const r = await prismaCall(safeRows)
+          results[tableName] = r?.count ?? data.length
+          return
+        } catch (error: any) {
+          if (error?.code !== "P2022") throw error
+          const col = (error?.meta?.column as string | undefined)?.replace(/"/g, "")
+          if (!col) throw error
+          safeRows = safeRows.map((row: any) => { const c = { ...row }; delete c[col]; return c })
+        }
+      }
+      throw new Error(`Could not sync table '${tableName}' after removing missing columns`)
+    }
+
+    // Ordered by FK dependency
+    await ins("regions", regions, (r) => neonPrisma.region.createMany({ data: r, skipDuplicates: true }))
+    await ins("services", services, (r) => neonPrisma.service.createMany({ data: r, skipDuplicates: true }))
+    await ins("gms", gms, (r) => (neonPrisma as any).gM.createMany({ data: r, skipDuplicates: true }))
+    await ins("customers", customers, (r) => neonPrisma.customer.createMany({ data: r, skipDuplicates: true }))
+    await ins("otps", otps, (r) => (neonPrisma as any).oTP.createMany({ data: r, skipDuplicates: true }))
+    await ins("sltBills", sltBills, (r) => (neonPrisma as any).sltBill.createMany({ data: r, skipDuplicates: true }))
+    await ins("mercantileHolidays", mercantileHolidays, (r) => (neonPrisma as any).mercantileHoliday.createMany({ data: r, skipDuplicates: true }))
+    await ins("documents", documents, (r) => neonPrisma.document.createMany({ data: r, skipDuplicates: true }))
+    await ins("alerts", alerts, (r) => neonPrisma.alert.createMany({ data: r, skipDuplicates: true }))
+    // provinces & rtoms must come before outlets (FK: Outlet_provinceId_fkey)
+    await ins("provinces", provinces, (r) => neonPrisma.province.createMany({ data: r, skipDuplicates: true }))
+    await ins("rtoms", rtoms, (r) => (neonPrisma as any).rTOM
+      ? (neonPrisma as any).rTOM.createMany({ data: r, skipDuplicates: true })
+      : Promise.resolve({ count: 0 }))
+    await ins("outlets", outlets, (r) => neonPrisma.outlet.createMany({ data: r, skipDuplicates: true }))
+    await ins("dgms", dgms, (r) => (neonPrisma as any).dGM.createMany({ data: r, skipDuplicates: true }))
+    await ins("officers", officers, (r) => neonPrisma.officer.createMany({ data: r, skipDuplicates: true }))
+    await ins("teleshopManagers", teleshopManagers, (r) => neonPrisma.teleshopManager.createMany({ data: r, skipDuplicates: true }))
+    await ins("managerQRTokens", managerQRTokens, (r) => neonPrisma.managerQRToken.createMany({ data: r, skipDuplicates: true }))
+    await ins("closureNotices", closureNotices, (r) => neonPrisma.closureNotice.createMany({ data: r, skipDuplicates: true }))
+    await ins("appointments", appointments, (r) => neonPrisma.appointment.createMany({ data: r, skipDuplicates: true }))
+    await ins("tokens", tokens, (r) => neonPrisma.token.createMany({ data: r, skipDuplicates: true }))
+    await ins("breakLogs", breakLogs, (r) => neonPrisma.breakLog.createMany({ data: r, skipDuplicates: true }))
+    await ins("transferLogs", transferLogs, (r) => neonPrisma.transferLog.createMany({ data: r, skipDuplicates: true }))
+    await ins("feedback", feedback, (r) => neonPrisma.feedback.createMany({ data: r, skipDuplicates: true }))
+    await ins("completedServices", completedServices, (r) => neonPrisma.completedService.createMany({ data: r, skipDuplicates: true }))
+    await ins("serviceCases", serviceCases, (r) => neonPrisma.serviceCase.createMany({ data: r, skipDuplicates: true }))
+    await ins("serviceCaseUpdates", serviceCaseUpdates, (r) => neonPrisma.serviceCaseUpdate.createMany({ data: r, skipDuplicates: true }))
+
+    const totalSynced = Object.values(results).reduce((a, b) => a + b, 0)
+    console.log(`[neon-sync-now] Synced ${totalSynced} new records to NeonDB.`)
+
+    // ── 3. Log to BackupRestoreHistory in both DBs ─────────────────────────────
+    const filename = `manual-sync-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.json`
+    const tableCountsJson = JSON.stringify(results)
+    const backupId = randomUUID()
+    const restoreId = randomUUID()
+
+    const historyInsert = async (client: any, id: string, action: string, total: number) => {
+      try {
+        await client.$executeRaw`
+          INSERT INTO "BackupRestoreHistory"
+          ("id", "action", "status", "filename", "totalRecords", "tableCounts", "createdByRole", "createdAt")
+          VALUES (${id}, ${action}, 'success', ${filename}, ${total}, ${tableCountsJson}::jsonb, 'vm-script', (NOW() AT TIME ZONE 'UTC'))
+        `
+      } catch (logErr) {
+        console.warn(`[neon-sync-now] Failed to log ${action} history:`, logErr)
+      }
+    }
+
+    await Promise.all([
+      historyInsert(neonPrisma, backupId, "backup", totalSource),
+      historyInsert(prisma, backupId, "backup", totalSource),
+      historyInsert(neonPrisma, restoreId, "restore", totalSynced),
+      historyInsert(prisma, restoreId, "restore", totalSynced),
+    ])
+
+    console.log("[neon-sync-now] Manual sync completed successfully.")
+    res.json({ success: true, totalSynced, results, filename })
+  } catch (error: any) {
+    console.error("[neon-sync-now] Sync failed:", error?.message || error)
+
+    // Log failure to local DB
+    try {
+      const errId = randomUUID()
+      const errMsg = error?.message || "Unknown error"
+      await prisma.$executeRaw`
+        INSERT INTO "BackupRestoreHistory"
+        ("id", "action", "status", "errorMessage", "createdByRole", "createdAt")
+        VALUES (${errId}, 'restore', 'failed', ${errMsg}, 'vm-script', (NOW() AT TIME ZONE 'UTC'))
+      `
+    } catch { /* ignore secondary log failures */ }
+
+    res.status(500).json({ error: "Sync failed: " + (error?.message || "Unknown error") })
+  } finally {
+    await neonPrisma.$disconnect()
+  }
+})
+
 // Test email service
 router.post("/test/email", async (req, res) => {
   try {

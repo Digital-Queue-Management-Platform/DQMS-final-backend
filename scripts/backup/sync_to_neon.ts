@@ -87,13 +87,15 @@ async function runSync() {
     
     // Fetch all records from the VM database
     const [
-      regions, outlets, officers, customers, tokens, feedback,
+      regions, provinces, rtoms, outlets, officers, customers, tokens, feedback,
       completedServices, services, appointments, breakLogs, transferLogs,
       serviceCases, serviceCaseUpdates, closureNotices, managerQRTokens,
       teleshopManagers, gms, dgms, otps, sltBills, mercantileHolidays,
       documents, alerts,
     ] = await Promise.all([
       prisma.region.findMany(),
+      prisma.province.findMany(),
+      (prisma as any).rTOM ? (prisma as any).rTOM.findMany() : Promise.resolve([]),
       prisma.outlet.findMany(),
       prisma.officer.findMany(),
       prisma.customer.findMany(),
@@ -122,14 +124,15 @@ async function runSync() {
       exportedAt: new Date().toISOString(),
       version: "1.0",
       tables: {
-        regions, outlets, officers, customers, tokens, feedback,
+        regions, provinces, rtoms, outlets, officers, customers, tokens, feedback,
         completedServices, services, appointments, breakLogs, transferLogs,
         serviceCases, serviceCaseUpdates, closureNotices, managerQRTokens,
         teleshopManagers, gms, dgms, otps, sltBills, mercantileHolidays,
         documents, alerts,
       },
       counts: {
-        regions: regions.length, outlets: outlets.length, officers: officers.length,
+        regions: regions.length, provinces: provinces.length, rtoms: rtoms.length,
+        outlets: outlets.length, officers: officers.length,
         customers: customers.length, tokens: tokens.length, feedback: feedback.length,
         completedServices: completedServices.length, services: services.length,
         appointments: appointments.length, breakLogs: breakLogs.length, transferLogs: transferLogs.length,
@@ -200,10 +203,16 @@ async function runSync() {
     await ins("documents", documents, (safeRows) => neonPrisma.document.createMany({ data: safeRows, skipDuplicates: true }))
     await ins("alerts", alerts, (safeRows) => neonPrisma.alert.createMany({ data: safeRows, skipDuplicates: true }))
 
-    // Level 1 — depends on regions
+    // Level 1 — depends on regions (provinces & rtoms must come before outlets)
+    await ins("provinces", provinces, (safeRows) => neonPrisma.province.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("rtoms", rtoms, (safeRows) => (neonPrisma as any).rTOM
+      ? (neonPrisma as any).rTOM.createMany({ data: safeRows, skipDuplicates: true })
+      : Promise.resolve({ count: 0 }))
+
+    // Level 2 — depends on regions + provinces
     await ins("outlets", outlets, (safeRows) => neonPrisma.outlet.createMany({ data: safeRows, skipDuplicates: true }))
 
-    // Level 2 — depends on gms / outlets
+    // Level 3 — depends on gms / outlets / provinces
     await ins("dgms", dgms, (safeRows) => (neonPrisma as any).dGM.createMany({ data: safeRows, skipDuplicates: true }))
     await ins("officers", officers, (safeRows) => neonPrisma.officer.createMany({ data: safeRows, skipDuplicates: true }))
     await ins("teleshopManagers", teleshopManagers, (safeRows) => neonPrisma.teleshopManager.createMany({ data: safeRows, skipDuplicates: true }))
