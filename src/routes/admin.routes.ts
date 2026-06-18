@@ -3000,31 +3000,47 @@ router.post("/neon-sync-now", authenticateAdmin, async (req: any, res) => {
       throw new Error(`Could not sync table '${tableName}' after removing missing columns`)
     }
 
-    // Ordered by FK dependency
+    // Correct FK dependency order:
+    // regions → provinces → gms → dgms → rtoms → outlets → officers/managers → tokens → ...
+
+    // Level 0 — no FK dependencies
     await ins("regions", regions, (r) => neonPrisma.region.createMany({ data: r, skipDuplicates: true }))
     await ins("services", services, (r) => neonPrisma.service.createMany({ data: r, skipDuplicates: true }))
-    await ins("gms", gms, (r) => (neonPrisma as any).gM.createMany({ data: r, skipDuplicates: true }))
     await ins("customers", customers, (r) => neonPrisma.customer.createMany({ data: r, skipDuplicates: true }))
     await ins("otps", otps, (r) => (neonPrisma as any).oTP.createMany({ data: r, skipDuplicates: true }))
     await ins("sltBills", sltBills, (r) => (neonPrisma as any).sltBill.createMany({ data: r, skipDuplicates: true }))
     await ins("mercantileHolidays", mercantileHolidays, (r) => (neonPrisma as any).mercantileHoliday.createMany({ data: r, skipDuplicates: true }))
     await ins("documents", documents, (r) => neonPrisma.document.createMany({ data: r, skipDuplicates: true }))
     await ins("alerts", alerts, (r) => neonPrisma.alert.createMany({ data: r, skipDuplicates: true }))
-    // provinces & rtoms must come before outlets (FK: Outlet_provinceId_fkey)
+
+    // Level 1 — depend on regions
     await ins("provinces", provinces, (r) => neonPrisma.province.createMany({ data: r, skipDuplicates: true }))
+    await ins("gms", gms, (r) => (neonPrisma as any).gM.createMany({ data: r, skipDuplicates: true }))
+
+    // Level 2 — depend on gms + provinces (dgmId FK + provinceId FK)
+    await ins("dgms", dgms, (r) => (neonPrisma as any).dGM.createMany({ data: r, skipDuplicates: true }))
+
+    // Level 3 — depend on dgms (RTOM_dgmId_fkey)
     await ins("rtoms", rtoms, (r) => (neonPrisma as any).rTOM
       ? (neonPrisma as any).rTOM.createMany({ data: r, skipDuplicates: true })
       : Promise.resolve({ count: 0 }))
+
+    // Level 4 — depend on provinces + rtoms (Outlet_provinceId_fkey)
     await ins("outlets", outlets, (r) => neonPrisma.outlet.createMany({ data: r, skipDuplicates: true }))
-    await ins("dgms", dgms, (r) => (neonPrisma as any).dGM.createMany({ data: r, skipDuplicates: true }))
+
+    // Level 5 — depend on gms / outlets
     await ins("officers", officers, (r) => neonPrisma.officer.createMany({ data: r, skipDuplicates: true }))
     await ins("teleshopManagers", teleshopManagers, (r) => neonPrisma.teleshopManager.createMany({ data: r, skipDuplicates: true }))
     await ins("managerQRTokens", managerQRTokens, (r) => neonPrisma.managerQRToken.createMany({ data: r, skipDuplicates: true }))
     await ins("closureNotices", closureNotices, (r) => neonPrisma.closureNotice.createMany({ data: r, skipDuplicates: true }))
     await ins("appointments", appointments, (r) => neonPrisma.appointment.createMany({ data: r, skipDuplicates: true }))
+
+    // Level 6 — depend on officers / outlets / customers
     await ins("tokens", tokens, (r) => neonPrisma.token.createMany({ data: r, skipDuplicates: true }))
     await ins("breakLogs", breakLogs, (r) => neonPrisma.breakLog.createMany({ data: r, skipDuplicates: true }))
     await ins("transferLogs", transferLogs, (r) => neonPrisma.transferLog.createMany({ data: r, skipDuplicates: true }))
+
+    // Level 7 — depend on tokens
     await ins("feedback", feedback, (r) => neonPrisma.feedback.createMany({ data: r, skipDuplicates: true }))
     await ins("completedServices", completedServices, (r) => neonPrisma.completedService.createMany({ data: r, skipDuplicates: true }))
     await ins("serviceCases", serviceCases, (r) => neonPrisma.serviceCase.createMany({ data: r, skipDuplicates: true }))

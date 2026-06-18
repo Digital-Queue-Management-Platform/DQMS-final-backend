@@ -192,10 +192,12 @@ async function runSync() {
       throw new Error(`Could not restore table '${tableName}' after removing missing columns`)
     }
 
+    // Correct FK dependency order:
+    // regions → provinces → gms → dgms → rtoms → outlets → officers/managers → tokens → ...
+
     // Level 0 — no FK dependencies
     await ins("regions", regions, (safeRows) => neonPrisma.region.createMany({ data: safeRows, skipDuplicates: true }))
     await ins("services", services, (safeRows) => neonPrisma.service.createMany({ data: safeRows, skipDuplicates: true }))
-    await ins("gms", gms, (safeRows) => (neonPrisma as any).gM.createMany({ data: safeRows, skipDuplicates: true }))
     await ins("customers", customers, (safeRows) => neonPrisma.customer.createMany({ data: safeRows, skipDuplicates: true }))
     await ins("otps", otps, (safeRows) => (neonPrisma as any).oTP.createMany({ data: safeRows, skipDuplicates: true }))
     await ins("sltBills", sltBills, (safeRows) => (neonPrisma as any).sltBill.createMany({ data: safeRows, skipDuplicates: true }))
@@ -203,34 +205,39 @@ async function runSync() {
     await ins("documents", documents, (safeRows) => neonPrisma.document.createMany({ data: safeRows, skipDuplicates: true }))
     await ins("alerts", alerts, (safeRows) => neonPrisma.alert.createMany({ data: safeRows, skipDuplicates: true }))
 
-    // Level 1 — depends on regions (provinces & rtoms must come before outlets)
+    // Level 1 — depend on regions
     await ins("provinces", provinces, (safeRows) => neonPrisma.province.createMany({ data: safeRows, skipDuplicates: true }))
+    await ins("gms", gms, (safeRows) => (neonPrisma as any).gM.createMany({ data: safeRows, skipDuplicates: true }))
+
+    // Level 2 — depend on gms + provinces (dgmId FK + provinceId FK)
+    await ins("dgms", dgms, (safeRows) => (neonPrisma as any).dGM.createMany({ data: safeRows, skipDuplicates: true }))
+
+    // Level 3 — depend on dgms (RTOM_dgmId_fkey)
     await ins("rtoms", rtoms, (safeRows) => (neonPrisma as any).rTOM
       ? (neonPrisma as any).rTOM.createMany({ data: safeRows, skipDuplicates: true })
       : Promise.resolve({ count: 0 }))
 
-    // Level 2 — depends on regions + provinces
+    // Level 4 — depend on provinces + rtoms (Outlet_provinceId_fkey)
     await ins("outlets", outlets, (safeRows) => neonPrisma.outlet.createMany({ data: safeRows, skipDuplicates: true }))
 
-    // Level 3 — depends on gms / outlets / provinces
-    await ins("dgms", dgms, (safeRows) => (neonPrisma as any).dGM.createMany({ data: safeRows, skipDuplicates: true }))
+    // Level 5 — depend on gms / outlets
     await ins("officers", officers, (safeRows) => neonPrisma.officer.createMany({ data: safeRows, skipDuplicates: true }))
     await ins("teleshopManagers", teleshopManagers, (safeRows) => neonPrisma.teleshopManager.createMany({ data: safeRows, skipDuplicates: true }))
     await ins("managerQRTokens", managerQRTokens, (safeRows) => neonPrisma.managerQRToken.createMany({ data: safeRows, skipDuplicates: true }))
     await ins("closureNotices", closureNotices, (safeRows) => neonPrisma.closureNotice.createMany({ data: safeRows, skipDuplicates: true }))
     await ins("appointments", appointments, (safeRows) => neonPrisma.appointment.createMany({ data: safeRows, skipDuplicates: true }))
 
-    // Level 3 — depends on officers / outlets / customers
+    // Level 6 — depend on officers / outlets / customers
     await ins("tokens", tokens, (safeRows) => neonPrisma.token.createMany({ data: safeRows, skipDuplicates: true }))
     await ins("breakLogs", breakLogs, (safeRows) => neonPrisma.breakLog.createMany({ data: safeRows, skipDuplicates: true }))
     await ins("transferLogs", transferLogs, (safeRows) => neonPrisma.transferLog.createMany({ data: safeRows, skipDuplicates: true }))
 
-    // Level 4 — depends on tokens
+    // Level 7 — depend on tokens
     await ins("feedback", feedback, (safeRows) => neonPrisma.feedback.createMany({ data: safeRows, skipDuplicates: true }))
     await ins("completedServices", completedServices, (safeRows) => neonPrisma.completedService.createMany({ data: safeRows, skipDuplicates: true }))
     await ins("serviceCases", serviceCases, (safeRows) => neonPrisma.serviceCase.createMany({ data: safeRows, skipDuplicates: true }))
 
-    // Level 5 — depends on serviceCases
+    // Level 8 — depend on serviceCases
     await ins("serviceCaseUpdates", serviceCaseUpdates, (safeRows) => neonPrisma.serviceCaseUpdate.createMany({ data: safeRows, skipDuplicates: true }))
 
     const totalRestored = Object.values(results).reduce((a, b) => a + b, 0)
