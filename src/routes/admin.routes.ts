@@ -1505,7 +1505,7 @@ router.get('/outlets', async (req, res) => {
   try {
     const { regionId, provinceId } = req.query
 
-    const where: any = {}
+    const where: any = { isActive: true } // Only return active outlets
     if (regionId) {
       where.regionId = regionId as string
     }
@@ -1581,6 +1581,28 @@ router.get('/outlets', async (req, res) => {
   } catch (error) {
     console.error('Failed to fetch outlets', error)
     res.status(500).json({ error: 'Failed to fetch outlets' })
+  }
+})
+
+// Delete (soft-delete) an outlet — sets isActive = false
+router.delete('/outlets/:outletId', async (req, res) => {
+  try {
+    const { outletId } = req.params
+
+    const outlet = await prisma.outlet.findUnique({ where: { id: outletId } })
+    if (!outlet) {
+      return res.status(404).json({ error: 'Outlet not found' })
+    }
+
+    await prisma.outlet.update({
+      where: { id: outletId },
+      data: { isActive: false }
+    })
+
+    res.json({ success: true, message: 'Outlet deleted successfully' })
+  } catch (error: any) {
+    console.error('Delete outlet error:', error)
+    res.status(500).json({ error: 'Failed to delete outlet', details: error?.message })
   }
 })
 
