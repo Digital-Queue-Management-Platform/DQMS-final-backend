@@ -280,9 +280,19 @@ async function runSync() {
         to: "0775878565",
         message: `DQMP Auto-Sync: Successfully synced ${totalRestored} new records from VM to Neon Cloud on ${new Date().toLocaleString()}.`
       })
-      console.log("Confirmation SMS sent successfully.")
+      console.log("Confirmation SMS sent to 0775878565.")
     } catch (smsError) {
-      console.error("Failed to send confirmation SMS:", smsError)
+      console.error("Failed to send confirmation SMS to 0775878565:", smsError)
+    }
+
+    try {
+      await sltSmsService.sendSMS({
+        to: "0778200186",
+        message: `DQMP Auto-Sync: Successfully synced ${totalRestored} new records from VM to Neon Cloud on ${new Date().toLocaleString()}.`
+      })
+      console.log("Confirmation SMS sent to 0778200186.")
+    } catch (smsError) {
+      console.error("Failed to send confirmation SMS to 0778200186:", smsError)
     }
 
   } catch (error: any) {
