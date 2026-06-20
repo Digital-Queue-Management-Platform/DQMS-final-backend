@@ -1679,6 +1679,70 @@ router.patch("/teleshop-managers/:teleshopManagerId", async (req, res) => {
   }
 })
 
+// Get all outlets in this RTOM's region (regardless of teleshop manager assignment)
+// Used by the Change Branch / Assign Branch modal so outlets unassigned from a manager still appear
+router.get("/region-outlets", async (req, res) => {
+  try {
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+
+    if (!token) {
+      return res.status(401).json({ error: "RTOM authentication required" })
+    }
+
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch (e) {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    // Find RTOM to get their region
+    const rtom = await prisma.rTOM.findFirst({
+      where: { mobileNumber: payload.mobileNumber },
+      include: { region: true }
+    })
+
+    if (!rtom || !rtom.region) {
+      return res.status(404).json({ error: "RTOM not found or not assigned to region" })
+    }
+
+    // Fetch ALL outlets in the RTOM's region directly by regionId
+    const outlets = await prisma.outlet.findMany({
+      where: {
+        regionId: rtom.region.id,
+        isActive: true
+      },
+      include: {
+        teleshopManagers: {
+          select: {
+            id: true,
+            name: true
+          }
+        }
+      },
+      orderBy: { name: 'asc' }
+    })
+
+    res.json({
+      outlets: outlets.map(outlet => ({
+        id: outlet.id,
+        name: outlet.name,
+        location: outlet.location,
+        teleshopManagers: outlet.teleshopManagers
+      }))
+    })
+  } catch (error: any) {
+    console.error("Region outlets error:", error)
+    res.status(500).json({ error: "Failed to fetch region outlets" })
+  }
+})
+
 // Assign teleshop manager to branch
 router.patch("/teleshop-managers/:teleshopManagerId/assign-branch", async (req, res) => {
   try {
