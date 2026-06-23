@@ -579,7 +579,7 @@ export const generateReportHTML = (data: ReportData): string => {
     </div>
 
     <div class="footer">
-        ${reportId} | Generated on: ${generatedDate} | SLT-MOBITEL DQMP Management Report
+        ${reportId} | Generated on: ${generatedDate} | SLTMOBITEL DQMP Management Report
     </div>
 </body>
 </html>

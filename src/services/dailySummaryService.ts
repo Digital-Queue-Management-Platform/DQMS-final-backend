@@ -216,7 +216,7 @@ function buildSummaryPart1SMS(managerName: string, s: BranchSummary): string {
     `Avg Service Time : ${s.avgServiceMins} mins`,
     `Customer Rating  : ${s.avgRating > 0 ? `${s.avgRating} / 5` : 'N/A'}`,
     ``,
-    `SLT-MOBITEL`,
+    `SLTMOBITEL`,
   ].join('\n')
 }
 
@@ -230,7 +230,7 @@ function buildTopServicesSMS(managerName: string, s: BranchSummary): string | nu
     `Top Services Today (${s.date}):`,
     ...s.topServices.map((svc, i) => `${i + 1}. ${svc.name} - ${svc.count} customers`),
     ``,
-    `SLT-MOBITEL`,
+    `SLTMOBITEL`,
   ]
   return lines.join('\n')
 }
@@ -265,7 +265,7 @@ function buildSummaryEmailHTML(managerName: string, s: BranchSummary): string {
 
     <!-- Header -->
     <div style="background:linear-gradient(135deg,#1e40af 0%,#0056b3 100%);padding:36px 32px;text-align:center;">
-      <p style="margin:0;color:rgba(255,255,255,0.85);font-size:13px;letter-spacing:1px;text-transform:uppercase;">SLT-MOBITEL</p>
+      <p style="margin:0;color:rgba(255,255,255,0.85);font-size:13px;letter-spacing:1px;text-transform:uppercase;">SLTMOBITEL</p>
       <h1 style="margin:8px 0 4px;color:#ffffff;font-size:22px;font-weight:700;">Daily Branch Summary</h1>
       <p style="margin:0;color:rgba(255,255,255,0.8);font-size:14px;">${s.branchName} &nbsp;|&nbsp; ${s.date}</p>
     </div>
@@ -362,7 +362,7 @@ function buildSummaryEmailHTML(managerName: string, s: BranchSummary): string {
 
     <!-- Footer -->
     <div style="background:#0f172a;padding:20px 32px;text-align:center;">
-      <p style="margin:0 0 4px;color:#94a3b8;font-size:12px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">SLT-MOBITEL</p>
+      <p style="margin:0 0 4px;color:#94a3b8;font-size:12px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">SLTMOBITEL</p>
       <p style="margin:0;color:#475569;font-size:11px;">Digital Queue Management System</p>
       <p style="margin:8px 0 0;color:#475569;font-size:10px;">This is an automated daily summary. Please do not reply to this email.</p>
     </div>
@@ -405,7 +405,7 @@ function buildSummaryEmailText(managerName: string, s: BranchSummary): string {
     `For detailed insights, please log in to the DQMS Portal.`,
     ``,
     `Best regards,`,
-    `SLT-MOBITEL`,
+    `SLTMOBITEL`,
     `Digital Queue Management System`,
   )
 
