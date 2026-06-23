@@ -69,7 +69,7 @@ class UnifiedSmsHelper {
     // Always send OTP in English (plain ASCII) regardless of preferred language.
     // Unicode SMS (Sinhala/Tamil) is limited to 70 chars per segment and many gateways
     // do not reliably deliver multi-part Unicode SMS, causing OTPs to be silently lost.
-    const message = `Dear Valued Customer\n\nYour verification code is ${otpCode}. Valid for 5 minutes.\n\nSLT-MOBITEL`
+    const message = `Dear Valued Customer\n\nYour verification code is ${otpCode}. Valid for 5 minutes.\n\nSLTMOBITEL`
 
     return this.sendSMS({
       to: mobileNumber,
@@ -92,7 +92,7 @@ class UnifiedSmsHelper {
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SendSMSResult> {
     // Since SMS doesn't support Unicode properly, use English for all languages
-    const messageText = `Dear Valued Customer\n\nYour appointment at ${details.outletName} is confirmed for ${details.dateTime}.\n\nSLT-MOBITEL`
+    const messageText = `Dear Valued Customer\n\nYour appointment at ${details.outletName} is confirmed for ${details.dateTime}.\n\nSLTMOBITEL`
 
     return this.sendSMS({
       to: mobileNumber,
@@ -112,7 +112,7 @@ class UnifiedSmsHelper {
   ): Promise<SendSMSResult> {
     const formattedToken = tokenNumber.toString().padStart(3, '0')
     // Since SMS doesn't support Unicode properly, use English for all languages
-    const messageText = `Dear Valued Customer\n\nYour token number ${formattedToken} is now being called. Please proceed to Counter ${counterNumber}.\n\nSLT-MOBITEL`
+    const messageText = `Dear Valued Customer\n\nYour token number ${formattedToken} is now being called. Please proceed to Counter ${counterNumber}.\n\nSLTMOBITEL`
 
     return this.sendSMS({
       to: mobileNumber,
@@ -135,7 +135,7 @@ class UnifiedSmsHelper {
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SendSMSResult> {
     // Since SMS doesn't support Unicode properly, use English for all languages
-    const messageText = `Dear Valued Customer\n\nYour SLT account ${details.accountNumber} has an outstanding balance of Rs. ${details.amount}. Please settle the bill by ${details.dueDate} to avoid service interruption.\n\nSLT-MOBITEL`
+    const messageText = `Dear Valued Customer\n\nYour SLT account ${details.accountNumber} has an outstanding balance of Rs. ${details.amount}. Please settle the bill by ${details.dueDate} to avoid service interruption.\n\nSLTMOBITEL`
 
     return this.sendSMS({
       to: mobileNumber,
@@ -160,7 +160,7 @@ class UnifiedSmsHelper {
   ): Promise<SendSMSResult> {
     const formattedToken = details.tokenNumber.toString().padStart(3, '0')
     // Since SMS doesn't support Unicode properly, use English for all languages
-    const messageText = `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active (Queue Position: ${details.position || 1}).\n\nSLT-MOBITEL`
+    const messageText = `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} is now active (Queue Position: ${details.position || 1}).\n\nSLTMOBITEL`
 
     return this.sendSMS({
       to: mobileNumber,
@@ -213,7 +213,7 @@ class UnifiedSmsHelper {
     language: 'en' | 'si' | 'ta' = 'en'
   ): Promise<SendSMSResult> {
     // Since SMS doesn't support Unicode properly, use English for all languages
-    const messageText = `Dear Valued Customer\n\nReminder: Your appointment at ${details.outletName} is in ${details.minutesRemaining} minutes (${details.dateTime}).\n\nPlease arrive on time.\n\nSLT-MOBITEL`
+    const messageText = `Dear Valued Customer\n\nReminder: Your appointment at ${details.outletName} is in ${details.minutesRemaining} minutes (${details.dateTime}).\n\nPlease arrive on time.\n\nSLTMOBITEL`
 
     return this.sendSMS({
       to: mobileNumber,
