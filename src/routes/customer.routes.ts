@@ -1021,7 +1021,7 @@ function getStatusMessage(status: string, queuePosition: number, estimatedWait: 
     case 'completed':
       return 'Your service has been completed.'
     case 'skipped':
-      return 'Your token was skipped. Please contact the counter.'
+      return 'Your token was on Hold. Please contact the counter.'
     default:
       return 'Token status unknown.'
   }

@@ -442,7 +442,7 @@ class SLTSmsService {
     const formattedToken = details.tokenNumber.toString().padStart(3, '0')
 
     const messages = {
-      en: `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} was skipped as you were not available. Please visit the counter to be recalled.\n\nSLTMOBITEL`,
+      en: `Dear Valued Customer\n\nYour token number ${formattedToken} at ${details.outletName} has been temporaily placed on hold. Please remain nearby , your token will be called again shortly \n\nSLTMOBITEL`,
       si: `Dear Valued Customer\n\nThank you for choosing SLTMOBITEL!\n\nSLTMOBITEL`,
       ta: `Dear Valued Customer\n\nThank you for choosing SLTMOBITEL!\n\nSLTMOBITEL`
     }
