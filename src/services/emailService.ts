@@ -179,7 +179,7 @@ class EmailService {
     try {
       const result = await this.transporter.sendMail({
         from: {
-          name: 'SLT-MOBITEL DQMS',
+          name: 'SLTMOBITEL DQMS',
           address: process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@dqms.com'
         },
         to: options.to,
@@ -538,7 +538,7 @@ Please do not reply to this email.
     <body>
         <div class="container">
             <div class="header">
-                <h1>SLT-MOBITEL</h1>
+                <h1>SLTMOBITEL</h1>
                 <p style="margin-top: 8px; opacity: 0.9; font-size: 18px;">Digital Queue Management System (DQMS)</p>
             </div>
             
@@ -573,7 +573,7 @@ Please do not reply to this email.
                 <p style="margin-top: 32px;">Should you encounter any difficulties or require further assistance, please contact the IT Support Helpdesk.</p>
                 
                 <p>Best regards,<br>
-                <strong style="color: #0056b3;">SLT-MOBITEL</strong></p>
+                <strong style="color: #0056b3;">SLTMOBITEL</strong></p>
             </div>
             
             <div class="footer">
@@ -591,13 +591,13 @@ Please do not reply to this email.
       credentials.regionName ? ` for the ${credentials.regionName} region` : '';
 
     return `
-SLT-MOBITEL | Digital Queue Management System (DQMS)
+SLTMOBITEL | Digital Queue Management System (DQMS)
 
 Official Welcome Notification
 
 Dear ${credentials.name},
 
-Your account as a ${credentials.role}${locationInfo} has been successfully created in the SLT-MOBITEL DQMS Portal.
+Your account as a ${credentials.role}${locationInfo} has been successfully created in the SLTMOBITEL DQMS Portal.
 
 ACCESS DETAILS:
 ==================
@@ -617,7 +617,7 @@ Your access is strictly for authorized personnel. Please do not share your mobil
 For technical support, please contact the system administrator.
 
 Best regards,
-SLT-MOBITEL
+SLTMOBITEL
     `
   }
 

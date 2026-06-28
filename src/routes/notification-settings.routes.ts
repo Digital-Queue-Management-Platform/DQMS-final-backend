@@ -124,7 +124,7 @@ router.post('/test-sms', async (req, res) => {
       'Avg Service Time : 14 mins',
       'Customer Rating  : 4.3 / 5',
       '',
-      'SLT-MOBITEL',
+      'SLTMOBITEL',
     ].join('\n')
 
     const result = await sltSmsService.sendSMS({ to: mobileNumber, message })
@@ -177,7 +177,7 @@ router.post('/test-email', async (req, res) => {
 <body style="margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;color:#1e293b;">
   <div style="max-width:620px;margin:32px auto;border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,0.12);">
     <div style="background:linear-gradient(135deg,#1e40af 0%,#0056b3 100%);padding:36px 32px;text-align:center;">
-      <p style="margin:0;color:rgba(255,255,255,0.85);font-size:13px;letter-spacing:1px;text-transform:uppercase;">SLT-MOBITEL</p>
+      <p style="margin:0;color:rgba(255,255,255,0.85);font-size:13px;letter-spacing:1px;text-transform:uppercase;">SLTMOBITEL</p>
       <h1 style="margin:8px 0 4px;color:#ffffff;font-size:22px;font-weight:700;">Daily Branch Summary</h1>
       <p style="margin:0;color:rgba(255,255,255,0.8);font-size:14px;">${branchName} &nbsp;|&nbsp; ${date}</p>
     </div>
@@ -208,7 +208,7 @@ router.post('/test-email', async (req, res) => {
       </a>
     </div>
     <div style="background:#0f172a;padding:20px 32px;text-align:center;">
-      <p style="margin:0 0 4px;color:#94a3b8;font-size:12px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">SLT-MOBITEL</p>
+      <p style="margin:0 0 4px;color:#94a3b8;font-size:12px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">SLTMOBITEL</p>
       <p style="margin:0;color:#475569;font-size:11px;">Digital Queue Management System</p>
       <p style="margin:8px 0 0;color:#475569;font-size:10px;">This is an automated daily summary. Please do not reply to this email.</p>
     </div>
@@ -216,7 +216,7 @@ router.post('/test-email', async (req, res) => {
 </body>
 </html>`
 
-    const text = `Dear ${managerName},\n\nThis is a test email for the Daily Branch Summary notification for ${branchName}.\n\nBest regards,\nSLT-MOBITEL\nDigital Queue Management System`
+    const text = `Dear ${managerName},\n\nThis is a test email for the Daily Branch Summary notification for ${branchName}.\n\nBest regards,\nSLTMOBITEL\nDigital Queue Management System`
 
     const result = await emailService.sendRawEmail({ to: email, subject, text, html })
 
