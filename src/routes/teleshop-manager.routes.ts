@@ -904,7 +904,7 @@ router.get("/kiosk-settings", async (req: any, res) => {
 router.post("/kiosk-settings", async (req: any, res) => {
   try {
     const teleshopManager = req.teleshopManager
-    const { kioskPassword, promoVideoUrl } = req.body
+    const { kioskPassword, promoVideoUrl, enableBillPaymentOptions } = req.body
 
     if (!teleshopManager.branchId) {
       return res.status(400).json({ error: "You are not assigned to any outlet" })
@@ -919,14 +919,22 @@ router.post("/kiosk-settings", async (req: any, res) => {
       updateData.kioskPassword = kioskPassword
     }
 
-    if (promoVideoUrl !== undefined) {
+    if (promoVideoUrl !== undefined || enableBillPaymentOptions !== undefined) {
       const current = await prisma.outlet.findUnique({ where: { id: teleshopManager.branchId } })
       const displaySettings = (current?.displaySettings as any) || {}
-      if (promoVideoUrl === null) {
-        delete displaySettings.promoVideoUrl;
-      } else {
-        displaySettings.promoVideoUrl = promoVideoUrl
+      
+      if (promoVideoUrl !== undefined) {
+        if (promoVideoUrl === null) {
+          delete displaySettings.promoVideoUrl;
+        } else {
+          displaySettings.promoVideoUrl = promoVideoUrl
+        }
       }
+
+      if (enableBillPaymentOptions !== undefined) {
+        displaySettings.enableBillPaymentOptions = enableBillPaymentOptions
+      }
+      
       updateData.displaySettings = displaySettings
     }
 
