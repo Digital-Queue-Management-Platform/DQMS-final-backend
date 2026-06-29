@@ -725,12 +725,12 @@ router.post("/skip-token", async (req, res) => {
         else if (_skipPrefs.includes('ta')) customerLang = 'ta'
       }
 
-      await sltSmsService.sendCustomerSkipped(skipped.customer.mobileNumber, {
-        firstName,
-        tokenNumber: skipped.tokenNumber,
-        outletName: skipped.outlet?.name || 'SLT Office',
-        recoveryUrl: trackingUrl
-      }, customerLang)
+      // await sltSmsService.sendCustomerSkipped(skipped.customer.mobileNumber, {
+      //   firstName,
+      //   tokenNumber: skipped.tokenNumber,
+      //   outletName: skipped.outlet?.name || 'SLT Office',
+      //   recoveryUrl: trackingUrl
+      // }, customerLang)
       console.log(`✓ Skip SMS sent to customer ${skipped.customer.mobileNumber} for token #${skipped.tokenNumber}`)
     } catch (smsError) {
       console.error('Skip SMS sending failed:', smsError)
