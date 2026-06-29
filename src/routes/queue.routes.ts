@@ -867,4 +867,43 @@ router.get("/outlet/:outletId/counters", async (req, res) => {
   }
 })
 
+// --- Service Starting Tokens Settings ---
+
+router.get('/settings/service-starting-tokens', async (_req, res) => {
+  try {
+    const rows = await prisma.$queryRaw<{ value: string }[]>`
+      SELECT "value" FROM "SystemSetting"
+      WHERE "key" = 'service_starting_tokens'
+      LIMIT 1
+    `
+    let tokens = {}
+    if (rows && rows.length > 0 && rows[0].value) {
+      tokens = JSON.parse(rows[0].value)
+    }
+    res.json(tokens)
+  } catch (error) {
+    console.error('Service starting tokens setting fetch error:', error)
+    res.status(500).json({ error: 'Failed to fetch service starting tokens setting' })
+  }
+})
+
+router.patch('/settings/service-starting-tokens', async (req, res) => {
+  try {
+    const tokens = req.body || {}
+    const jsonStr = JSON.stringify(tokens)
+
+    await prisma.$executeRaw`
+      INSERT INTO "SystemSetting" ("key", "value", "updatedAt")
+      VALUES ('service_starting_tokens', ${jsonStr}, now())
+      ON CONFLICT ("key")
+      DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = now()
+    `
+
+    res.json({ success: true, tokens })
+  } catch (error) {
+    console.error('Service starting tokens setting update error:', error)
+    res.status(500).json({ error: 'Failed to update service starting tokens setting' })
+  }
+})
+
 export default router
