@@ -921,7 +921,10 @@ router.post("/kiosk-settings", async (req: any, res) => {
 
     if (promoVideoUrl !== undefined || enableBillPaymentOptions !== undefined) {
       const current = await prisma.outlet.findUnique({ where: { id: teleshopManager.branchId } })
-      const displaySettings = (current?.displaySettings as any) || {}
+      let displaySettings = (current?.displaySettings as any) || {}
+      if (typeof displaySettings === 'string') {
+        try { displaySettings = JSON.parse(displaySettings) } catch (e) { displaySettings = {} }
+      }
       
       if (promoVideoUrl !== undefined) {
         if (promoVideoUrl === null) {
