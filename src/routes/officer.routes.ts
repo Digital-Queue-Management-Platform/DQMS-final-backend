@@ -1942,7 +1942,7 @@ router.get("/stats/:officerId", async (req, res) => {
                 currentBill: true,
                 dueDate: true,
                 status: true,
-                lastPaymentDate: true,
+                lastPaymentDate: true, accountNumber: true,
                 updatedAt: true,
               }
             }
@@ -1967,7 +1967,7 @@ router.get("/stats/:officerId", async (req, res) => {
               currentBill: true,
               dueDate: true,
               status: true,
-              lastPaymentDate: true,
+              lastPaymentDate: true, accountNumber: true,
               updatedAt: true,
             }
           })
@@ -2154,7 +2154,7 @@ router.get("/dashboard-combined", async (req, res) => {
                 currentBill: true,
                 dueDate: true,
                 status: true,
-                lastPaymentDate: true,
+                lastPaymentDate: true, accountNumber: true,
                 updatedAt: true,
               }
             }
@@ -2177,7 +2177,7 @@ router.get("/dashboard-combined", async (req, res) => {
               currentBill: true,
               dueDate: true,
               status: true,
-              lastPaymentDate: true,
+              lastPaymentDate: true, accountNumber: true,
               updatedAt: true,
             }
           })

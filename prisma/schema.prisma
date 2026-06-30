@@ -422,6 +422,7 @@ model SltBill {
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   mobileNumber     String?
+  accountNumber    String?
   appointmentBills AppointmentBill[]
   tokenBills       TokenBill[]
 

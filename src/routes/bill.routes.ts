@@ -148,7 +148,7 @@ router.post('/verify-multiple', async (req: Request, res: Response) => {
               currentBill: true,
               dueDate: true,
               status: true,
-              lastPaymentDate: true,
+              lastPaymentDate: true, accountNumber: true,
               updatedAt: true,
             }
           });
@@ -205,7 +205,7 @@ router.post('/verify-multiple', async (req: Request, res: Response) => {
                 currentBill: true,
                 dueDate: true,
                 status: true,
-                lastPaymentDate: true,
+                lastPaymentDate: true, accountNumber: true,
               }
             });
 
@@ -251,7 +251,7 @@ router.post('/verify-multiple', async (req: Request, res: Response) => {
                 currentBill: true,
                 dueDate: true,
                 status: true,
-                lastPaymentDate: true,
+                lastPaymentDate: true, accountNumber: true,
                 updatedAt: true,
               }
             });
@@ -351,7 +351,7 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
             currentBill: true,
             dueDate: true,
             status: true,
-            lastPaymentDate: true,
+            lastPaymentDate: true, accountNumber: true,
             updatedAt: true,
           }
         });
@@ -393,7 +393,7 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
           currentBill: true,
           dueDate: true,
           status: true,
-          lastPaymentDate: true,
+          lastPaymentDate: true, accountNumber: true,
         }
       });
 
@@ -424,7 +424,7 @@ router.get('/verify/:telephoneNumber', async (req: Request, res: Response) => {
           currentBill: true,
           dueDate: true,
           status: true,
-          lastPaymentDate: true,
+          lastPaymentDate: true, accountNumber: true,
           updatedAt: true,
         }
       });
@@ -483,7 +483,7 @@ router.post('/search', async (req: Request, res: Response) => {
             currentBill: true,
             dueDate: true,
             status: true,
-            lastPaymentDate: true,
+            lastPaymentDate: true, accountNumber: true,
             updatedAt: true,
           }
         });
@@ -524,7 +524,7 @@ router.post('/search', async (req: Request, res: Response) => {
           currentBill: true,
           dueDate: true,
           status: true,
-          lastPaymentDate: true,
+          lastPaymentDate: true, accountNumber: true,
         }
       });
 
@@ -555,7 +555,7 @@ router.post('/search', async (req: Request, res: Response) => {
           currentBill: true,
           dueDate: true,
           status: true,
-          lastPaymentDate: true,
+          lastPaymentDate: true, accountNumber: true,
           updatedAt: true,
         }
       });

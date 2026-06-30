@@ -16,7 +16,7 @@ interface SltBillInfo {
   lastPaymentDate?: string;
   isSuccess?: boolean;
   message?: string;
-  referenceId?: string;
+  referenceId?: any;
   // Add other fields returned by the API
   [key: string]: any;
 }
@@ -266,5 +266,6 @@ export function normalizeSltBillData(sltBillInfo: SltBillInfo, queriedNumber: st
     dueDate: sltBillInfo.dueDate ? new Date(sltBillInfo.dueDate) : new Date(),
     status: 'sms_sent', // Indicate that bill was sent via SMS
     lastPaymentDate: sltBillInfo.lastPaymentDate ? new Date(sltBillInfo.lastPaymentDate) : null,
+    accountNumber: sltBillInfo.referenceId?.accountNumber || null,
   };
 }
