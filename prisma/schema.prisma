@@ -89,7 +89,6 @@ model Officer {
   name              String
   mobileNumber      String             @unique
   outletId          String
-  isActive          Boolean            @default(true)
   status            String             @default("offline")
   counterNumber     Int?
   isTraining        Boolean            @default(false)
@@ -98,6 +97,7 @@ model Officer {
   assignedServices  Json?
   languages         Json?
   email             String?
+  isActive          Boolean            @default(true)
   BreakLog          BreakLog[]
   completedServices CompletedService[]
   outlet            Outlet             @relation(fields: [outletId], references: [id])
@@ -109,13 +109,13 @@ model Officer {
 }
 
 model Outlet {
-  id                String             @id @default(uuid())
+  id                String                 @id @default(uuid())
   name              String
   location          String
   regionId          String
-  isActive          Boolean            @default(true)
-  createdAt         DateTime           @default(now())
-  counterCount      Int?               @default(0)
+  isActive          Boolean                @default(true)
+  createdAt         DateTime               @default(now())
+  counterCount      Int?                   @default(0)
   kioskPassword     String?
   displaySettings   Json?
   provinceId        String?
@@ -128,15 +128,15 @@ model Outlet {
   deviceLinks       DeviceLink[]
   managerQRTokens   ManagerQRToken[]
   officers          Officer[]
-  province          Province?          @relation(fields: [provinceId], references: [id])
-  region            Region             @relation(fields: [regionId], references: [id])
-  RTOM              RTOM?              @relation(fields: [rtomId], references: [id])
+  province          Province?              @relation(fields: [provinceId], references: [id])
+  region            Region                 @relation(fields: [regionId], references: [id])
+  RTOM              RTOM?                  @relation(fields: [rtomId], references: [id])
+  serviceSettings   OutletServiceSetting[]
   qrSessions        QRSession[]
   serviceCases      ServiceCase[]
   systemLogs        SystemLog[]
   teleshopManagers  TeleshopManager[]
   tokens            Token[]
-  serviceSettings   OutletServiceSetting[]
 
   @@index([rtomId])
 }
@@ -237,15 +237,15 @@ model BackupRestoreHistory {
 }
 
 model Service {
-  id                String             @id @default(uuid())
-  code              String             @unique
+  id                String                 @id @default(uuid())
+  code              String                 @unique
   title             String
   description       String?
-  isActive          Boolean            @default(true)
-  createdAt         DateTime           @default(now())
-  order             Int                @default(999)
-  isPriorityService Boolean            @default(false)
-  requireOtp        Boolean            @default(false)
+  isActive          Boolean                @default(true)
+  createdAt         DateTime               @default(now())
+  order             Int                    @default(999)
+  isPriorityService Boolean                @default(false)
+  requireOtp        Boolean                @default(false)
   completedServices CompletedService[]
   outletSettings    OutletServiceSetting[]
 
@@ -258,7 +258,6 @@ model OutletServiceSetting {
   serviceId  String
   requireOtp Boolean  @default(false)
   updatedAt  DateTime @updatedAt
-
   outlet     Outlet   @relation(fields: [outletId], references: [id], onDelete: Cascade)
   service    Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
@@ -423,6 +422,7 @@ model SltBill {
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   mobileNumber     String?
+  accountNumber    String?
   appointmentBills AppointmentBill[]
   tokenBills       TokenBill[]
 

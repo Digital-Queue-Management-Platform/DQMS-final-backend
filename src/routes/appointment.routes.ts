@@ -5,6 +5,7 @@ import smsHelper from "../utils/smsHelper"
 import { getLastDailyReset } from "../utils/resetWindow"
 import * as crypto from "crypto"
 import * as sltBillingService from "../services/sltBillingService"
+import { getNextTokenNumber } from "../utils/tokenHelper"
 
 const router = Router()
 
@@ -505,17 +506,9 @@ async function addAppointmentToQueue(appt: any) {
     ` as any[]
     const autoPriority = priorityServices.length > 0
 
-    // Get last token number
+    // Get next token number
     const lastReset = getLastDailyReset()
-    const lastToken = await tx.token.findFirst({
-      where: {
-        outletId: appt.outletId,
-        createdAt: { gte: lastReset }
-      },
-      orderBy: { tokenNumber: 'desc' }
-    })
-
-    const tokenNumber = lastToken ? lastToken.tokenNumber + 1 : 1
+    const tokenNumber = await getNextTokenNumber(tx, appt.outletId, appt.serviceTypes, lastReset)
 
     // Create token
     console.log('DEBUG: Appointment check-in - About to create token with customer:', {
@@ -893,12 +886,7 @@ router.post("/:apptId/checkin", async (req, res) => {
 
       // Get next token number
       const lastReset = getLastDailyReset()
-      const lastToken = await tx.token.findFirst({
-        where: { outletId: appt.outletId, createdAt: { gte: lastReset } },
-        orderBy: { tokenNumber: 'desc' }
-      })
-
-      const tokenNumber = lastToken ? lastToken.tokenNumber + 1 : 1
+      const tokenNumber = await getNextTokenNumber(tx, appt.outletId, appt.serviceTypes, lastReset)
 
       // Create token with appointment data
       const newToken = await tx.token.create({

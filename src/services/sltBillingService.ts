@@ -16,7 +16,7 @@ interface SltBillInfo {
   lastPaymentDate?: string;
   isSuccess?: boolean;
   message?: string;
-  referenceId?: string;
+  referenceId?: any;
   // Add other fields returned by the API
   [key: string]: any;
 }
@@ -260,11 +260,14 @@ export function normalizeSltBillData(sltBillInfo: SltBillInfo, queriedNumber: st
     mobileNumber: resolvedMobile,
     accountName: sltBillInfo.accountName || 'Verified Account',
     accountAddress: sltBillInfo.accountAddress || null,
-    currentBill: sltBillInfo.currentBill !== undefined && sltBillInfo.currentBill !== null
-      ? parseFloat(String(sltBillInfo.currentBill))
-      : 0, // Bill amount sent via SMS, not returned in API
+    currentBill: sltBillInfo.referenceId?.billamount !== undefined && sltBillInfo.referenceId?.billamount !== null
+      ? parseFloat(String(sltBillInfo.referenceId.billamount))
+      : (sltBillInfo.currentBill !== undefined && sltBillInfo.currentBill !== null
+        ? parseFloat(String(sltBillInfo.currentBill))
+        : 0),
     dueDate: sltBillInfo.dueDate ? new Date(sltBillInfo.dueDate) : new Date(),
     status: 'sms_sent', // Indicate that bill was sent via SMS
     lastPaymentDate: sltBillInfo.lastPaymentDate ? new Date(sltBillInfo.lastPaymentDate) : null,
+    accountNumber: sltBillInfo.referenceId?.accountNumber || null,
   };
 }

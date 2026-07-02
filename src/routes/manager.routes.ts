@@ -1007,6 +1007,14 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
         rating: Math.round(avgRating * 10) / 10
       }
     }) || [])
+    
+    officerPerformance.sort((a: any, b: any) => {
+      const nameA = a.teleshopName || ""
+      const nameB = b.teleshopName || ""
+      if (nameA < nameB) return -1
+      if (nameA > nameB) return 1
+      return b.tokensServed - a.tokensServed
+    })
 
     res.json({
       outletId: outlet.id,
@@ -1062,6 +1070,253 @@ router.get("/outlet/:outletId/analytics", async (req, res) => {
   } catch (error) {
     console.error("Manager outlet analytics error:", error)
     res.status(500).json({ error: "Failed to fetch outlet analytics" })
+  }
+})
+
+// Get analytics for multiple outlets in manager's region
+router.get("/outlets/analytics", async (req, res) => {
+  try {
+    const { outletIds: outletIdsStr, startDate, endDate } = req.query
+    
+    if (!outletIdsStr) {
+      return res.status(400).json({ error: "outletIds is required" })
+    }
+
+    const requestedOutletIds = (outletIdsStr as string).split(',')
+
+    // Check for JWT token from cookie or header
+    let token = req.cookies?.dq_manager_jwt
+    if (!token) {
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      }
+    }
+
+    if (!token) {
+      return res.status(401).json({ error: "RTOM authentication required" })
+    }
+
+    let payload: any
+    try {
+      payload = (jwt as any).verify(token, JWT_SECRET)
+    } catch (e) {
+      return res.status(401).json({ error: "Invalid token" })
+    }
+
+    // Find RTOM using mobile number from JWT token and include teleshopManagers
+    const rtom = await prisma.rTOM.findFirst({
+      where: { mobileNumber: payload.mobileNumber },
+      include: { 
+        region: true,
+        teleshopManagers: {
+          include: {
+            branch: true
+          }
+        }
+      }
+    })
+
+    if (!rtom || !rtom.region) {
+      return res.status(404).json({ error: "RTOM not found or not assigned to region" })
+    }
+
+    // Get assigned outlet IDs for this RTOM
+    const assignedOutletIds = rtom.teleshopManagers
+      .filter(tm => tm.branch?.id)
+      .map(tm => tm.branch!.id)
+
+    // Verify the requested outlets are assigned to this RTOM
+    const invalidOutlets = requestedOutletIds.filter(id => !assignedOutletIds.includes(id))
+    if (invalidOutlets.length > 0) {
+      return res.status(403).json({ error: "You are not assigned to manage some of the requested outlets" })
+    }
+
+    const where: any = {
+      status: "completed",
+      outletId: { in: requestedOutletIds },
+    }
+
+    if (startDate && endDate) {
+      where.completedAt = {
+        gte: new Date(startDate as string),
+        lte: new Date(endDate as string),
+      }
+    }
+
+    // Get analytics for the specific outlets
+    const totalTokens = await prisma.token.count({ where })
+
+    const completedTokens = await prisma.token.findMany({
+      where,
+      select: {
+        createdAt: true,
+        startedAt: true,
+        completedAt: true,
+      }
+    })
+
+    // Calculate average waiting and service times
+    let totalWaitTime = 0
+    let totalServiceTime = 0
+    let validWaitTimes = 0
+    let validServiceTimes = 0
+
+    completedTokens.forEach(token => {
+      if (token.startedAt && token.createdAt) {
+        totalWaitTime += (token.startedAt.getTime() - token.createdAt.getTime()) / (1000 * 60)
+        validWaitTimes++
+      }
+      if (token.completedAt && token.startedAt) {
+        totalServiceTime += (token.completedAt.getTime() - token.startedAt.getTime()) / (1000 * 60)
+        validServiceTimes++
+      }
+    })
+
+    const avgWaitTime = validWaitTimes > 0 ? totalWaitTime / validWaitTimes : 0
+    const avgServiceTime = validServiceTimes > 0 ? totalServiceTime / validServiceTimes : 0
+
+    // Get feedback stats
+    const feedbackStats = await prisma.feedback.groupBy({
+      by: ['rating'],
+      _count: true,
+      where: {
+        token: {
+          outletId: { in: requestedOutletIds },
+          completedAt: startDate && endDate ? {
+            gte: new Date(startDate as string),
+            lte: new Date(endDate as string),
+          } : undefined
+        }
+      }
+    })
+
+    // Get outlet details with officers
+    const outletDetails = await prisma.outlet.findMany({
+      where: { id: { in: requestedOutletIds } },
+      include: {
+        officers: true
+      }
+    })
+
+    const allOfficers = outletDetails.flatMap(o => 
+      o.officers.map(officer => ({
+        ...officer,
+        teleshopName: o.name
+      }))
+    )
+
+    // Calculate customer satisfaction
+    const totalFeedbacks = feedbackStats.reduce((sum, stat) => sum + stat._count, 0)
+    const totalRatingPoints = feedbackStats.reduce((sum, stat) => sum + (stat.rating * stat._count), 0)
+    const avgRating = totalFeedbacks > 0 ? totalRatingPoints / totalFeedbacks : 0
+
+    // Calculate active officers
+    const activeOfficers = allOfficers.filter((officer: any) => 
+      officer.status === 'available' || officer.status === 'online'
+    ).length || 0
+
+    // Calculate officer-specific performance metrics
+    const officerPerformance = await Promise.all(allOfficers.map(async (officer: any) => {
+      // Get tokens assigned to this officer
+      const officerTokens = await prisma.token.findMany({
+        where: {
+          assignedTo: officer.id,
+          status: "completed",
+          outletId: { in: requestedOutletIds },
+          completedAt: startDate && endDate ? {
+            gte: new Date(startDate as string),
+            lte: new Date(endDate as string),
+          } : undefined
+        },
+        include: {
+          feedback: true
+        }
+      })
+      
+      let totalServiceTime = 0
+      let validServiceTimes = 0
+      
+      officerTokens.forEach((token: any) => {
+        if (token.completedAt && token.startedAt) {
+          totalServiceTime += (token.completedAt.getTime() - token.startedAt.getTime()) / (1000 * 60)
+          validServiceTimes++
+        }
+      })
+      
+      const avgServiceTime = validServiceTimes > 0 ? totalServiceTime / validServiceTimes : 0
+      
+      const tokensWithFeedback = officerTokens.filter((token: any) => token.feedback)
+      const totalRating = tokensWithFeedback.reduce((sum: number, token: any) => sum + token.feedback.rating, 0)
+      const avgRating = tokensWithFeedback.length > 0 ? totalRating / tokensWithFeedback.length : 0
+      
+      return {
+        id: officer.id,
+        name: officer.name,
+        teleshopName: officer.teleshopName,
+        tokensServed: officerTokens.length,
+        avgServiceTime: Math.round(avgServiceTime * 10) / 10,
+        rating: Math.round(avgRating * 10) / 10
+      }
+    }) || [])
+    
+    officerPerformance.sort((a: any, b: any) => {
+      const nameA = a.teleshopName || ""
+      const nameB = b.teleshopName || ""
+      if (nameA < nameB) return -1
+      if (nameA > nameB) return 1
+      return b.tokensServed - a.tokensServed
+    })
+
+    res.json({
+      outletId: requestedOutletIds.join(','),
+      outletName: requestedOutletIds.length === 1 ? outletDetails[0]?.name : "Multiple Outlets",
+      totalCustomers: totalTokens, 
+      totalTokens,
+      avgWaitTime: Math.round(avgWaitTime * 10) / 10,
+      avgServiceTime: Math.round(avgServiceTime * 10) / 10,
+      feedbackStats,
+      customerSatisfaction: Math.round(avgRating * 10) / 10,
+      activeOfficers,
+      totalOfficers: allOfficers.length,
+      totalIssued: totalTokens, 
+      totalCompleted: totalTokens, 
+      totalDropOffs: 0, 
+      completionRate: totalTokens > 0 ? 100 : 0, 
+      changePercents: {
+        customers: 0,
+        waitTime: 0,
+        serviceTime: 0,
+        satisfaction: 0
+      },
+      hourlyData: completedTokens.filter(token => token.completedAt).map((token, index) => {
+        const hour = new Date(token.completedAt!).getHours()
+        const waitTime = token.startedAt && token.createdAt ? 
+          (new Date(token.startedAt).getTime() - new Date(token.createdAt).getTime()) / (1000 * 60) : 0
+        const serviceTime = token.completedAt && token.startedAt ? 
+          (new Date(token.completedAt).getTime() - new Date(token.startedAt).getTime()) / (1000 * 60) : 0
+        
+        return {
+          hour: `${hour}:00`,
+          waitTime: Math.round(waitTime * 10) / 10,
+          serviceTime: Math.round(serviceTime * 10) / 10,
+          issued: 1,
+          completed: 1,
+          dropOffs: 0,
+          activeCounters: 1
+        }
+      }),
+      ratingDistribution: feedbackStats.map(stat => ({
+        rating: stat.rating,
+        count: stat._count
+      })),
+      officers: officerPerformance,
+      teleshopManager: null, // Omitted for multiple outlets
+      alerts: feedbackStats.filter(stat => stat.rating <= 2).reduce((sum, stat) => sum + stat._count, 0)
+    })
+  } catch (error) {
+    console.error("Manager outlets analytics error:", error)
+    res.status(500).json({ error: "Failed to fetch outlets analytics" })
   }
 })
 

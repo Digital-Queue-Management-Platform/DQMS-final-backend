@@ -10,6 +10,8 @@ const DISPLAY_SPEAKER_KEY = 'display_speaker_enabled'
 const ADVANCED_APPOINTMENT_REQUIRED_KEY = 'advanced_appointment_required'
 const OTP_VERIFICATION_KEY = 'otp_verification_enabled'
 const BILL_ENQUIRY_RATE_LIMIT_KEY = 'bill_enquiry_rate_limit_enabled'
+const SHOW_QUEUE_POSITION_KEY = 'show_queue_position'
+const SHOW_WAIT_TIME_KEY = 'show_wait_time'
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret"
 
@@ -444,6 +446,70 @@ router.patch('/settings/display-speaker', async (req, res) => {
   }
 })
 
+router.get('/settings/show-queue-position', async (_req, res) => {
+  try {
+    const rows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
+      SELECT "booleanValue" FROM "AppSetting"
+      WHERE "key" = ${SHOW_QUEUE_POSITION_KEY}
+      LIMIT 1
+    `
+    // Default to true (enabled) if not set
+    const enabled = rows[0]?.booleanValue ?? true
+    res.json({ enabled })
+  } catch (error) {
+    console.error('Show queue position setting fetch error:', error)
+    res.status(500).json({ error: 'Failed to fetch show queue position setting' })
+  }
+})
+
+router.patch('/settings/show-queue-position', async (req, res) => {
+  try {
+    const enabled = req.body?.enabled === true
+    await prisma.$executeRaw`
+      INSERT INTO "AppSetting" ("id", "key", "booleanValue", "createdAt", "updatedAt")
+      VALUES (gen_random_uuid()::text, ${SHOW_QUEUE_POSITION_KEY}, ${enabled}, now(), now())
+      ON CONFLICT ("key")
+      DO UPDATE SET "booleanValue" = EXCLUDED."booleanValue", "updatedAt" = now()
+    `
+    res.json({ success: true, enabled })
+  } catch (error) {
+    console.error('Show queue position setting update error:', error)
+    res.status(500).json({ error: 'Failed to update show queue position setting' })
+  }
+})
+
+router.get('/settings/show-wait-time', async (_req, res) => {
+  try {
+    const rows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
+      SELECT "booleanValue" FROM "AppSetting"
+      WHERE "key" = ${SHOW_WAIT_TIME_KEY}
+      LIMIT 1
+    `
+    // Default to true (enabled) if not set
+    const enabled = rows[0]?.booleanValue ?? true
+    res.json({ enabled })
+  } catch (error) {
+    console.error('Show wait time setting fetch error:', error)
+    res.status(500).json({ error: 'Failed to fetch show wait time setting' })
+  }
+})
+
+router.patch('/settings/show-wait-time', async (req, res) => {
+  try {
+    const enabled = req.body?.enabled === true
+    await prisma.$executeRaw`
+      INSERT INTO "AppSetting" ("id", "key", "booleanValue", "createdAt", "updatedAt")
+      VALUES (gen_random_uuid()::text, ${SHOW_WAIT_TIME_KEY}, ${enabled}, now(), now())
+      ON CONFLICT ("key")
+      DO UPDATE SET "booleanValue" = EXCLUDED."booleanValue", "updatedAt" = now()
+    `
+    res.json({ success: true, enabled })
+  } catch (error) {
+    console.error('Show wait time setting update error:', error)
+    res.status(500).json({ error: 'Failed to update show wait time setting' })
+  }
+})
+
 router.get('/settings/advance-appointment', async (_req, res) => {
   try {
     const rows = await prisma.$queryRaw<{ booleanValue: boolean | null }[]>`
@@ -798,6 +864,45 @@ router.get("/outlet/:outletId/counters", async (req, res) => {
   } catch (error) {
     console.error("Fetch counters error:", error)
     res.status(500).json({ error: "Failed to fetch counters" })
+  }
+})
+
+// --- Service Starting Tokens Settings ---
+
+router.get('/settings/service-starting-tokens', async (_req, res) => {
+  try {
+    const rows = await prisma.$queryRaw<{ value: string }[]>`
+      SELECT "value" FROM "SystemSetting"
+      WHERE "key" = 'service_starting_tokens'
+      LIMIT 1
+    `
+    let tokens = {}
+    if (rows && rows.length > 0 && rows[0].value) {
+      tokens = JSON.parse(rows[0].value)
+    }
+    res.json(tokens)
+  } catch (error) {
+    console.error('Service starting tokens setting fetch error:', error)
+    res.status(500).json({ error: 'Failed to fetch service starting tokens setting' })
+  }
+})
+
+router.patch('/settings/service-starting-tokens', async (req, res) => {
+  try {
+    const tokens = req.body || {}
+    const jsonStr = JSON.stringify(tokens)
+
+    await prisma.$executeRaw`
+      INSERT INTO "SystemSetting" ("key", "value", "updatedAt")
+      VALUES ('service_starting_tokens', ${jsonStr}, now())
+      ON CONFLICT ("key")
+      DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = now()
+    `
+
+    res.json({ success: true, tokens })
+  } catch (error) {
+    console.error('Service starting tokens setting update error:', error)
+    res.status(500).json({ error: 'Failed to update service starting tokens setting' })
   }
 })
 

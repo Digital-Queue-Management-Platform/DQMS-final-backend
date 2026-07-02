@@ -4,6 +4,7 @@ import * as jwt from "jsonwebtoken"
 import { getLastDailyReset } from "../utils/resetWindow"
 import sltSmsService from "../services/sltSmsService"
 import { getTrackingUrl } from "../utils/urlHelper"
+import { getNextTokenNumber } from "../utils/tokenHelper"
 
 const router = Router()
 
@@ -298,15 +299,7 @@ router.post("/tokens", async (req: any, res: any) => {
       // Get next token number for this outlet
       const lastReset = getLastDailyReset()
 
-      const lastToken = await tx.token.findFirst({
-        where: {
-          outletId: outletId,
-          createdAt: { gte: lastReset }
-        },
-        orderBy: { tokenNumber: 'desc' }
-      })
-
-      const tokenNumber = lastToken ? lastToken.tokenNumber + 1 : 1
+      const tokenNumber = await getNextTokenNumber(tx, outletId, serviceTypes, lastReset)
 
       // Create the token
       const newToken = await tx.token.create({
